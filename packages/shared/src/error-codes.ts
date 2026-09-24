@@ -194,6 +194,64 @@ export const ASSAYER_ERROR_CODES = {
    * gate exists to prevent.
    */
   LOCATION_MISSING: 'LOCATION_MISSING',
+  /**
+   * The assayer tried to replace a document HR has already verified.
+   *
+   * Owner decision: verified details cannot be changed from the assayer's side until HR asks for
+   * it. HR "asks" by taking the document off VERIFIED — sending it back (REJECTED), or any of the
+   * staff edits that withdraw a verification — after which the assayer's upload goes through as
+   * before. Staff uploads are never refused by this.
+   */
+  DOCUMENT_VERIFIED_LOCKED: 'DOCUMENT_VERIFIED_LOCKED',
+  /**
+   * The assayer tried to replace their own photograph after being approved. Owner decision: the
+   * photo is locked once approved, and only HR unlocks it ("Ask to re-upload"). Staff uploads are
+   * never refused by this.
+   */
+  PHOTOGRAPH_LOCKED: 'PHOTOGRAPH_LOCKED',
+  /**
+   * A leave period covers a day on which the assayer holds accepted work (ACCEPTED, CHECKED_IN or
+   * IN_PROGRESS). The message names the date(s) and branch; the remedy is to have that work
+   * reassigned or rescheduled first.
+   */
+  LEAVE_OVERLAPS_ASSIGNED_WORK: 'LEAVE_OVERLAPS_ASSIGNED_WORK',
+} as const;
+
+// ---------------------------------------------------------------------------
+// Check-in and check-out
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a check-in or check-out was refused.
+ *
+ * These travel in the `error` field of an HTTP 200 `{ success: false, error, message }` body — not
+ * as an HTTP error — because installed builds of the assayer app read that shape. They were bare
+ * string literals in `AssignmentService.recordCheckIn`/`recordCheckOut`; they live here now so the
+ * app and the server name them from one list. The wire values are unchanged.
+ *
+ * Three refusals on the same routes already had a home and keep it: `ASSIGNMENT_CANCELLED`
+ * (`OTHER_CONFLICT_ERROR_CODES`), `STALE_ASSIGNMENT_VERSION` and `INVALID_ASSIGNMENT_VERSION`
+ * (`CONCURRENCY_ERROR_CODES`).
+ */
+export const ATTENDANCE_ERROR_CODES = {
+  /** The caller is neither the assigned assayer nor staff allowed to record attendance for them. */
+  NOT_YOUR_ASSIGNMENT: 'NOT_YOUR_ASSIGNMENT',
+  /** The assignment is already completed. */
+  ASSIGNMENT_COMPLETED: 'ASSIGNMENT_COMPLETED',
+  /** No assignment with that id. */
+  ASSIGNMENT_NOT_FOUND: 'ASSIGNMENT_NOT_FOUND',
+  /** The assignment is not in a state that can be checked into (usually: not yet accepted). */
+  INVALID_STATE_FOR_CHECK_IN: 'INVALID_STATE_FOR_CHECK_IN',
+  /** The assayer is suspended, inactive or otherwise not ACTIVE, so may not start field work. */
+  ASSAYER_NOT_ACTIVE: 'ASSAYER_NOT_ACTIVE',
+  /** The client's sync token is behind the server's. Refresh the schedule. */
+  CONFLICT_ASSIGNMENT_MODIFIED: 'CONFLICT_ASSIGNMENT_MODIFIED',
+  /** Check-in attempted on a day other than the scheduled one (IST). */
+  NOT_SCHEDULED_TODAY: 'NOT_SCHEDULED_TODAY',
+  /** The device's position is outside the check-in geofence around the branch. */
+  TOO_FAR_FROM_BRANCH: 'TOO_FAR_FROM_BRANCH',
+  /** Check-out attempted with no check-in on record. */
+  NOT_CHECKED_IN: 'NOT_CHECKED_IN',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -272,6 +330,23 @@ export const OTHER_CONFLICT_ERROR_CODES = {
   UPLOAD_CHECKSUM_MISMATCH: 'UPLOAD_CHECKSUM_MISMATCH',
   /** This document version already carries a different reviewer's verdict. */
   DOCUMENT_ALREADY_REVIEWED: 'DOCUMENT_ALREADY_REVIEWED',
+  /**
+   * Field paperwork refused because the assignment has reached the end of its life (completed,
+   * declined or cancelled — `isAssignmentTerminal`). If a return genuinely needs replacing, the
+   * assignment is reopened by operations first.
+   */
+  ASSIGNMENT_CLOSED: 'ASSIGNMENT_CLOSED',
+  /**
+   * A new expense claim refused because the assignment's fee payout has already been approved or
+   * paid — the "Ready to pay" and "Paid" payout stages.
+   */
+  EXPENSE_PAYOUT_ALREADY_APPROVED: 'EXPENSE_PAYOUT_ALREADY_APPROVED',
+  /**
+   * A new expense claim refused because the job's fee payout is already on an assayer bill — in any
+   * bill state, including one still waiting for the assayer to confirm. Claims are made before
+   * billing.
+   */
+  EXPENSE_JOB_ALREADY_BILLED: 'EXPENSE_JOB_ALREADY_BILLED',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -324,6 +399,7 @@ export const API_ERROR_CODES = {
   ...AUTH_ERROR_CODES,
   ...ASSAYER_ERROR_CODES,
   ...ASSIGNMENT_ERROR_CODES,
+  ...ATTENDANCE_ERROR_CODES,
   ...CONCURRENCY_ERROR_CODES,
   ...IDEMPOTENCY_ERROR_CODES,
   ...WRITE_VERIFICATION_ERROR_CODES,

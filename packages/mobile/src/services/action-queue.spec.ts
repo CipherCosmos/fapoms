@@ -27,14 +27,22 @@ import {
   isRetryableStatus,
   __resetActionQueueForTests,
   ActionDispatcher,
+  setActionQueueOwner,
+  adoptUnownedActions,
+  toSubmitOutcome,
+  NOT_SIGNED_IN_ERROR,
 } from './action-queue';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const tokenStore = require('./token-store') as { __store: Record<string, unknown> };
 
+const ASSAYER_A = 'assayer-a';
+const ASSAYER_B = 'assayer-b';
+
 beforeEach(() => {
   for (const key of Object.keys(tokenStore.__store)) delete tokenStore.__store[key];
   __resetActionQueueForTests();
+  setActionQueueOwner(ASSAYER_A);
 });
 
 describe('generateClientRequestId', () => {
@@ -53,6 +61,26 @@ describe('enqueueing', () => {
     const [entry] = await getQueuedActions();
     expect(entry.status).toBe('PENDING');
     expect(entry.clientRequestId).toBeTruthy();
+  });
+
+  it('stamps every action with the signed-in user who filed it', async () => {
+    const entry = await enqueueAction('CHECK_IN', { lat: 1, lng: 2 });
+    expect(entry.ownerId).toBe(ASSAYER_A);
+  });
+
+  it('refuses to file an action when nobody is signed in', async () => {
+    setActionQueueOwner(null);
+    await expect(enqueueAction('CHECK_IN', { lat: 1, lng: 2 })).rejects.toThrow(NOT_SIGNED_IN_ERROR);
+    const dispatch: ActionDispatcher = jest.fn(async () => ({ success: true }));
+    const result = await enqueueAndRun('CHECK_IN', { lat: 1, lng: 2 }, dispatch);
+    expect(result).toMatchObject({ success: false, queued: false });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await getQueuedActions()).toHaveLength(0);
+  });
+
+  it('uses a key the caller supplies, so one form keeps one key', async () => {
+    const entry = await enqueueAction('EXPENSE_CLAIM', { amount: 500 }, { clientRequestId: 'form-key-1' });
+    expect(entry.clientRequestId).toBe('form-key-1');
   });
 });
 
@@ -113,6 +141,84 @@ describe('enqueueAndRun', () => {
       queued: false,
     });
     expect(await getQueuedActions()).toHaveLength(0);
+  });
+});
+
+/**
+ * Offline presses must not multiply. A claim or offer reply that could not be sent is on the
+ * phone and will send itself; a second press on the same form (or a second Accept on the same
+ * offer) used to file a second copy with a fresh key, which the server could not recognise.
+ */
+describe('duplicate presses while an action is waiting', () => {
+  const offline: ActionDispatcher = async () => {
+    throw new Error('Network request failed');
+  };
+
+  it('a second press with the same form key reuses the waiting action, not a second copy', async () => {
+    const seen: string[] = [];
+    const recording: ActionDispatcher = async (_p, key) => {
+      seen.push(key);
+      throw new Error('Network request failed');
+    };
+    await enqueueAndRun('EXPENSE_CLAIM', { amount: 500 }, recording, { clientRequestId: 'form-key-1' });
+    await enqueueAndRun('EXPENSE_CLAIM', { amount: 500 }, recording, { clientRequestId: 'form-key-1' });
+
+    const queued = await getQueuedActions();
+    expect(queued).toHaveLength(1);
+    expect(queued[0].clientRequestId).toBe('form-key-1');
+    // Retried with the same key both times: that is what the server dedupes on.
+    expect(seen).toEqual(['form-key-1', 'form-key-1']);
+  });
+
+  it('a second Accept on an offer whose accept is waiting reuses it (sameAs)', async () => {
+    const sameOffer = (a: any) => a.payload.assignmentId === 'job-1' && a.payload.status === 'ACCEPTED';
+    await enqueueAndRun('ASSIGNMENT_STATUS', { op: 'transition', assignmentId: 'job-1', status: 'ACCEPTED' }, offline, { sameAs: sameOffer });
+    await enqueueAndRun('ASSIGNMENT_STATUS', { op: 'transition', assignmentId: 'job-1', status: 'ACCEPTED' }, offline, { sameAs: sameOffer });
+    expect(await getQueuedActions()).toHaveLength(1);
+  });
+
+  it('different forms (different keys) are different actions', async () => {
+    await enqueueAndRun('EXPENSE_CLAIM', { amount: 500 }, offline, { clientRequestId: 'form-key-1' });
+    await enqueueAndRun('EXPENSE_CLAIM', { amount: 500 }, offline, { clientRequestId: 'form-key-2' });
+    expect(await getQueuedActions()).toHaveLength(2);
+  });
+
+  it('an action already on the wire is not sent a second time by another press', async () => {
+    let release: (v: { success: true }) => void = () => {};
+    const slow: ActionDispatcher = jest.fn(() => new Promise((res) => { release = res; })) as any;
+    const first = enqueueAndRun('EXPENSE_CLAIM', { amount: 500 }, slow, { clientRequestId: 'k' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const second = await enqueueAndRun('EXPENSE_CLAIM', { amount: 500 }, slow, { clientRequestId: 'k' });
+    expect(second.queued).toBe(true);
+    expect(slow).toHaveBeenCalledTimes(1);
+
+    release({ success: true });
+    await first;
+    expect(await getQueuedActions()).toHaveLength(0);
+  });
+});
+
+describe('toSubmitOutcome', () => {
+  it('reports a queued action as a success the screen can close on, marked queued', () => {
+    expect(toSubmitOutcome({ success: false, retryable: true, error: 'timeout', queued: true })).toEqual({
+      success: true,
+      queued: true,
+    });
+  });
+
+  it('passes a real refusal through, with a fallback when the server said nothing', () => {
+    expect(toSubmitOutcome({ success: false, retryable: false, error: 'Over the limit', code: 'X', queued: false })).toEqual({
+      success: false,
+      queued: false,
+      error: 'Over the limit',
+      code: 'X',
+    });
+    expect(toSubmitOutcome({ success: false, queued: false }, 'Failed')).toMatchObject({ success: false, error: 'Failed' });
+  });
+
+  it('a sent action is a plain success', () => {
+    expect(toSubmitOutcome({ success: true, queued: false })).toEqual({ success: true, queued: false });
   });
 });
 
@@ -184,6 +290,66 @@ describe('dismiss and sign-out', () => {
   it('sign-out empties the queue so no action fires under another login', async () => {
     await enqueueAction('CHECK_IN', { lat: 1, lng: 2 });
     await clearActionQueue();
+    expect(await getQueuedActions()).toHaveLength(0);
+  });
+
+  /**
+   * The defect: sign-out never cleared this queue (its in-memory copy outlived even a deleted
+   * file), so A's check-in went out under B's session. Sign-out now clears it — and even a session
+   * that ends without a sign-out cannot leak: the queue refuses anything B did not file.
+   */
+  it("never sends another user's action — it is dropped on the next drain", async () => {
+    await enqueueAction('CHECK_IN', { lat: 1, lng: 2 });
+    setActionQueueOwner(ASSAYER_B);
+    const dispatch: ActionDispatcher = jest.fn(async () => ({ success: true }));
+    await processActionQueue({ CHECK_IN: dispatch });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await getQueuedActions()).toHaveLength(0);
+  });
+
+  it('a drain with nobody signed in sends nothing and drops nothing', async () => {
+    await enqueueAction('CHECK_IN', { lat: 1, lng: 2 });
+    setActionQueueOwner(null);
+    const dispatch: ActionDispatcher = jest.fn(async () => ({ success: true }));
+    await processActionQueue({ CHECK_IN: dispatch });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await getQueuedActions()).toHaveLength(1);
+  });
+
+  it('an action is not sent if the account changed while an earlier one was on the wire', async () => {
+    await enqueueAction('CHECK_IN', { n: 1 });
+    await enqueueAction('CHECK_IN', { n: 2 });
+    const sent: number[] = [];
+    const dispatch: ActionDispatcher = jest.fn(async (p: any) => {
+      sent.push(p.n);
+      setActionQueueOwner(ASSAYER_B); // the account switches mid-drain
+      return { success: true };
+    });
+    await processActionQueue({ CHECK_IN: dispatch });
+    expect(sent).toEqual([1]);
+  });
+
+  it('entries from before actions carried an owner are adopted only when asked', async () => {
+    tokenStore.__store.action_queue = [
+      { id: 'old', kind: 'CHECK_IN', payload: {}, clientRequestId: 'k', status: 'PENDING', createdAt: '', updatedAt: '' },
+    ];
+    __resetActionQueueForTests();
+    setActionQueueOwner(ASSAYER_A);
+    await adoptUnownedActions(ASSAYER_A);
+    const dispatch: ActionDispatcher = jest.fn(async () => ({ success: true }));
+    await processActionQueue({ CHECK_IN: dispatch });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unowned legacy entry is refused, not sent, on a fresh sign-in', async () => {
+    tokenStore.__store.action_queue = [
+      { id: 'old', kind: 'CHECK_IN', payload: {}, clientRequestId: 'k', status: 'PENDING', createdAt: '', updatedAt: '' },
+    ];
+    __resetActionQueueForTests();
+    setActionQueueOwner(ASSAYER_B);
+    const dispatch: ActionDispatcher = jest.fn(async () => ({ success: true }));
+    await processActionQueue({ CHECK_IN: dispatch });
+    expect(dispatch).not.toHaveBeenCalled();
     expect(await getQueuedActions()).toHaveLength(0);
   });
 });

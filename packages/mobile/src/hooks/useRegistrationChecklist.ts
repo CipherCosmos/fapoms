@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { MobileApiService, type RegistrationChecklist } from '../services/api.service';
+import { isStampCurrent, stampSession } from '../services/session-epoch';
 
 /**
  * The assayer's own registration paperwork, as the app sees it.
@@ -27,8 +28,11 @@ export function useRegistrationChecklist(enabled: boolean): RegistrationChecklis
   const reload = useCallback(async () => {
     if (!enabled) return;
     setLoading(true);
+    // A read in flight at sign-out must not put the last person's paperwork back on screen.
+    const stamp = stampSession();
     try {
-      setChecklist(await MobileApiService.getRegistrationChecklist());
+      const checklist = await MobileApiService.getRegistrationChecklist();
+      if (isStampCurrent(stamp)) setChecklist(checklist);
     } finally {
       setLoading(false);
     }

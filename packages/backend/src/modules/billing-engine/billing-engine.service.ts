@@ -887,6 +887,18 @@ export class BillingEngineService implements OnModuleInit {
     }
   }
 
+  /**
+   * The assignment's LIVE fee payable, or null — the one row that is "the assayer's pay for this
+   * job" today. Reimbursement payables (`expenseId` set) are not the fee and are excluded; a voided
+   * fee payable from an earlier completion is history, not pay (`DEAD_PAYABLE_STATUSES`). Same
+   * predicate as `bookAssignment`'s own "already booked?" read and the partial unique index.
+   */
+  async liveFeePayable(assignmentId: string): Promise<AssayerPayableEntity | null> {
+    return this.payableRepository.findOne({
+      where: { assignmentId, expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
+    });
+  }
+
   // -----------------------------------------------------------------------
   // The client line: adjust and hold, while unbilled
   // -----------------------------------------------------------------------

@@ -32,7 +32,16 @@ export type Overlay =
    * for. Held separately, it survived a cancel: typing "branch is shut" against one offer,
    * backing out, then declining a different one pre-filled the box with the first job's reason.
    */
-  | { name: 'reject'; assignmentId: string; reason: string }
+  | {
+      name: 'reject';
+      assignmentId: string;
+      reason: string;
+      /**
+       * One key for this decline form, minted when it opens and sent as the server's
+       * `clientRequestId`, so pressing Decline twice on the same form cannot file two declines.
+       */
+      requestKey: string;
+    }
   /**
    * Nullable on purpose. Filed from the Earnings tab there may be no assignment in progress to
    * attach the claim to, and the modal explains that rather than guessing at one.

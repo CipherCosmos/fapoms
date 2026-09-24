@@ -217,6 +217,17 @@ const CONTACT_CHANNELS = ['AUTO', 'APP', 'PHONE'] as const;
  * read off a card by the person holding it, so they are the one place in the system where identity
  * data is not self-asserted — and they are what the record's own name is then compared against.
  */
+/** HR's "Ask to re-upload" — see `RosterRecordsService.requestReupload`. */
+class RequestReuploadRequestDto {
+  /** The structured send-back reason: the key the app translates, and the column a rejection requires. */
+  @IsEnum(DocumentRejectionReason)
+  reason: DocumentRejectionReason;
+
+  /** HR's own sentence. The assayer is shown it; the record keeps it. */
+  @IsString() @MinLength(10) @MaxLength(500)
+  note: string;
+}
+
 class VerifyDocumentRequestDto {
   @IsIn(Object.values(DocumentVerification))
   verdict: string;
@@ -1887,7 +1898,8 @@ export class AssayerController {
     }
 
     const updatedBy = req.user?.id && /^[0-9a-fA-F-]{36}$/.test(req.user.id) ? req.user.id : id;
-    const assayer = await this.assayerService.update(id, dto, updatedBy);
+    // `selfEdit` switches on the rules that are the assayer's alone (leave over accepted work).
+    const assayer = await this.assayerService.update(id, dto, updatedBy, { selfEdit: !isStaff });
     // Unscoped by role, which is a pre-existing gap this change does not widen: the redaction
     // interceptor walks this response like any other, so the save echo is masked for staff and
     // stripped for anyone who may not read the fields at all. Without that it would be the
@@ -2646,6 +2658,16 @@ export class AssayerController {
       }
     }
 
+    /**
+     * A new number or expiry on a verified document withdraws the verification, so from the
+     * assayer's own side it is refused until HR has taken the document off VERIFIED — the same
+     * rule, and the same function, as a replacement scan on the upload route below. Receipt ticks
+     * and remarks change nothing HR attested to and stay open.
+     */
+    if (!isStaffAssayerEditor(req.user) && (body?.documentNumber !== undefined || body?.expiryDate !== undefined)) {
+      await this.rosterRecords.assertSelfMayChangeDocument(assayerId, requirement as any);
+    }
+
     const data = await this.rosterRecords.setDocument(assayerId, requirement as any, body, req.user.id);
     return { success: true, data };
   }
@@ -2736,6 +2758,14 @@ export class AssayerController {
           ? 'Name the agency that carried out the background verification before uploading its report.'
           : `Name the ${String(CHECK_ISSUER_LABEL[reportFor]).toLowerCase()} before uploading this report.`,
       );
+    }
+    /**
+     * An assayer may not replace a document HR has verified — PAN, Aadhaar, passbook — until HR
+     * sends it back. Asked before the file is stored, so a refused upload leaves nothing behind.
+     * Staff uploads are unaffected. See `RosterRecordsService.assertSelfMayChangeDocument`.
+     */
+    if (!isStaffAssayerEditor(req.user)) {
+      await this.rosterRecords.assertSelfMayChangeDocument(assayerId, requirement as any);
     }
     const integrity = deriveFileIntegrity(file.buffer, file.mimetype);
     const key = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype, file.size);
@@ -2958,6 +2988,39 @@ export class AssayerController {
       },
     );
     return { success: true, data };
+  }
+
+  /**
+   * HR's "Ask to re-upload": send a verified document, or the locked photograph, back to the
+   * assayer to redo. The assayer can upload it again straight away; the verified scan stays in
+   * the document's version history. Same roles and permission as verifying a document — the
+   * people who attest are the people who may reopen an attestation.
+   *
+   *   POST /assayers/:assayerId/document/:requirement/request-reupload
+   *   body     { reason: DocumentRejectionReason, note: string (10–500) }
+   *   200      { success: true, data: <the document row, verificationStatus: 'REJECTED'> }
+   *   400      not verified (or no photograph on file), or reason/note missing
+   *   409      already sent back and waiting for the assayer
+   */
+  @Post(':assayerId/document/:requirement/request-reupload')
+  @HttpCode(200)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Send a verified document or the locked photograph back to the assayer to upload again' })
+  async requestDocumentReupload(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Param('requirement') requirement: string,
+    @Body() body: RequestReuploadRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    const data = await this.rosterRecords.requestReupload(assayerId, requirement as any, req.user.id, {
+      reason: body?.reason,
+      note: body?.note,
+    });
+    // The global envelope wraps this as `{ success: true, data }` — no hand-rolled envelope here.
+    return data;
   }
 
   // Staff remarks about an assayer live under /assayer-remarks (modules/assayer-remarks).

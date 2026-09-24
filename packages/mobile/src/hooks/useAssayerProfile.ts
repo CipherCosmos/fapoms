@@ -1,9 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MobileApiService } from '../services/api.service';
 import { useFeedback } from '../components/ui/Feedback';
 import type { ProfileDataState } from '../screens/ProfileScreen';
 import type { LeavePeriod } from '../components/AvailabilityModal';
 import { t, serverErrorText } from '../i18n';
+import { emergencyRelationForSave } from '../screens/profile-emergency-relation';
+import { isStampCurrent, stampSession } from '../services/session-epoch';
 
 /**
  * The assayer's own record: their details, their pay totals, and the days they are unavailable.
@@ -167,10 +169,29 @@ export function useAssayerProfile(user: {
 
   const dirty = useMemo(() => JSON.stringify(profile) !== JSON.stringify(baseline), [profile, baseline]);
 
+  /**
+   * A different person (or nobody) now holds the phone: start from blank, not from the last
+   * person's record. `load` below merges the server's answer over what is on screen (`p.phone ||
+   * prev.phone`), so without this a field the new person has not filled in — a PAN, a bank account
+   * — went on showing the previous person's value as if it were theirs.
+   */
+  const lastUserId = useRef(user?.id);
+  useEffect(() => {
+    if (lastUserId.current === user?.id) return;
+    lastUserId.current = user?.id;
+    const blank = emptyProfile({ assayerCode: user?.assayerCode });
+    setProfile(blank);
+    setBaseline(blank);
+    setLeaves([]);
+  }, [user?.id, user?.assayerCode]);
+
   const load = useCallback(async () => {
     if (!user?.id) return;
+    // A profile read in flight at sign-out must not land in the next session (session-epoch.ts).
+    const stamp = stampSession();
     try {
       const res = await MobileApiService.getAssayerProfile(user.id);
+      if (!isStampCurrent(stamp)) return;
       if (!res.success || !res.data) return;
       const p = res.data;
 
@@ -281,22 +302,30 @@ export function useAssayerProfile(user: {
        * server holds and this screen never loaded (or loaded stale) can no longer be written back
        * over the top. If the assayer did not change it, it is not in the request at all.
        */
-      const changed = changedFields(profile, baseline);
+      // The relation box keeps spaces while typing (and holds the word "Other" while it is still
+      // empty); this is the one place it is trimmed into the value actually stored.
+      const toSave = { ...profile, emergencyRelation: emergencyRelationForSave(profile.emergencyRelation) };
+      const changed = changedFields(toSave, baseline);
       if (Object.keys(changed).length === 0) {
+        if (toSave.emergencyRelation !== profile.emergencyRelation) setProfile(toSave);
         feedback.success(t('profile.save.noChanges'));
         return true;
       }
       // `updateAssayerProfile` reports failure by return value, not by throwing, so a catch alone
       // never saw a rejected save. This claimed "Profile saved successfully" on a 404 — and the
       // endpoint it called did not exist, so that is what every save did.
+      const stamp = stampSession();
       const result = await MobileApiService.updateAssayerProfile(user.id, changed);
+      // Signed out while saving: the screen now belongs to somebody else (or nobody).
+      if (!isStampCurrent(stamp)) return false;
       if (!result.success) {
         feedback.error(t('profile.save.notSavedTitle'), serverErrorText(result.error, 'profile.save.notSavedBody', result.code));
         return false;
       }
       // What was just sent is now what the server has, so it's the new baseline — the Save
       // button (gated on `dirty`) should disappear again until the next actual edit.
-      setBaseline(profile);
+      setBaseline(toSave);
+      setProfile(toSave);
       feedback.success(t('profile.save.saved'));
       return true;
     } catch (e: any) {

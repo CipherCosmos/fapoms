@@ -510,6 +510,7 @@ const EmergencyRelationPicker: React.FC<{ value: string; onChange: (v: string) =
   const choose = (choice: string) => {
     onChange(composeEmergencyRelation(choice, choice === EMERGENCY_RELATION_OTHER ? selection.otherText : ''));
   };
+  // Untrimmed while typing - trimming here ate every space as it was typed. It is trimmed on save.
   const changeOtherText = (text: string) => onChange(composeEmergencyRelation(EMERGENCY_RELATION_OTHER, text));
 
   return (

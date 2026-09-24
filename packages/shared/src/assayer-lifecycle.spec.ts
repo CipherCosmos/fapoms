@@ -2,8 +2,9 @@ import { AssayerLifecycleStatus } from './enums';
 import {
   ONBOARDING_STAGES, ONBOARDING_NEXT_STEP,
   isOnboardingStage, onboardingNextStep, nextOnboardingStep,
-  nextAssayerLifecycleStates, canTransitionAssayerLifecycle,
+  nextAssayerLifecycleStates, canTransitionAssayerLifecycle, hasPassedFinalApproval,
 } from './assayer-lifecycle';
+import { AssayerUnavailableReason } from './assayer-roster-vocabulary';
 
 /**
  * ONE HOME FOR "WHAT BLOCKS ACTIVATION".
@@ -147,5 +148,29 @@ describe('the forward step', () => {
       expect(nextAssayerLifecycleStates(stage)).toContain(forward);
       expect(canTransitionAssayerLifecycle(stage, forward)).toBe(true);
     }
+  });
+});
+
+describe('hasPassedFinalApproval', () => {
+  it('is false for every stage up to and including FINAL_APPROVAL, and for no status at all', () => {
+    for (const s of [
+      AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+      AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.FINAL_APPROVAL,
+    ]) expect(hasPassedFinalApproval(s)).toBe(false);
+    expect(hasPassedFinalApproval(null)).toBe(false);
+  });
+
+  it('is true from TRAINING (entered only by the approval) onwards', () => {
+    for (const s of [
+      AssayerLifecycleStatus.TRAINING, AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ON_LEAVE,
+      AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.RESIGNED, AssayerLifecycleStatus.TERMINATED,
+      AssayerLifecycleStatus.ARCHIVED,
+    ]) expect(hasPassedFinalApproval(s)).toBe(true);
+  });
+
+  it('splits INACTIVE by why the person was parked', () => {
+    expect(hasPassedFinalApproval(AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.BGV_FAILED)).toBe(false);
+    expect(hasPassedFinalApproval(AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.APPROVAL_REJECTED)).toBe(false);
+    expect(hasPassedFinalApproval(AssayerLifecycleStatus.INACTIVE, null)).toBe(true);
   });
 });

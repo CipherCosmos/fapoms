@@ -94,7 +94,11 @@ describe('recording a document number', () => {
 describe('who may record a PAN or Aadhaar number', () => {
   const controller = () => {
     const c: any = Object.create(AssayerController.prototype);
-    c.rosterRecords = { setDocument: jest.fn().mockResolvedValue({ ok: true }) };
+    c.rosterRecords = {
+      setDocument: jest.fn().mockResolvedValue({ ok: true }),
+      // Nothing verified in these cases; the verified-document lock is pinned in its own spec.
+      assertSelfMayChangeDocument: jest.fn().mockResolvedValue(undefined),
+    };
     // None of these calls pass a scope, so the real guard would no-op regardless — this mock
     // exists only so `setDocument`'s unconditional region-scope check has something to call.
     c.regionGuard = { assertAssayerInScope: jest.fn().mockResolvedValue(undefined) };

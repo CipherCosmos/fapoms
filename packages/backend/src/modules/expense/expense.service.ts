@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -6,7 +6,8 @@ import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity'
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssignmentStatus } from '@fapoms/shared';
+import { EventCategory, AssignmentStatus, AssayerPayableStatus, OTHER_CONFLICT_ERROR_CODES, isLivePayable } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -24,6 +25,16 @@ export interface CreateExpenseDto {
 
 /** An assayer cannot claim an unbounded amount against a single visit without review. */
 const MAX_SINGLE_CLAIM = 50000;
+
+/**
+ * Fee-payable states after which the job's pay is settled and takes no new claims even when no
+ * bill carries it (direct approval) — the "Ready to pay" (APPROVED) and "Paid" (PAID) payout
+ * stages. A payable on a bill is refused before this is asked. See `ExpenseService.create`.
+ */
+const PAY_SETTLED_STATUSES: readonly AssayerPayableStatus[] = [
+  AssayerPayableStatus.APPROVED,
+  AssayerPayableStatus.PAID,
+];
 
 @Injectable()
 export class ExpenseService {
@@ -122,6 +133,45 @@ export class ExpenseService {
       throw new BadRequestException(
         `Expenses can only be claimed once the visit is under way — this assignment is ${assignment.status}.`,
       );
+    }
+
+    /**
+     * No new claim once the job's pay is on a bill — owner decision 2026-09-24: "Refuse once on a
+     * bill." Claims are made before billing.
+     *
+     * "The job's pay" is its LIVE fee payable (`isLivePayable` / `DEAD_PAYABLE_STATUSES`): a voided
+     * payable from an earlier, reopened completion is history and never blocks a claim on the redo.
+     *
+     * "On a bill" is the payable→assayer-invoice link (`assayerInvoiceId`), in ANY bill state —
+     * including a bill still waiting for the assayer to confirm. The link is the whole question
+     * because every path that takes a payable off a bill clears it: cancelling a bill releases its
+     * lines (`AssayerInvoiceService.cancel`), a revision detaches the lines it does not carry, and
+     * `releaseFromAssayerInvoice` does the same for a voided or held line.
+     *
+     * A payable approved or paid WITHOUT a bill — the desk's recorded direct-approval exception —
+     * has had its money settled just the same, so the APPROVED/PAID stages ("Ready to pay", "Paid")
+     * also refuse, with their own code.
+     *
+     * Applies to every caller, staff raising a claim on an assayer's behalf included: the rule is
+     * about the state of the money, not about who is typing.
+     */
+    const feePayable = await this.billing.liveFeePayable(assignmentId);
+    if (feePayable && isLivePayable(feePayable.status)) {
+      if (feePayable.assayerInvoiceId) {
+        throw withCode(
+          new ConflictException('This job is already on a bill. Claims must be made before billing.'),
+          OTHER_CONFLICT_ERROR_CODES.EXPENSE_JOB_ALREADY_BILLED,
+        );
+      }
+      if (PAY_SETTLED_STATUSES.includes(feePayable.status)) {
+        throw withCode(
+          new ConflictException(
+            `The pay for this job has already been ${feePayable.status === AssayerPayableStatus.PAID ? 'paid' : 'approved'}. `
+            + 'Claims must be made before billing.',
+          ),
+          OTHER_CONFLICT_ERROR_CODES.EXPENSE_PAYOUT_ALREADY_APPROVED,
+        );
+      }
     }
 
     const expense = this.expenseRepository.create({

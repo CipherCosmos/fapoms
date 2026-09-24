@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, Optional } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, IsNull, SelectQueryBuilder, DataSource } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -19,7 +19,7 @@ import { ComplianceStandingService } from './compliance-standing.service';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
-import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, IDEMPOTENCY_ERROR_CODES, EventCategory } from '@fapoms/shared';
+import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, IDEMPOTENCY_ERROR_CODES, EventCategory, hasPassedFinalApproval } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { EmailService } from '../notifications/email.service';
@@ -1772,6 +1772,178 @@ export class RosterRecordsService {
    * Optional as a whole so every existing caller still compiles, and checked field by field
    * against what the card in question actually prints.
    */
+  /**
+   * May the ASSAYER THEMSELF change this document right now?
+   *
+   * Owner decision (2026-09-24): "verified details can't be tampered with until HR asks for that."
+   * A new scan — or a new number or expiry — on a VERIFIED row silently withdraws the verification
+   * (`undoVerification`), so from the phone an approved assayer could swap the PAN or Aadhaar HR
+   * had checked against the original and leave HR a PENDING row it had already signed off.
+   *
+   * The unlock is HR taking the row off VERIFIED, which every existing HR path already does:
+   * sending it back (REJECTED, the "needs re-upload" state the assayer is notified about), or a
+   * staff edit that withdraws the verification (new scan, changed number, name change). Nothing new
+   * is stored to say "HR reopened this" — the verification status IS that fact.
+   *
+   * Only for the self-service caller. Staff uploads keep today's behaviour, which is the point: the
+   * people who verify are the people who may replace.
+   *
+   * Asked before a file is stored, so a refused upload leaves nothing behind.
+   */
+  async assertSelfMayChangeDocument(assayerId: string, requirement: OnboardingDocument): Promise<void> {
+    this.assertKnownRequirement(requirement);
+    const row = await this.onboarding.findOne({ where: { assayerId, requirement } });
+    // HR has asked for it again ("Ask to re-upload", `requestReupload`) — open, whatever it was.
+    if (row?.isActive !== false && row?.verificationStatus === DocumentVerification.REJECTED) return;
+
+    /**
+     * The photograph is locked once the person is approved — owner decision 2026-09-24, "Lock
+     * once approved". It is never VERIFIED (it is not a document a reviewer checks against an
+     * original), so the verification rule below could not hold it; approval is the moment it
+     * became the face on the ID card. `hasPassedFinalApproval` is the shared reading of "approved".
+     * Only a photo that EXISTS is locked: somebody approved with none on file may still add one.
+     */
+    if (requirement === OnboardingDocument.PHOTOGRAPH) {
+      const person = await this.assayers.findOne({
+        where: { id: assayerId },
+        select: { id: true, lifecycleStatus: true, unavailableReason: true, photograph: true },
+      });
+      const hasPhoto = !!person?.photograph || (row?.filePaths ?? []).length > 0;
+      if (hasPhoto && hasPassedFinalApproval(person?.lifecycleStatus, person?.unavailableReason)) {
+        throw withCode(
+          new ForbiddenException('Your photo is locked. Ask HR if it needs changing.'),
+          ASSAYER_ERROR_CODES.PHOTOGRAPH_LOCKED,
+        );
+      }
+      return;
+    }
+
+    if (row?.isActive !== false && row?.verificationStatus === DocumentVerification.VERIFIED) {
+      throw withCode(
+        new ForbiddenException('HR has verified this. Ask HR if it needs changing.'),
+        ASSAYER_ERROR_CODES.DOCUMENT_VERIFIED_LOCKED,
+      );
+    }
+  }
+
+  /**
+   * HR's "Ask to re-upload": send a VERIFIED document — or the locked photograph — back to the
+   * assayer to redo.
+   *
+   * The unlock the two self-service locks above point at. It uses the existing sent-back state,
+   * REJECTED, rather than a new "reopened" one: REJECTED already means "the office needs this
+   * again" everywhere that matters — the assayer's checklist shows it with a "take it again"
+   * button, the lock above opens on it, and a new upload clears it back to PENDING
+   * (`attachFile`), which re-locks the document the moment the replacement lands. A second state
+   * with the same meaning would be one more thing for every reader to learn.
+   *
+   * What is kept: the verified scan. Nothing is deleted or detached — the file stays on the row
+   * and its version row keeps its own VERIFIED attestation, so the history still says what was
+   * checked, by whom, and when; the replacement will supersede it as a new version. What changes:
+   * the row's current verdict (VERIFIED → REJECTED, with HR's reason), exactly as a withdrawal
+   * does elsewhere (`undoVerification`), plus the knock-on a withdrawal always has — the name of
+   * record is re-derived, and a passbook no longer vouches for the payout destination.
+   *
+   * `reason` is the structured send-back reason (the column the database requires on a rejection,
+   * and the key the app translates); `note` is HR's own sentence, which is what the assayer is
+   * told in the notification and what the record keeps.
+   */
+  async requestReupload(
+    assayerId: string,
+    requirement: OnboardingDocument,
+    actorId: string,
+    input: { reason: DocumentRejectionReason; note: string },
+  ): Promise<AssayerDocumentEntity> {
+    this.assertKnownRequirement(requirement);
+    await this.assertOwnedAssayer(assayerId);
+    const note = String(input?.note ?? '').trim();
+    if (!input?.reason || !(Object.values(DocumentRejectionReason) as string[]).includes(input.reason)) {
+      throw new BadRequestException('Choose why the document is being sent back.');
+    }
+    if (note.length < 10) {
+      throw new BadRequestException('Say in a sentence why it needs doing again. The assayer is shown this.');
+    }
+
+    let row = await this.onboarding.findOne({ where: { assayerId, requirement } });
+    if (row?.verificationStatus === DocumentVerification.REJECTED && row.isActive !== false) {
+      throw new ConflictException(
+        `${ONBOARDING_DOCUMENT_LABELS[requirement]} has already been sent back and is waiting for the assayer.`,
+      );
+    }
+
+    if (requirement === OnboardingDocument.PHOTOGRAPH) {
+      const person = await this.assayers.findOne({ where: { id: assayerId }, select: { id: true, photograph: true } });
+      if (!person?.photograph && (row?.filePaths ?? []).length === 0) {
+        throw new BadRequestException('There is no photograph on file, so there is nothing to send back — the assayer can already add one.');
+      }
+      // A photograph filed before the document row existed lives only on the person; give it a row
+      // so the send-back has somewhere to be recorded. The file itself is referenced, not copied.
+      if (!row) {
+        row = await this.onboarding.save(this.onboarding.create({
+          assayerId, requirement, createdBy: actorId, filePaths: person?.photograph ? [person.photograph] : [],
+        }));
+      }
+    } else if (!row || row.isActive === false || row.verificationStatus !== DocumentVerification.VERIFIED) {
+      throw new BadRequestException(
+        `Only a verified document is sent back this way. ${ONBOARDING_DOCUMENT_LABELS[requirement]} is not verified — `
+        + 'a document still awaiting review is sent back from its verification.',
+      );
+    }
+
+    const previousStatus = row.verificationStatus ?? null;
+    const withdrawn = this.undoVerification(row, `HR asked for it to be sent again: ${note}`);
+    if (!withdrawn) {
+      row.remarks = [row.remarks, `HR asked for it to be sent again: ${note}.`].filter(Boolean).join(' ');
+    }
+    row.verificationStatus = DocumentVerification.REJECTED;
+    row.rejectionReason = input.reason;
+    // The verdict's moment and author, as `verifyDocument` records a rejection.
+    row.verifiedAt = new Date();
+    row.verifiedBy = actorId;
+    row.isActive = true;
+    row.updatedBy = actorId;
+    const saved = await this.onboarding.save(row);
+
+    if (withdrawn) await this.deriveLegalName(assayerId, actorId);
+    if (withdrawn && requirement === OnboardingDocument.BANK_PASSBOOK) {
+      await this.assayers.update({ id: assayerId }, { identityVerifiedAt: null });
+    }
+
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'DOCUMENT_REUPLOAD_REQUESTED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      previousState: previousStatus ?? undefined,
+      newState: DocumentVerification.REJECTED,
+      userId: actorId,
+      remarks: `${ONBOARDING_DOCUMENT_LABELS[requirement]} sent back for the assayer to upload again: ${note}`,
+      metadata: {
+        requirement,
+        reason: input.reason,
+        // The version that stays in the history as what was verified.
+        keptVersionId: saved.currentVersionId ?? null,
+        withdrewVerification: withdrawn,
+      },
+    });
+
+    // The existing "please send it again" message, in HR's own words.
+    this.notifications?.emitSafe({
+      type: 'ASSAYER_IDENTITY_DOCUMENT_REJECTED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      actorUserId: actorId,
+      assayerId,
+      dedupeKey: `REUPLOAD_REQUESTED:${saved.id}:${saved.verifiedAt?.toISOString() ?? ''}`,
+      payload: {
+        documentName: ONBOARDING_DOCUMENT_LABELS[requirement],
+        guidance: note,
+      },
+    });
+
+    return saved;
+  }
+
   /**
    * Undo a verification whose evidence no longer stands, wherever that happens.
    *

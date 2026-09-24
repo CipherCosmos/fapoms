@@ -40,6 +40,11 @@ export const en = {
     // Shown when a network/timeout failure leaves an action queued for automatic retry, rather
     // than a plain "failed" that implies the assayer must act again themselves.
     willRetry: "Saved. We'll send it automatically once you're back online.",
+    // An offer reply or claim filed with no signal: it is on the phone and will send itself.
+    // Shown as a success, so nobody presses again thinking the first press failed.
+    savedOfflineTitle: 'Saved on your phone',
+    savedOfflineBody: 'It will be sent by itself when you are back online.',
+    showMore: 'Show %{count} more',
   },
 
   login: {
@@ -138,6 +143,8 @@ export const en = {
   },
 
   registration: {
+    /** Sign-out confirmation when registration photos are still waiting to send. */
+    signOutUnsentBody: 'Photos not sent yet: %{count}. Signing out deletes them from this phone.',
     banner: {
       oneFailed: 'One paper did not send',
       manyFailed: '%{count} papers did not send',
@@ -1064,8 +1071,11 @@ export const en = {
     checkInFailedTitle: 'Could not check in',
     checkInFailedBody: 'Check-in failed. Please try again.',
     /** The connection dropped mid-call, so the app genuinely does not know which way it went. */
-    checkInUnconfirmed:
-      'Your check-in was not confirmed — the connection dropped. Move to better signal and tap Check in again; if it already went through, it will show as checked in.',
+    // Check-in taken with no signal: saved on the phone and sent by itself. The server records
+    // the time it ARRIVES (it stamps check-in on receipt), so the sentence says so rather than
+    // letting anybody believe the tap time is what the audit will show.
+    checkInSavedOffline:
+      'Your check-in at %{branch} will be sent when you are back online. The time recorded is when it arrives.',
     serverUnreachableTitle: 'Could not reach the server',
     checkOutConfirmTitle: 'Check out of this branch?',
     checkOutConfirmBody:
@@ -1076,8 +1086,8 @@ export const en = {
     checkedOutBody: 'You have left %{branch}. Upload your paperwork when it is ready.',
     checkOutFailedTitle: 'Could not check out',
     checkOutFailedBody: 'Check-out failed. Please try again.',
-    checkOutUnconfirmed:
-      'Your check-out was not confirmed — the connection dropped. Move to better signal and tap Check out again; if it already went through, it will show as checked out.',
+    checkOutSavedOffline:
+      'Your check-out from %{branch} will be sent when you are back online. The time recorded is when it arrives.',
   },
 
   scan: {
@@ -1149,6 +1159,7 @@ export const en = {
     invalidAmountBody: 'Use digits only, for example 1000 or 1,000.',
     filedTitle: 'Claim filed',
     filedBody: '%{amount} for %{category} is awaiting approval.',
+    savedOfflineBody: 'Your claim will be sent by itself when you are back online.',
     failedTitle: 'Claim not filed',
     failedBody: 'The expense could not be submitted.',
   },
@@ -1366,6 +1377,7 @@ export const en = {
    * moves between them in a single sitting.
    */
   queries: {
+    replySavedOffline: 'Your reply will be sent when you are back online.',
     tabNeedsAttention: 'Needs attention',
     tabAll: 'All',
     state: {

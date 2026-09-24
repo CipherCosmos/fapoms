@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { parseRupeeInput, formatRupees } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { MobileApiService } from '../services/api.service';
+import { generateClientRequestId } from '../services/action-queue';
 import { Button, ChipSelector, FieldLabel, Input, ModalSheet } from './ui/primitives';
 import { useT, type TranslationKey } from '../i18n';
 
@@ -39,7 +40,11 @@ export interface ExpenseModalProps {
   onSubmit?: () => void;
   onCancel?: () => void;
   onClose?: () => void;
-  onAddExpense?: (category: ExpenseCategory, amount: string, description: string) => void | Promise<void>;
+  /**
+   * `requestKey` is minted once each time the sheet opens and passed on every press, so a second
+   * press on the same form is recognised as the same claim (it is the server's `clientRequestId`).
+   */
+  onAddExpense?: (category: ExpenseCategory, amount: string, description: string, requestKey: string) => void | Promise<void>;
 }
 
 export const ExpenseModal: React.FC<ExpenseModalProps> = ({
@@ -62,11 +67,13 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   const [internalAmt, setInternalAmt] = useState('');
   const [internalDesc, setInternalDesc] = useState('');
   const [busy, setBusy] = useState(false);
+  const [requestKey, setRequestKey] = useState(generateClientRequestId);
 
   // Clear the form each time the sheet opens, so a claim is never pre-filled with the
   // previous one's amount and silently filed against a different assignment.
   useEffect(() => {
     if (!visible) return;
+    setRequestKey(generateClientRequestId());
     setInternalCat('TRAVEL_KM');
     setInternalAmt('');
     setInternalDesc('');
@@ -141,7 +148,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
         // and this is a no-op; but a rejected claim or a "no assignment selected" early-return
         // left the sheet open with `busy` stuck true forever — a permanently spinning, unusable
         // Submit that the previous fire-and-forget call could not recover from.
-        await onAddExpense(cat, amt, desc);
+        await onAddExpense(cat, amt, desc, requestKey);
       } else {
         onSubmit?.();
       }

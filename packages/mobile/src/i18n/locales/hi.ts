@@ -15,8 +15,8 @@ import type { en } from './en';
  *      balance, a hold or a TDS deduction is worse than English, and this is the screen a field
  *      assayer opens most often after the schedule.
  *   3. `assignment` — check-in and check-out. These are attendance evidence in a bank audit,
- *      and the two "not confirmed" sentences have to leave the assayer sure of what to do next
- *      without implying the record was or was not written.
+ *      and the two "saved offline" sentences (`checkInSavedOffline`/`checkOutSavedOffline`) must
+ *      say plainly that the time recorded is when the check-in arrives, not when it was tapped.
  *   4. The registration screens. Wrong copy there makes an optional accelerator read as a demand.
  *   5. Register and formality. This is drafted in plain, spoken-register Hindi, not the
  *      Sanskritised register of government forms, because the reader is a field worker and
@@ -74,6 +74,9 @@ export const hi: PartialCatalogue<typeof en> = {
     retry: 'दोबारा कोशिश करें',
     notOnFile: 'दर्ज नहीं है',
     willRetry: 'सेव हो गया। नेटवर्क वापस आते ही यह अपने आप भेज दिया जाएगा।',
+    savedOfflineTitle: 'आपके फ़ोन में सेव हो गया',
+    savedOfflineBody: 'नेटवर्क वापस आते ही यह अपने आप भेज दिया जाएगा।',
+    showMore: '%{count} और दिखाएँ',
   },
 
   login: {
@@ -154,6 +157,7 @@ export const hi: PartialCatalogue<typeof en> = {
   },
 
   registration: {
+    signOutUnsentBody: 'अभी तक न भेजी गई फ़ोटो: %{count}। साइन आउट करने पर ये इस फ़ोन से हट जाएँगी।',
     banner: {
       oneFailed: 'एक कागज़ नहीं भेजा जा सका',
       manyFailed: '%{count} कागज़ नहीं भेजे जा सके',
@@ -662,8 +666,8 @@ export const hi: PartialCatalogue<typeof en> = {
     checkedInBody: '%{branch} पर चेक-इन हुआ',
     checkInFailedTitle: 'चेक-इन नहीं हुआ',
     checkInFailedBody: 'चेक-इन नहीं हो सका। फिर कोशिश करें।',
-    checkInUnconfirmed:
-      'आपका चेक-इन पक्का नहीं हुआ — कनेक्शन टूट गया। अच्छे नेटवर्क में जाकर फिर “चेक इन” दबाएँ; अगर वह पहले ही दर्ज हो चुका है तो चेक-इन दिखने लगेगा।',
+    checkInSavedOffline:
+      '%{branch} का आपका चेक-इन नेटवर्क वापस आते ही भेज दिया जाएगा। दर्ज समय वह होगा जब यह पहुँचेगा।',
     serverUnreachableTitle: 'सर्वर तक नहीं पहुँच सके',
     checkOutConfirmTitle: 'इस ब्रांच से चेक आउट करें?',
     checkOutConfirmBody:
@@ -674,8 +678,8 @@ export const hi: PartialCatalogue<typeof en> = {
     checkedOutBody: 'आप %{branch} से निकल चुके हैं। कागज़ तैयार हों तो भेज दें।',
     checkOutFailedTitle: 'चेक-आउट नहीं हुआ',
     checkOutFailedBody: 'चेक-आउट नहीं हो सका। फिर कोशिश करें।',
-    checkOutUnconfirmed:
-      'आपका चेक-आउट पक्का नहीं हुआ — कनेक्शन टूट गया। अच्छे नेटवर्क में जाकर फिर “चेक आउट” दबाएँ; अगर वह पहले ही दर्ज हो चुका है तो चेक-आउट दिखने लगेगा।',
+    checkOutSavedOffline:
+      '%{branch} से आपका चेक-आउट नेटवर्क वापस आते ही भेज दिया जाएगा। दर्ज समय वह होगा जब यह पहुँचेगा।',
   },
 
   scan: {
@@ -728,6 +732,7 @@ export const hi: PartialCatalogue<typeof en> = {
     invalidAmountBody: 'सिर्फ़ अंक लिखें, जैसे 1000 या 1,000।',
     filedTitle: 'दावा दर्ज हो गया',
     filedBody: '%{category} के लिए %{amount} मंज़ूरी के इंतज़ार में है।',
+    savedOfflineBody: 'नेटवर्क वापस आते ही आपका दावा अपने आप भेज दिया जाएगा।',
     failedTitle: 'दावा दर्ज नहीं हुआ',
     failedBody: 'यह खर्च भेजा नहीं जा सका।',
   },
@@ -892,6 +897,7 @@ export const hi: PartialCatalogue<typeof en> = {
   },
 
   queries: {
+    replySavedOffline: 'नेटवर्क वापस आते ही आपका जवाब भेज दिया जाएगा।',
     tabNeedsAttention: 'ध्यान चाहिए',
     tabAll: 'सभी',
     state: {

@@ -15,7 +15,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
-import { enqueueAndRun } from '../services/action-queue';
+import { enqueueAndRun, toSubmitOutcome } from '../services/action-queue';
 import { actionDispatchers } from '../services/action-dispatchers';
 import { connectMobileSocket } from '../services/socket';
 import { DocumentScanner, readAsBase64 } from './DocumentScanner';
@@ -407,15 +407,18 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                 { queryId: activeQueryId, body: '', attachments: uploaded },
                 actionDispatchers.QUERY_MESSAGE,
               );
-              if (!result.success && !result.queued) {
-                feedback.error(tr('queries.scanNotSentTitle'), serverErrorText(result.error, 'queries.scanNotSentBody', result.code));
+              // A real refusal stays an error. Saved-for-later is a success, titled as one — it
+              // used to carry the "Could not reach the server" title on a success toast.
+              const outcome = toSubmitOutcome(result);
+              if (!outcome.success) {
+                feedback.error(tr('queries.scanNotSentTitle'), serverErrorText(outcome.error, 'queries.scanNotSentBody', outcome.code));
                 return;
               }
               setThreadVersion((v) => v + 1);
               feedback.success(
-                result.queued ? tr('assignment.serverUnreachableTitle') : tr('queries.scanSentTitle'),
-                result.queued
-                  ? tr('common.willRetry')
+                outcome.queued ? tr('common.savedOfflineTitle') : tr('queries.scanSentTitle'),
+                outcome.queued
+                  ? tr('queries.replySavedOffline')
                   : doc.pageCount === 1
                     ? tr('queries.scanSentOne')
                     : tr('queries.scanSentMany', { count: doc.pageCount }),

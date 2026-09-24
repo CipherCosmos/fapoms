@@ -54,6 +54,7 @@ import { EventCategory, ScheduleStatus, AssignmentStatus, AssayerStatus, Project
   IDEMPOTENCY_ERROR_CODES,
   WRITE_VERIFICATION_ERROR_CODES,
   OTHER_CONFLICT_ERROR_CODES,
+  ATTENDANCE_ERROR_CODES,
 } from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -4346,7 +4347,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment: null as any,
-          error: 'NOT_YOUR_ASSIGNMENT',
+          error: ATTENDANCE_ERROR_CODES.NOT_YOUR_ASSIGNMENT,
           message: 'You can only check in to an assignment that is assigned to you.',
         };
       }
@@ -4356,7 +4357,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment: null as any,
-          error: 'ASSIGNMENT_CANCELLED',
+          error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED,
           message: 'Cannot check in: assignment has been cancelled.',
         };
       }
@@ -4364,7 +4365,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment: null as any,
-          error: 'ASSIGNMENT_COMPLETED',
+          error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED,
           message: 'Cannot check in: assignment is already completed.',
         };
       }
@@ -4387,14 +4388,14 @@ export class AssignmentService {
             return {
               success: false,
               assignment: null as any,
-              error: 'STALE_ASSIGNMENT_VERSION',
+              error: CONCURRENCY_ERROR_CODES.STALE_ASSIGNMENT_VERSION,
               message: `Assignment state has changed on server (version ${lockedRow.entity_version} > expected ${options.expectedVersion}). Please refresh schedule.`,
             };
           } else {
             return {
               success: false,
               assignment: null as any,
-              error: 'INVALID_ASSIGNMENT_VERSION',
+              error: CONCURRENCY_ERROR_CODES.INVALID_ASSIGNMENT_VERSION,
               message: `Future or non-existent version ${options.expectedVersion} specified (server version is ${lockedVer}). Concurrency check rejected.`,
             };
           }
@@ -4403,7 +4404,7 @@ export class AssignmentService {
 
       const assignment = await this.findOne(id);
       if (!assignment) {
-        return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
+        return { success: false, assignment: null as any, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_NOT_FOUND, message: 'Assignment not found.' };
       }
 
       /**
@@ -4437,17 +4438,17 @@ export class AssignmentService {
           return {
             success: false,
             assignment: null as any,
-            error: 'NOT_YOUR_ASSIGNMENT',
+            error: ATTENDANCE_ERROR_CODES.NOT_YOUR_ASSIGNMENT,
             message: 'You can only check in to an assignment that is assigned to you.',
           };
         }
       }
 
       if (assignment.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check in: assignment has been cancelled.' };
+        return { success: false, assignment, error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED, message: 'Cannot check in: assignment has been cancelled.' };
       }
       if (assignment.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Cannot check in: assignment is already completed.' };
+        return { success: false, assignment, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED, message: 'Cannot check in: assignment is already completed.' };
       }
       if (assignment.checkedInAt) {
         return {
@@ -4461,7 +4462,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment,
-          error: 'INVALID_STATE_FOR_CHECK_IN',
+          error: ATTENDANCE_ERROR_CODES.INVALID_STATE_FOR_CHECK_IN,
           message: `You need to accept this assignment before checking in. It is currently ${String(assignment.status).replace(/_/g, ' ').toLowerCase()}.`,
         };
       }
@@ -4479,7 +4480,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment,
-          error: 'ASSAYER_NOT_ACTIVE',
+          error: ATTENDANCE_ERROR_CODES.ASSAYER_NOT_ACTIVE,
           message: `Check-in refused: Assayer is currently ${statusLabel}. Suspended or inactive assayers cannot start new field work.`,
         };
       }
@@ -4488,7 +4489,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment,
-          error: 'CONFLICT_ASSIGNMENT_MODIFIED',
+          error: ATTENDANCE_ERROR_CODES.CONFLICT_ASSIGNMENT_MODIFIED,
           message: 'Assignment state has changed on server. Please refresh schedule.',
         };
       }
@@ -4522,7 +4523,7 @@ export class AssignmentService {
             return {
               success: false,
               assignment,
-              error: 'NOT_SCHEDULED_TODAY',
+              error: ATTENDANCE_ERROR_CODES.NOT_SCHEDULED_TODAY,
               message: early
                 ? `This audit is scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })}. Check-in opens on the day itself — if the visit has genuinely moved, ask operations to reschedule it first.`
                 : `This audit was scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })} and that day has passed. Ask operations to reschedule it before checking in.`,
@@ -4554,7 +4555,7 @@ export class AssignmentService {
             return {
               success: false,
               assignment,
-              error: 'TOO_FAR_FROM_BRANCH',
+              error: ATTENDANCE_ERROR_CODES.TOO_FAR_FROM_BRANCH,
               message: branchGeoIsVague
                 ? `You appear to be ${km} km from this branch, but this branch's recorded location is only accurate to about ${Math.round(branchAccuracyMeters / 1000)} km — it was never pinned precisely. Ask operations to correct the branch's location; this is not something you can fix from here.`
                 : `You appear to be ${km} km from this branch. Check-in works only at the branch itself — if you are standing there, get clear sky for a GPS fix and try again.`,
@@ -4696,16 +4697,16 @@ export class AssignmentService {
         return {
           success: false,
           assignment: null as any,
-          error: 'NOT_YOUR_ASSIGNMENT',
+          error: ATTENDANCE_ERROR_CODES.NOT_YOUR_ASSIGNMENT,
           message: 'You can only check out of an assignment that is assigned to you.',
         };
       }
 
       if (lockedRow?.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment: null as any, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check out of a cancelled assignment.' };
+        return { success: false, assignment: null as any, error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED, message: 'Cannot check out of a cancelled assignment.' };
       }
       if (lockedRow?.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment: null as any, error: 'ASSIGNMENT_COMPLETED', message: 'Assignment is already completed.' };
+        return { success: false, assignment: null as any, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED, message: 'Assignment is already completed.' };
       }
 
       if (lockedRow?.checked_out_at) {
@@ -4721,7 +4722,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment: null as any,
-          error: 'NOT_CHECKED_IN',
+          error: ATTENDANCE_ERROR_CODES.NOT_CHECKED_IN,
           message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
         };
       }
@@ -4733,14 +4734,14 @@ export class AssignmentService {
             return {
               success: false,
               assignment: null as any,
-              error: 'STALE_ASSIGNMENT_VERSION',
+              error: CONCURRENCY_ERROR_CODES.STALE_ASSIGNMENT_VERSION,
               message: `Assignment state has changed on server (version ${lockedRow.entity_version} > expected ${options.expectedVersion}). Please refresh schedule.`,
             };
           } else {
             return {
               success: false,
               assignment: null as any,
-              error: 'INVALID_ASSIGNMENT_VERSION',
+              error: CONCURRENCY_ERROR_CODES.INVALID_ASSIGNMENT_VERSION,
               message: `Future or non-existent version ${options.expectedVersion} specified (server version is ${lockedVer}). Concurrency check rejected.`,
             };
           }
@@ -4749,7 +4750,7 @@ export class AssignmentService {
 
       const assignment = await this.findOne(id);
       if (!assignment) {
-        return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
+        return { success: false, assignment: null as any, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_NOT_FOUND, message: 'Assignment not found.' };
       }
 
       // Ownership before any shortcut, for the reason set out on `recordCheckIn` above: the
@@ -4762,24 +4763,24 @@ export class AssignmentService {
           return {
             success: false,
             assignment: null as any,
-            error: 'NOT_YOUR_ASSIGNMENT',
+            error: ATTENDANCE_ERROR_CODES.NOT_YOUR_ASSIGNMENT,
             message: 'You can only check out of an assignment that is assigned to you.',
           };
         }
       }
 
       if (assignment.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check out of a cancelled assignment.' };
+        return { success: false, assignment, error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED, message: 'Cannot check out of a cancelled assignment.' };
       }
       if (assignment.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Assignment is already completed.' };
+        return { success: false, assignment, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED, message: 'Assignment is already completed.' };
       }
 
       if (!assignment.checkedInAt) {
         return {
           success: false,
           assignment,
-          error: 'NOT_CHECKED_IN',
+          error: ATTENDANCE_ERROR_CODES.NOT_CHECKED_IN,
           message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
         };
       }
@@ -4788,7 +4789,7 @@ export class AssignmentService {
         return {
           success: false,
           assignment,
-          error: 'CONFLICT_ASSIGNMENT_MODIFIED',
+          error: ATTENDANCE_ERROR_CODES.CONFLICT_ASSIGNMENT_MODIFIED,
           message: 'Assignment state has changed on server. Please refresh schedule.',
         };
       }

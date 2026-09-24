@@ -230,6 +230,29 @@ export class ChunkedUploadService {
   }
 
   /**
+   * The session, but only for the account that opened it.
+   *
+   * Every session route used to act on whatever `uploadId` arrived: any signed-in uploader could
+   * read another person's progress, push chunks into their multipart upload, or complete it — and
+   * completion registers the document under the COMPLETER's name against the opener's target. The
+   * session id is an unguessable hash, but an id that turns up in a log or a support screenshot is
+   * not a credential, and nothing here ever treated it as one.
+   *
+   * A foreign session answers exactly as a missing one does (404, same sentence), so the check
+   * cannot be used to learn which ids exist. There is no staff exemption: staff who upload on an
+   * assayer's behalf open their OWN session for it (the "on behalf" rule is about the assignment,
+   * enforced separately), and nothing in the product continues somebody else's half-sent file.
+   */
+  async getSessionFor(uploadId: string, userId: string | undefined | null): Promise<UploadSession> {
+    const session = await this.loadSession(uploadId);
+    if (!userId || session.createdBy !== userId) {
+      this.logger.warn(`Upload session ${uploadId} (opened by ${session.createdBy}) was addressed by ${userId ?? 'an anonymous caller'}; refused.`);
+      throw new NotFoundException(`Upload session ${uploadId} not found or already completed.`);
+    }
+    return session;
+  }
+
+  /**
    * Which part numbers (0-indexed) have already been received by MinIO.
    * This is what makes resume possible — after a reconnect the client asks
    * which chunks survived and sends only the gaps.

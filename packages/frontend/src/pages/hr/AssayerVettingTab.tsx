@@ -9,6 +9,7 @@ import {
   BACKGROUND_CHECK_VERDICT_LABELS, CheckType, CHECK_TYPES, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL,
   RECHECK_STATUS_LABELS, CheckReviewDecision, ONBOARDING_DOCUMENT_LABELS as REPORT_LABELS,
   isAdverseVerdict, checkTypeForReport, type RecheckStanding, type ComplianceHold,
+  hasPassedFinalApproval, OnboardingDocument,
 } from '@fapoms/shared';
 
 import { ScanOrAttach } from '../../components/scanner/ScanOrAttach';
@@ -996,6 +997,10 @@ export const AssayerVettingTab: React.FC<{
    * the name off the card even when the record already holds the same spelling.
    */
   person?: {
+    /** With the lifecycle, decides whether the ID-card photo is locked (see `hasPassedFinalApproval`). */
+    unavailableReason?: string | null;
+    /** A photo can sit only on the person (an old import) with no document row files behind it. */
+    photograph?: string | null;
     displayName?: string | null;
     dateOfBirth?: string | null;
     gender?: string | null;
@@ -1083,6 +1088,8 @@ export const AssayerVettingTab: React.FC<{
   const [reviewErr, setReviewErr] = useState<string | null>(null);
   /** The document a "Send it back" click is choosing a reason for — the dialog is open exactly when this is set. */
   const [rejectTarget, setRejectTarget] = useState<any | null>(null);
+  // A document HR already accepted (or the locked ID-card photo), being asked for again.
+  const [reuploadTarget, setReuploadTarget] = useState<any | null>(null);
   /** Why the dossier itself is not here — kept apart from `err`, which every write reports to. */
   const [dossierErr, setDossierErr] = useState<unknown>(null);
   /** The document whose card details are being read off — the dialog is open exactly when this is set. */
@@ -1510,6 +1517,30 @@ export const AssayerVettingTab: React.FC<{
   };
 
   /**
+   * Asking again for something already accepted.
+   *
+   * A verified document — and, once someone is approved, their ID-card photo — is locked against
+   * the assayer: they cannot replace it from the phone. This is the one way to unlock it. The
+   * accepted copy stays in the document's history; the reason goes to their phone.
+   */
+  const requestReupload = async (doc: any, reason: string, note: string) => {
+    setBusy(true);
+    try {
+      await api.request(`/assayers/${assayerId}/document/${doc.requirement}/request-reupload`, {
+        method: 'POST',
+        body: JSON.stringify({ reason, note }),
+      });
+      if (doc.id) void invalidateKycMutation(queryClient, assayerId, doc.id);
+      reload();
+    } catch (e) {
+      setErr(userMessage(e));
+    } finally { setBusy(false); }
+  };
+
+  /** The ID-card photo locks once the person is approved; only then is asking again meaningful. */
+  const photoLocked = hasPassedFinalApproval(lifecycleStatus, person?.unavailableReason ?? null);
+
+  /**
    * Attaching the scan also records that the soft copy arrived — the file on the record *is* the
    * soft copy, and asking a clerk to tick a box next to a document they just uploaded is asking
    * them to state something the screen can already see.
@@ -1674,6 +1705,18 @@ export const AssayerVettingTab: React.FC<{
             const doc = rejectTarget;
             setRejectTarget(null);
             void reject(doc, reason, note);
+          }}
+        />
+      )}
+      {reuploadTarget && (
+        <RejectDocumentModal
+          mode="reupload"
+          label={reuploadTarget.label}
+          onCancel={() => setReuploadTarget(null)}
+          onSubmit={(reason, note) => {
+            const doc = reuploadTarget;
+            setReuploadTarget(null);
+            void requestReupload(doc, reason, note);
           }}
         />
       )}
@@ -2608,6 +2651,12 @@ export const AssayerVettingTab: React.FC<{
                       </LinkButton>
                     </>
                   )}
+                  {/* Accepted, so locked against them: this is the only way to ask for it again. */}
+                  {d.id && d.verificationStatus === 'VERIFIED' && (
+                    <LinkButton onClick={() => setReuploadTarget(d)} label={`Ask for ${d.label} again`}>
+                      Ask to re-upload
+                    </LinkButton>
+                  )}
                   <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />
                 </RowActions>
               ),
@@ -2654,6 +2703,14 @@ export const AssayerVettingTab: React.FC<{
                       ? <LinkButton onClick={onGoToChecks}>Upload on the Background tab</LinkButton>
                       : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Uploaded on the Background tab</span>)
                     : <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />}
+                  {/* The ID-card photo locks against them once they are approved; only HR reopens it,
+                      and not while an earlier request is still waiting on them. */}
+                  {d.requirement === OnboardingDocument.PHOTOGRAPH && photoLocked
+                    && ((d.filePaths ?? []).length > 0 || !!person?.photograph) && d.verificationStatus !== 'REJECTED' && (
+                    <LinkButton onClick={() => setReuploadTarget(d)} label="Ask for their photo again">
+                      Ask to re-upload
+                    </LinkButton>
+                  )}
                   {/*
                     "Original in" / "Original out" is filing-room shorthand for a toggle: it does
                     not say what pressing it records, and the two read as a pair of opposite

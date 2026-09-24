@@ -2,11 +2,54 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { AppState, AppStateStatus } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { MobileApiService } from '../services/api.service';
-import { disconnectMobileSocket } from '../services/socket';
-import { clearCache } from '../services/token-store';
+import { disconnectMobileSocket, getMobileSocket } from '../services/socket';
+import { clearCache, readCache, writeCache } from '../services/token-store';
 import { clearQueue } from '../services/location-queue';
 import { clearOutbox } from '../services/upload-outbox';
+import { adoptUnownedActions, clearActionQueue, setActionQueueOwner } from '../services/action-queue';
+import { claimQueuedWorkFor, QUEUE_OWNER_CACHE_KEY } from '../services/session-owner';
+import { advanceSession } from '../services/session-epoch';
 import { getPreference } from '../services/preferences';
+
+/**
+ * Empty every queue of work filed on this phone for a signed-in person — the action queue, the
+ * upload outbox and the location trail — in memory and on disk.
+ */
+async function clearUserQueues(): Promise<void> {
+  await Promise.all([clearQueue(), clearOutbox(), clearActionQueue()]);
+}
+
+/**
+ * Record whose session is live — or that none is — everywhere that needs to know: the action queue
+ * (what may be sent) and the session epoch (what fetched data may still land). Every start and end
+ * of a session goes through here, so a read in flight across a sign-out is dropped when it returns.
+ */
+function setSessionOwner(userId: string | null): void {
+  setActionQueueOwner(userId);
+  advanceSession(userId);
+}
+
+/**
+ * Make `userId` the owner of the queues before anything can drain under their session, emptying
+ * work somebody else left behind. See `services/session-owner.ts`.
+ */
+function claimQueues(userId: string, how: 'restored' | 'signed-in'): Promise<unknown> {
+  if (!userId) {
+    setSessionOwner(null);
+    return Promise.resolve();
+  }
+  return claimQueuedWorkFor(userId, how, {
+    readOwner: () => readCache<string>(QUEUE_OWNER_CACHE_KEY),
+    writeOwner: (id) => writeCache(QUEUE_OWNER_CACHE_KEY, id),
+    clearQueues: clearUserQueues,
+    adoptUnowned: adoptUnownedActions,
+    setOwner: setSessionOwner,
+  }).catch(() => {
+    // Never block a sign-in on bookkeeping. The action queue still refuses anything whose owner
+    // is not this user.
+    setSessionOwner(userId);
+  });
+}
 
 /**
  * How long the app may sit in the background before it re-locks.
@@ -120,6 +163,12 @@ interface AuthContextType {
    * so nothing about this action asks the network anything new.
    */
   skipUnlock: () => void;
+  /**
+   * Ask the server whether a registration-only session has been released (HR approved the
+   * person), and lower the gate if so. A no-op unless the gate is up. Also runs by itself every
+   * time the app returns to the foreground.
+   */
+  recheckRegistration: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -152,6 +201,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // nothing here touches the network.
     const session = await MobileApiService.restoreSession();
     if (session && session.token) {
+      await claimQueues(session.userId || MobileApiService.getCurrentUserId() || '', 'restored');
       // Locked before the session is exposed, not after — the schedule, branch addresses and
       // customer counts must not paint behind the prompt even for a frame.
       if (getPreference('biometrics') && (await biometricsUsable())) {
@@ -179,6 +229,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // actually had the chance to say so.
       MobileApiService.validateSession().then((verdict) => {
         if (verdict === 'invalid') {
+          // The action queue and upload outbox are kept, with the owner record beside them: if the
+          // same person signs back in they still hold their unsent work, and if somebody else does
+          // it is emptied before anything drains (`claimQueues`). Nothing is sent meanwhile — the
+          // action queue has no owner, and the outbox has no token to send with.
+          setSessionOwner(null);
           setIsAuthenticated(false);
           setUser(null);
           setLocked(false);
@@ -235,10 +290,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
      * already refused.
      */
     MobileApiService.onSessionExpired = () => {
+      setSessionOwner(null);
       disconnectMobileSocket();
       void clearCache();
-      void clearQueue();
-      void clearOutbox();
+      void clearUserQueues();
       setIsAuthenticated(false);
       setUser(null);
       setLocked(false);
@@ -249,6 +304,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       MobileApiService.onSessionExpired = null;
     };
   }, []);
+
+  /**
+   * Lower the registration gate once the server stops enforcing it.
+   *
+   * The gate was raised by the first 403 `REGISTRATION_IN_PROGRESS` and never lowered, so a new
+   * joiner stayed on the forced checklist after HR had approved them — until they found a way to
+   * sign out, which the checklist did not offer. The server decides this per request from the
+   * person's current stage; `checkRegistrationGate` asks it. Only an explicit "released" lowers
+   * the gate — no signal or an unrelated error leaves it where it is.
+   */
+  const registrationGateUp = Boolean(user?.registrationInProgress);
+  const recheckRegistration = useCallback(async () => {
+    if (!registrationGateUp) return;
+    const verdict = await MobileApiService.checkRegistrationGate();
+    if (verdict !== 'released') return;
+    MobileApiService.registrationInProgress = false;
+    setUser((prev) => (prev ? { ...prev, registrationInProgress: false } : prev));
+    // The server refused the live socket while the gate was up and closed it from its side, which
+    // socket.io does not retry by itself. Open it again so offers arrive live from now on.
+    const socket = getMobileSocket();
+    if (socket && !socket.connected) socket.connect();
+  }, [registrationGateUp]);
+
+  useEffect(() => {
+    if (!registrationGateUp) return;
+    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') void recheckRegistration();
+    });
+    return () => sub.remove();
+  }, [registrationGateUp, recheckRegistration]);
 
   const unlock = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -339,6 +424,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (u: string, p: string) => {
     const res = await MobileApiService.login(u, p);
     if (res.success && res.user) {
+      await claimQueues(res.user.id || MobileApiService.getCurrentUserId() || '', 'signed-in');
       setIsAuthenticated(true);
       setUser({
         id: res.user.id || MobileApiService.getCurrentUserId() || '',
@@ -372,6 +458,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const res = await MobileApiService.biometricLogin();
       if (res.success && res.user) {
+        await claimQueues(res.user.id || MobileApiService.getCurrentUserId() || '', 'signed-in');
         setIsAuthenticated(true);
         setUser({
           id: res.user.id || MobileApiService.getCurrentUserId() || '',
@@ -411,6 +498,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    // First, so nothing still queued can be sent under this session while the rest tears down.
+    setSessionOwner(null);
     // Revoke server-side FIRST — it needs the token that clearSession is about to delete. Not
     // awaited: sign-out must work with no network, and the local clear below is what actually
     // ends the session on this device.
@@ -424,11 +513,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // shared handset.
     void clearCache();
     // Explicit as well as implicit: clearCache() drops the whole cache file on native, but its
-    // web branch returns early, and one assayer's movements must never upload under another's login.
-    void clearQueue();
-    // Same rule for pending audit packets: one assayer's un-sent branch packet must never be
-    // uploaded under the next person's session on a shared handset.
-    void clearOutbox();
+    // web branch returns early — and each queue also keeps an in-memory copy that deleting the
+    // file does not touch. The action queue was missing from this list: its in-memory copy was
+    // written straight back on the next action, so on a shared handset A's pending check-in,
+    // claim or offer reply was sent under B's session. All three queues now go together: one
+    // assayer's movements, packets and actions must never reach the server under another's login.
+    void clearUserQueues();
     setIsAuthenticated(false);
     setUser(null);
     // Or the next sign-in lands straight on the lock screen.
@@ -449,6 +539,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         locked,
         unlock,
         skipUnlock,
+        recheckRegistration,
         verifyIdentity,
         logout,
         clearMustChangePassword,

@@ -1,4 +1,4 @@
-import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, Inject, HttpCode } from '@nestjs/common';
+import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, ConflictException, Inject, HttpCode } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength, IsEmail } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -9,13 +9,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { DocumentService } from './document.service';
+import type { DocumentEntity } from './document.entity';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES } from '@fapoms/shared';
+import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES, isAssignmentTerminal } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 
 import { ValidationService } from '../validation/validation.service';
@@ -427,7 +428,7 @@ export class DocumentController {
       }
     }
 
-    await this.assertMaySubmitReturnFor(req.user, body.assignmentId);
+    const ownAssignment = await this.assertMaySubmitReturnFor(req.user, { assignmentId: body.assignmentId });
 
     const fileName = body.fileName || `audited_report_${Date.now()}.pdf`;
 
@@ -453,6 +454,18 @@ export class DocumentController {
       size: buffer.length,
       hint: 'Scan at a lower quality, or split it.',
     });
+
+    // A finished job: the same bytes again are a retry of a delivered upload and get the stored
+    // document back; different bytes are refused. Nothing is scanned or written for a replay.
+    const replay = await this.replayOrRefuseOnFinishedJob(ownAssignment, deriveFileIntegrity(buffer, 'application/pdf').sha256);
+    if (replay && ownAssignment) {
+      return {
+        success: true,
+        assignmentCompletion: this.replayedCompletion(ownAssignment),
+        data: replay,
+        documentUrl: `/documents/${replay.id}/download`,
+      };
+    }
 
     // Malware scan BEFORE the file is stored — this JSON base64 route bypassed the
     // FileScanInterceptor that guards every multipart upload route (the interceptor reads a
@@ -557,7 +570,7 @@ export class DocumentController {
       hint: 'Scan at a lower quality, or split it.',
     });
 
-    await this.assertMaySubmitReturnFor(req.user, assignmentId);
+    const ownAssignment = await this.assertMaySubmitReturnFor(req.user, { assignmentId });
 
     let targetId = assessmentId || assignmentId;
     if (assignmentId && !assessmentId) {
@@ -576,6 +589,13 @@ export class DocumentController {
         'UPLOAD_CHECKSUM_MISMATCH: the bytes received do not match the sha256 supplied with them. '
         + 'Nothing was stored. Retry the upload.',
       ), OTHER_CONFLICT_ERROR_CODES.UPLOAD_CHECKSUM_MISMATCH);
+    }
+
+    // A finished job: the same bytes again are a retry of a delivered upload and get the stored
+    // document back, with nothing written and completion not re-run; different bytes are refused.
+    const replay = await this.replayOrRefuseOnFinishedJob(ownAssignment, integrity.sha256);
+    if (replay && ownAssignment) {
+      return { success: true, assignmentCompletion: this.replayedCompletion(ownAssignment), data: replay };
     }
 
     const savedFilePath = await this.storage.saveFile(file.originalname, file.buffer, integrity.effectiveMimeType);
@@ -624,26 +644,121 @@ export class DocumentController {
    * assayer's behalf (a real workflow when a scan arrives by email); `createdBy` on the
    * document preserves who actually did it.
    */
-  private async assertMaySubmitReturnFor(user: any, assignmentId?: string): Promise<void> {
+  private async assertMaySubmitReturnFor(
+    user: any,
+    ref: { assignmentId?: string | null; targetId?: string | null },
+  ): Promise<AssignmentEntity | null> {
     const roles: string[] = (user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
-    if (!roles.includes(SystemRole.ASSAYER)) return; // staff path, already role-gated
-    if (!assignmentId) {
+    if (!roles.includes(SystemRole.ASSAYER)) return null; // staff path, already role-gated
+
+    let assignment: AssignmentEntity | null = null;
+    if (ref.assignmentId) {
+      assignment = await this.assignmentRepository
+        .findOne({ where: { id: ref.assignmentId } })
+        .catch(() => null);
+      if (!assignment) {
+        throw new NotFoundException('That assignment could not be found.');
+      }
+    } else if (ref.targetId) {
+      /**
+       * The resumable path names its target, not its assignment.
+       *
+       * `POST /upload/session` carries only `assessmentId`, and the assayer app fills it with the
+       * ASSIGNMENT's own id (see `uploadAuditPdfResumable`) — while an older caller may send a real
+       * assessment or project-branch id. The same three readings `completeAssignmentForReturn`
+       * resolves by, asked here of the caller's own assignments only: a target they hold no
+       * assignment on is somebody else's work. A live one wins over a finished one, so an old
+       * cancelled assignment on the same branch does not shadow the current job.
+       */
+      const mine = await this.assignmentRepository
+        .find({
+          where: [
+            { id: ref.targetId, assayerId: user?.id },
+            { assessmentId: ref.targetId, assayerId: user?.id },
+            { projectBranchId: ref.targetId, assayerId: user?.id },
+          ],
+        })
+        .catch(() => [] as AssignmentEntity[]);
+      assignment = mine.find((a) => !isAssignmentTerminal(a.status)) ?? mine[0] ?? null;
+      if (!assignment) {
+        this.logger.warn(
+          `Assayer ${user?.id} attempted to upload field paperwork against ${ref.targetId}, on which they hold no assignment.`,
+        );
+        throw new ForbiddenException('You can only submit paperwork for an assignment that is assigned to you.');
+      }
+    } else {
       throw new BadRequestException('An assignment must be specified when submitting an audited return.');
     }
 
-    const assignment = await this.assignmentRepository
-      .findOne({ where: { id: assignmentId } })
-      .catch(() => null);
-
-    if (!assignment) {
-      throw new NotFoundException('That assignment could not be found.');
-    }
     if (assignment.assayerId !== user?.id) {
       this.logger.warn(
-        `Assayer ${user?.id} attempted to submit an audited return for assignment ${assignmentId}, which belongs to ${assignment.assayerId}.`,
+        `Assayer ${user?.id} attempted to submit an audited return for assignment ${assignment.id}, which belongs to ${assignment.assayerId}.`,
       );
       throw new ForbiddenException('You can only submit paperwork for an assignment that is assigned to you.');
     }
+
+    return assignment;
+  }
+
+  /**
+   * The second half of the same rule: what an assayer's upload on a FINISHED job gets.
+   *
+   * A finished job takes no more field paperwork from the field. "Finished" is the shared
+   * terminal rule (`isAssignmentTerminal`: COMPLETED, REJECTED, CANCELLED), not a list written
+   * here. A COMPLETED assignment has already booked its payable and client line, so a late upload
+   * used to land a second "audited return" beside the one the data-entry desk already worked from.
+   * The way back for a return that genuinely needs replacing is operations reopening the
+   * assignment (`POST /assignments/:id/reopen`), after which the upload goes through again.
+   *
+   * EXCEPT the same file again. Weak signal is the normal case at a branch: the return lands, the
+   * job closes, and the response never reaches the phone. The app's upload outbox then retries,
+   * and it treats any 4xx other than 401/408/429 as a permanent refusal — so refusing the retry
+   * parked a delivered packet as "refused" and sent the assayer to redo papers the desk already
+   * had. A byte-identical file (`content_sha256`, derived from the bytes, never the client's
+   * claim) already stored as this assignment's audited return is therefore answered as the
+   * success it was: the EXISTING document, nothing written, completion not re-run. Only a
+   * DIFFERENT file on a finished job is refused with `ASSIGNMENT_CLOSED`.
+   *
+   * Returns the stored document to replay, or null to proceed with an ordinary upload. `assignment`
+   * is what `assertMaySubmitReturnFor` resolved — null for staff, who are never stopped here: a
+   * back-office upload of a scan that arrived by email is the exception this route has always
+   * allowed.
+   */
+  private async replayOrRefuseOnFinishedJob(
+    assignment: AssignmentEntity | null,
+    sha256: string,
+  ): Promise<DocumentEntity | null> {
+    if (!assignment || !isAssignmentTerminal(assignment.status)) return null;
+
+    const stored = await this.documentService.findStoredReturnByContent(
+      [assignment.id, assignment.assessmentId, assignment.projectBranchId].filter(Boolean) as string[],
+      sha256,
+    );
+    if (stored) {
+      this.logger.log(
+        `Assignment ${assignment.id} is ${assignment.status}; an identical return (${sha256.slice(0, 12)}…) is already stored `
+        + `as document ${stored.id}, so this retry is answered with it and nothing new is written.`,
+      );
+      return stored;
+    }
+    throw withCode(
+      new ConflictException(
+        `Assignment ${assignment.assignmentNumber ?? assignment.id} is already ${String(assignment.status).toLowerCase()}, `
+        + 'so no more paperwork can be added to it. If its return needs replacing, ask operations to reopen it.',
+      ),
+      OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CLOSED,
+    );
+  }
+
+  /**
+   * What a replayed upload reports about the job — the same `assignmentCompletion` shape a first
+   * upload returns, read off the job as it now stands. Completion is NOT re-run: the first attempt
+   * already did whatever it could.
+   */
+  private replayedCompletion(assignment: AssignmentEntity): { completed: boolean; blockedReason?: string } {
+    return assignment.status === AssignmentStatus.COMPLETED
+      ? { completed: true }
+      : { completed: false, blockedReason: `This assignment is ${String(assignment.status).toLowerCase()}.` };
   }
 
   // ── Resumable chunked upload ───────────────────────────────────────────────────
@@ -661,6 +776,18 @@ export class DocumentController {
     if (!body?.assessmentId || !body?.fileName) {
       throw new BadRequestException('assessmentId and fileName are required.');
     }
+    /**
+     * Ownership is checked before a multipart upload is opened in the store, so a refused caller
+     * leaves nothing behind — same rule, same function, as both single-shot routes.
+     *
+     * The finished-job half is NOT asked here, deliberately. No bytes exist yet, and the installed
+     * app never resumes an old session after a lost response: every outbox retry calls
+     * `uploadAuditPdfResumable` again, which opens a FRESH session. Refusing that create on a
+     * finished job would refuse the identical-file retry before it could be recognised (and the
+     * app would fall back to the single-shot route anyway). So the owner may open a session on a
+     * finished job, and `completeUpload` decides — replay for the same bytes, refusal for others.
+     */
+    await this.assertMaySubmitReturnFor(req.user, { targetId: body.assessmentId });
     const session = await this.chunkedUploadService.createSession({
       assessmentId: body.assessmentId,
       fileName: body.fileName,
@@ -678,8 +805,8 @@ export class DocumentController {
   @Get('upload/session/:uploadId')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Resume: report which chunks the server already holds' })
-  async getUploadSession(@Param('uploadId') uploadId: string) {
-    const session = await this.chunkedUploadService.getSession(uploadId);
+  async getUploadSession(@Param('uploadId') uploadId: string, @Req() req: any) {
+    const session = await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
     const received = await this.chunkedUploadService.receivedChunks(uploadId);
     const missing: number[] = [];
     for (let i = 0; i < session.totalChunks; i++) if (!received.includes(i)) missing.push(i);
@@ -700,7 +827,9 @@ export class DocumentController {
     @Param('uploadId') uploadId: string,
     @Param('index') index: string,
     @UploadedFile() chunk: any,
+    @Req() req: any,
   ) {
+    await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
     if (!chunk?.buffer) {
       throw new BadRequestException('No chunk content received.');
     }
@@ -714,7 +843,9 @@ export class DocumentController {
   async getChunkPresignedUrl(
     @Param('uploadId') uploadId: string,
     @Param('index') index: string,
+    @Req() req: any,
   ) {
+    await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
     const data = await this.chunkedUploadService.getPresignedPartUrl(uploadId, Number(index));
     return { ...data, index: Number(index) };
   }
@@ -730,6 +861,18 @@ export class DocumentController {
     const type = body?.type && (Object.values(DocumentType) as string[]).includes(body.type)
       ? body.type
       : DocumentType.AUDITED_RETURN_PDF;
+
+    /**
+     * Only the account that opened the session may complete it, and only for an assignment that is
+     * theirs. Both asked BEFORE `assemble`, which finalises the object in the store, so a refusal
+     * leaves the multipart upload open and the session intact.
+     *
+     * Whether the job is finished is decided after assembly instead, because that decision needs
+     * the bytes (an identical retry is replayed, a different file refused) and the parts only
+     * become one object — one hash — once assembled. See below.
+     */
+    const opened = await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
+    const ownAssignment = await this.assertMaySubmitReturnFor(req.user, { assignmentId: body?.assignmentId, targetId: opened.assessmentId });
 
     // assemble() calls S3 CompleteMultipartUpload — the object is now in MinIO
     // under s3Key. No buffer assembly happens in this process; no filesystem I/O.
@@ -754,6 +897,36 @@ export class DocumentController {
       await this.storage.deleteFile(s3Key).catch(() => undefined);
       await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
       throw err;
+    }
+
+    /**
+     * A finished job, now that the assembled bytes have a hash.
+     *
+     * Same bytes as the return already stored: this is the outbox retrying a delivered upload
+     * through a fresh session, so the duplicate object just assembled is deleted, the session is
+     * closed, and the stored document is answered — no new row, no completion re-run.
+     *
+     * Different bytes: refused with `ASSIGNMENT_CLOSED`. The assembled object is deleted and the
+     * session closed too — once CompleteMultipartUpload has run the session cannot be assembled a
+     * second time, and keeping an orphan object for a job that takes no paperwork keeps nothing
+     * useful. After operations reopens the job the phone sends the file again, as it would anyway.
+     */
+    let replay: DocumentEntity | null = null;
+    try {
+      replay = await this.replayOrRefuseOnFinishedJob(ownAssignment, integrity!.sha256);
+    } catch (err) {
+      await this.storage.deleteFile(s3Key).catch(() => undefined);
+      await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
+      throw err;
+    }
+    if (replay && ownAssignment) {
+      await this.storage.deleteFile(s3Key).catch(() => undefined);
+      await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
+      return {
+        success: true,
+        assignmentCompletion: type === DocumentType.AUDITED_RETURN_PDF ? this.replayedCompletion(ownAssignment) : undefined,
+        data: replay,
+      };
     }
 
     let doc = await this.documentService.create(

@@ -20,6 +20,7 @@ import {
 } from './server-config';
 import { cleanWorkforceVocabulary, type WorkforceVocabulary } from './workforce-vocabulary';
 import { mapAssayerStatementResponse } from './assayer-statement-mapping';
+import { registrationGateVerdict, type RegistrationGateVerdict } from './registration-gate-verdict';
 
 /** One row of the per-category notification preference set returned by the API. */
 export interface NotificationPreference {
@@ -371,6 +372,33 @@ export class MobileApiService {
       return 'unreachable';
     } catch {
       return 'unreachable';
+    }
+  }
+
+  /**
+   * Ask the server whether this session is still registration-only. See
+   * `registration-gate-verdict.ts` for how the answer is read.
+   *
+   * `GET /notifications/unread-count` is the probe because it is the cheapest route every
+   * signed-in assayer may read that is NOT marked `@OnboardingAllowed()` — so the registration
+   * gate answers it, and it answers with a few bytes. The server re-reads the person's stage when
+   * its short-lived principal cache expires, so an approval shows up within minutes, not at once.
+   */
+  static async checkRegistrationGate(): Promise<RegistrationGateVerdict> {
+    if (!this.authToken) return 'unknown';
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/unread-count`, {}, 8000);
+      let code: string | undefined;
+      if (!response.ok) {
+        try {
+          code = (await response.clone().json())?.code;
+        } catch {
+          code = undefined;
+        }
+      }
+      return registrationGateVerdict(response.status, code);
+    } catch {
+      return 'unknown';
     }
   }
 
@@ -1097,8 +1125,9 @@ export class MobileApiService {
   static async rejectAssignment(
     assignmentId: string,
     reason: string,
+    clientRequestId?: string,
   ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
-    const { ok, status, error, code } = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
+    const { ok, status, error, code } = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason, clientRequestId);
     return { success: ok, error: ok ? undefined : (error || 'Failed to reject assignment'), status, code };
   }
 
@@ -1799,9 +1828,13 @@ export class MobileApiService {
     assignmentId: string,
     status: AssayerAssignment['status'],
     reason?: string,
+    clientRequestId?: string,
   ): Promise<{ ok: boolean; status: number; error?: string; code?: string }> {
-    const body: { targetStatus: string; reason?: string } = { targetStatus: status };
+    const body: { targetStatus: string; reason?: string; clientRequestId?: string } = { targetStatus: status };
     if (reason) body.reason = reason;
+    // The server's idempotency key for this route (`assignment_idempotency_records`): a retry of
+    // an accept or decline whose first response was lost is answered with the original result.
+    if (clientRequestId) body.clientRequestId = clientRequestId;
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),

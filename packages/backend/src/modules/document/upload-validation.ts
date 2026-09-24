@@ -32,9 +32,10 @@ import { withCode } from '../../infrastructure/http/api-error';
  *
  * `application/octet-stream` is tolerated because browsers and Android send it for files whose
  * extension they do not recognise, and refusing it would reject legitimate scans; it is still
- * size-capped, and full magic-byte + malware scanning is the next layer (see
- * docs/integration-audit-handoff.md). A declared type is only ever a declaration — this is a
- * gate against the obviously-wrong, not content verification.
+ * size-capped, and the bytes themselves are then checked: malware scanning and content
+ * verification (`infrastructure/security/file-content.ts`) run on every upload in
+ * `FileScanService.scanOrThrow`. A declared type is only ever a declaration — this is a gate
+ * against the obviously-wrong, not content verification.
  */
 export const ALLOWED_UPLOAD_TYPES = new Set([
   'application/pdf',

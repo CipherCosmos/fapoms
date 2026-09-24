@@ -4,6 +4,7 @@ import { formatDateOnly } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Tappable } from './ui/primitives';
 import { useT, t as translate, type TranslationKey } from '../i18n';
+import { runSheetSubmit, type SheetSubmitAnswer } from './sheet-submit';
 
 export interface LeavePeriod {
   startDate: string; // YYYY-MM-DD
@@ -14,8 +15,11 @@ export interface AvailabilityModalProps {
   visible: boolean;
   initialLeaves: LeavePeriod[];
   onClose: () => void;
-  /** Persists the full leave list; resolves true on success so the caller can confirm. */
-  onSave: (leaves: LeavePeriod[]) => Promise<boolean>;
+  /**
+   * Persists the full leave list. Resolves true on success; on failure, `{ ok: false, error }`
+   * with the words to show — shown inside this sheet, because a toast would be hidden behind it.
+   */
+  onSave: (leaves: LeavePeriod[]) => Promise<SheetSubmitAnswer>;
 }
 
 const DAY_LABEL_KEYS: TranslationKey[] = [
@@ -60,6 +64,7 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
   const [monthOffset, setMonthOffset] = useState(0);
   const [pendingStart, setPendingStart] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Reset local state whenever the modal is re-opened with fresh server data.
   React.useEffect(() => {
@@ -67,6 +72,7 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
       setLeaves(initialLeaves);
       setPendingStart(null);
       setMonthOffset(0);
+      setError(null);
     }
   }, [visible, initialLeaves]);
 
@@ -129,8 +135,16 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
   const save = async () => {
     if (busy) return;
     setBusy(true);
-    const ok = await onSave(leaves);
-    setBusy(false);
+    setError(null);
+    let ok = false;
+    try {
+      const outcome = await runSheetSubmit(() => onSave(leaves), translate('availability.failedBody'));
+      ok = outcome.ok;
+      setError(outcome.error);
+    } finally {
+      // Always, even if something above threw: a spinner that never stops is a dead end.
+      setBusy(false);
+    }
     if (ok) onClose();
   };
 
@@ -290,6 +304,11 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
             )}
           </ScrollView>
 
+          {error && (
+            <AppText variant="small" tone="danger">
+              {error}
+            </AppText>
+          )}
           <Button label={busy ? tr('availability.saving') : tr('availability.save')} icon="checkmark" onPress={save} loading={busy} size="lg" full />
         </View>
       </View>

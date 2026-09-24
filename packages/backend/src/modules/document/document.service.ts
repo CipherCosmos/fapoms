@@ -542,6 +542,31 @@ export class DocumentService {
     return groups.filter(inScope);
   }
 
+  /**
+   * An audited return already stored for one of `targetIds` whose bytes are exactly `sha256`.
+   *
+   * The idempotency question for a retried field upload: the phone sent the return, the server
+   * stored it and closed the job, and the answer never reached the phone. What decides "the same
+   * upload" is the content hash recorded from the bytes themselves (`content_sha256`, written by
+   * `create` from `deriveFileIntegrity`) — not the file name, which the app regenerates, and not
+   * the client's word. `targetIds` is every value an upload for one assignment may have been filed
+   * under (the assignment's own id — what the installed app sends — its assessment, its project
+   * branch). Oldest first, so a replay always names the row the first attempt created.
+   */
+  async findStoredReturnByContent(targetIds: string[], sha256: string): Promise<DocumentEntity | null> {
+    const targets = targetIds.filter(Boolean);
+    if (targets.length === 0 || !sha256) return null;
+    return this.documentRepository.findOne({
+      where: {
+        assessmentId: In(targets),
+        type: DocumentType.AUDITED_RETURN_PDF,
+        contentSha256: sha256,
+        isActive: true,
+      },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
   async create(dto: CreateDocumentDto, userId: string): Promise<DocumentEntity> {
     let assessment = await this.assessmentRepository.findOne({
       where: { id: dto.assessmentId, isActive: true },

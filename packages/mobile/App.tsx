@@ -4,7 +4,8 @@ import * as haptics from './src/lib/haptics';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
-import { enqueueAndRun } from './src/services/action-queue';
+import { enqueueAndRun, generateClientRequestId, toSubmitOutcome } from './src/services/action-queue';
+import { isStampCurrent, stampSession } from './src/services/session-epoch';
 import { actionDispatchers } from './src/services/action-dispatchers';
 import { useOverlay } from './src/hooks/useOverlay';
 import { loadPreferences } from './src/services/preferences';
@@ -66,7 +67,7 @@ import { AvailabilityModal } from './src/components/AvailabilityModal';
 function AppMain() {
   const theme = useTheme();
   const tr = useT();
-  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock, skipUnlock } = useAuth();
+  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock, skipUnlock, recheckRegistration } = useAuth();
   const { location, refreshLocation } = useLocation();
   const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense, stale, lastSyncedAt } = useAssignments();
 
@@ -161,12 +162,15 @@ function AppMain() {
    */
   const loadExpenseSummary = useCallback(async () => {
     if (!user?.id) return;
+    // Pay and claims read under one session must never land in the next one — see session-epoch.ts.
+    const stamp = stampSession();
     const [summary, mine, stmt, invite] = await Promise.allSettled([
       MobileApiService.getMyExpenseSummary(),
       MobileApiService.getMyExpenses(),
       MobileApiService.getAssayerStatement(user.id),
       MobileApiService.getMyInvoiceInvitation(user.id),
     ]);
+    if (!isStampCurrent(stamp)) return;
     if (summary.status === 'fulfilled') setExpenseSummary(summary.value);
     if (mine.status === 'fulfilled') setClaims(mine.value);
     if (stmt.status === 'fulfilled') { setStatement(stmt.value); setStatementError(false); }
@@ -174,6 +178,22 @@ function AppMain() {
     // A fulfilled `null` means "no invitation" (or the feature is dark) and clears the card; a
     // failed read keeps whatever the screen last knew, same as the statement.
     if (invite.status === 'fulfilled') setInvitation(invite.value);
+  }, [user?.id]);
+
+  /**
+   * Earnings belong to one person. These slices were never cleared at sign-out, so on a shared
+   * phone the next person saw the previous person's claims, statement and pay until their own
+   * reads arrived — and kept seeing them wherever one of those reads failed.
+   */
+  useEffect(() => {
+    setClaims([]);
+    setStatement(null);
+    setStatementError(false);
+    setInvitation(null);
+    setExpenseSummary({ pending: 0, approved: 0, rejected: 0, totalClaimed: 0 });
+    // Likewise the history paging position: the next person's "older" page must start from their
+    // own newest, not from where the previous person stopped scrolling.
+    historyCursor.current = null;
   }, [user?.id]);
 
   // A tapped notification's target, held until `assignments` has actually loaded — a cold
@@ -381,11 +401,14 @@ function AppMain() {
   const historyCursor = useRef<string | null>(null);
   const loadOlderHistory = useCallback(async () => {
     if (!user?.id) return [];
+    const stamp = stampSession();
     try {
       const { items, nextCursor } = await MobileApiService.getAssayerAssignmentHistory(
         user.id,
         historyCursor.current ?? undefined,
       );
+      // Signed out while this page loaded: it is not the current person's history.
+      if (!isStampCurrent(stamp)) return [];
       historyCursor.current = nextCursor;
       // No cursor back means the server has nothing older; an empty page says the same thing.
       return nextCursor === null && items.length === 0 ? [] : items;
@@ -407,12 +430,31 @@ function AppMain() {
     setRefreshing(false);
   };
 
+  /**
+   * The moment HR's approval reaches this session (see `recheckRegistration`), everything that
+   * was refused while registering is loaded for real — otherwise the newly opened app would sit
+   * on the empty lists the gate left behind until a manual pull-to-refresh.
+   */
+  const registrationGateUp = Boolean(user?.registrationInProgress);
+  const wasRegistrationGateUp = useRef(registrationGateUp);
+  useEffect(() => {
+    const released = wasRegistrationGateUp.current && !registrationGateUp;
+    wasRegistrationGateUp.current = registrationGateUp;
+    if (released && isAuthenticated) void handleRefresh();
+    // handleRefresh is recreated every render; only the gate flipping should trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registrationGateUp, isAuthenticated]);
+
   const handleAcceptAssignment = async (id: string) => {
     if (busyActionId) return;
     setBusyActionId(id);
     try {
       const res = await updateAssignmentStatus(id, 'ACCEPTED');
-      if (!res.success) {
+      if (res.success && res.queued) {
+        // No signal: the accept is saved on the phone and sends itself. Said as the good news it
+        // is, so nobody presses Accept again thinking the first one failed.
+        feedback.success(tr('common.savedOfflineTitle'), tr('common.savedOfflineBody'));
+      } else if (!res.success) {
         feedback.error(
           tr('assignment.acceptFailedTitle'),
           serverErrorText(res.error, 'assignment.acceptFailedBody', res.code),
@@ -447,9 +489,10 @@ function AppMain() {
 
     setRejectSubmitting(true);
     try {
-      const res = await rejectAssignment(pending.assignmentId, reason);
+      const res = await rejectAssignment(pending.assignmentId, reason, pending.requestKey);
       if (res.success) {
         overlay.close();
+        if (res.queued) feedback.success(tr('common.savedOfflineTitle'), tr('common.savedOfflineBody'));
       } else {
         feedback.error(
           tr('assignment.declineFailedTitle'),
@@ -504,16 +547,25 @@ function AppMain() {
         'CHECK_IN',
         { assignmentId: assignment.id, lat: fix.latitude, lng: fix.longitude, accuracy: fix.accuracy ?? undefined },
         actionDispatchers.CHECK_IN,
+        // A second tap while one is already waiting for signal re-sends that one, not a copy.
+        { sameAs: (a) => a.payload.assignmentId === assignment.id },
       );
-      if (result.success) {
+      const outcome = toSubmitOutcome(result);
+      if (outcome.success && outcome.queued) {
+        // No signal: saved on the phone and sends itself — told as the success it is, not as an
+        // error that invites another tap. The server's real refusals (too far, wrong day) still
+        // arrive as errors below.
+        feedback.success(
+          tr('common.savedOfflineTitle'),
+          tr('assignment.checkInSavedOffline', { branch: assignment.branchName }),
+        );
+        loadAssignments().catch(() => {});
+      } else if (result.success) {
         await loadAssignments();
         feedback.success(
           tr('assignment.checkedInTitle'),
           tr('assignment.checkedInBody', { branch: assignment.branchName }),
         );
-      } else if (result.queued) {
-        feedback.error(tr('assignment.serverUnreachableTitle'), tr('assignment.checkInUnconfirmed'));
-        loadAssignments().catch(() => {});
       } else {
         feedback.error(
           tr('assignment.checkInFailedTitle'),
@@ -574,16 +626,25 @@ function AppMain() {
         'CHECK_OUT',
         { assignmentId: assignment.id, lat: fix.latitude, lng: fix.longitude, accuracy: fix.accuracy ?? undefined },
         actionDispatchers.CHECK_OUT,
+        // A second tap while one is already waiting for signal re-sends that one, not a copy.
+        { sameAs: (a) => a.payload.assignmentId === assignment.id },
       );
-      if (result.success) {
+      const outcome = toSubmitOutcome(result);
+      if (outcome.success && outcome.queued) {
+        // No signal: saved on the phone and sends itself — told as the success it is, not as an
+        // error that invites another tap. The server's real refusals (too far, wrong day) still
+        // arrive as errors below.
+        feedback.success(
+          tr('common.savedOfflineTitle'),
+          tr('assignment.checkOutSavedOffline', { branch: assignment.branchName }),
+        );
+        loadAssignments().catch(() => {});
+      } else if (result.success) {
         await loadAssignments();
         feedback.success(
           tr('assignment.checkedOutTitle'),
           tr('assignment.checkedOutBody', { branch: assignment.branchName }),
         );
-      } else if (result.queued) {
-        feedback.error(tr('assignment.serverUnreachableTitle'), tr('assignment.checkOutUnconfirmed'));
-        loadAssignments().catch(() => {});
       } else {
         feedback.error(
           tr('assignment.checkOutFailedTitle'),
@@ -907,7 +968,7 @@ function AppMain() {
             onScan={(a) => overlay.open({ name: 'scanner', assignment: a })}
             onNavigate={(a) => overlay.open({ name: 'navigate', assignment: a })}
             onAcceptOffer={(a) => handleAcceptAssignment(a.id)}
-            onDeclineOffer={(a) => overlay.open({ name: 'reject', assignmentId: a.id, reason: '' })}
+            onDeclineOffer={(a) => overlay.open({ name: 'reject', assignmentId: a.id, reason: '', requestKey: generateClientRequestId() })}
             onSeeSchedule={() => setSelectedTab('SCHEDULE')}
             onSeeQueries={() => setSelectedTab('QUERIES')}
             busyActionId={busyActionId}
@@ -927,7 +988,7 @@ function AppMain() {
             assignments={assignments}
             busyActionId={busyActionId}
             onAcceptAssignment={handleAcceptAssignment}
-            onOpenRejectModal={(id) => overlay.open({ name: 'reject', assignmentId: id, reason: '' })}
+            onOpenRejectModal={(id) => overlay.open({ name: 'reject', assignmentId: id, reason: '', requestKey: generateClientRequestId() })}
             onCheckIn={handleCheckIn}
             onCheckOut={handleCheckOut}
             onOpenPdfDocs={paperwork.open}
@@ -1147,17 +1208,21 @@ function AppMain() {
         on every route outside registration. Left to the ordinary tabs they would land on Home,
         watch every read fail, and see empty lists with no route to the one screen the session is
         for — the same dead end the forced-password gate was written to remove, arriving through a
-        different door. `onClose` is a no-op in that state because there is nothing behind this to
-        return to; signing out is the other way out, and the screen offers it.
+        different door. In that state (`forced`) there is nothing behind this to close back to, so
+        the close button is replaced by Sign out. The gate is not permanent: every reload of the
+        checklist (after a scan, or pulling down) and every return to the foreground asks the
+        server whether HR has approved the person yet, and lowers it the moment they have.
       */}
       <RegistrationChecklistModal
-        visible={Boolean(overlay.current('registration')) || Boolean(user?.registrationInProgress)}
-        onClose={user?.registrationInProgress ? () => {} : overlay.close}
+        visible={Boolean(overlay.current('registration')) || registrationGateUp}
+        onClose={registrationGateUp ? () => {} : overlay.close}
+        forced={registrationGateUp}
+        onSignOut={logout}
         checklist={registration.checklist}
         uploads={outbox.uploads}
         onCapture={captureRegistrationDocument}
         onRetry={outbox.retry}
-        onReload={() => { void registration.reload(); }}
+        onReload={() => Promise.all([registration.reload(), recheckRegistration()]).then(() => undefined)}
         assayerId={user?.id ?? ''}
         locationNeedsConfirmation={Boolean(profile.locationNeedsConfirmation)}
         onLocationConfirmed={loadAssayerProfile}
@@ -1191,7 +1256,7 @@ function AppMain() {
         <ExpenseModal
           visible
           onClose={overlay.close}
-          onAddExpense={async (category, amount, description) => {
+          onAddExpense={async (category, amount, description, requestKey) => {
             // Against the assignment chosen at the entry point, never assignments[0]. The old
             // code filed every claim against whatever assignment happened to sort first — so a
             // travel claim for today's branch could land on a completed job from weeks ago, and
@@ -1214,19 +1279,25 @@ function AppMain() {
               feedback.error(tr('expense.invalidAmountTitle'), tr('expense.invalidAmountBody'));
               return;
             }
-            const res = await submitExpense(expense.assignment.id, {
-              category: category as any,
-              amount: parsedAmount,
-              description,
-            });
+            const res = await submitExpense(
+              expense.assignment.id,
+              { category: category as any, amount: parsedAmount, description },
+              requestKey,
+            );
             if (res.success) {
-              feedback.success(
-                tr('expense.filedTitle'),
-                tr('expense.filedBody', {
-                  amount: formatRupees(parsedAmount),
-                  category: tr(CAT_LABEL_KEYS[category]),
-                }),
-              );
+              // Queued (no signal) is a success too: the claim is on the phone and sends itself.
+              // The form closes either way — leaving it open is what invited a second claim.
+              if (res.queued) {
+                feedback.success(tr('common.savedOfflineTitle'), tr('expense.savedOfflineBody'));
+              } else {
+                feedback.success(
+                  tr('expense.filedTitle'),
+                  tr('expense.filedBody', {
+                    amount: formatRupees(parsedAmount),
+                    category: tr(CAT_LABEL_KEYS[category]),
+                  }),
+                );
+              }
               overlay.close();
               // Pull the totals back so the new claim shows on Home immediately rather
               // than only after the next manual pull-to-refresh.
@@ -1254,8 +1325,8 @@ function AppMain() {
               feedback.success(tr('issue.sentTitle'), tr('issue.sentBody'));
               return true;
             }
-            feedback.error(tr('issue.failedTitle'), serverErrorText(res.error, 'issue.failedBody', res.code));
-            return false;
+            // Shown inside the sheet (it stays open): a toast would sit behind it, unseen.
+            return { ok: false, error: serverErrorText(res.error, 'issue.failedBody', res.code) };
           }}
         />
       )}
@@ -1277,11 +1348,8 @@ function AppMain() {
               void loadAssayerProfile();
               return true;
             }
-            feedback.error(
-              tr('availability.failedTitle'),
-              serverErrorText(res.error, 'availability.failedBody', res.code),
-            );
-            return false;
+            // Shown inside the sheet (it stays open): a toast would sit behind it, unseen.
+            return { ok: false, error: serverErrorText(res.error, 'availability.failedBody', res.code) };
           }}
         />
       )}

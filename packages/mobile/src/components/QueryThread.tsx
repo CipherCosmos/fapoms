@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, ScrollView, Image, Linking, ActivityIndicator } from 'react-native';
 import { MobileApiService } from '../services/api.service';
-import { enqueueAndRun, processActionQueue } from '../services/action-queue';
+import { enqueueAndRun, processActionQueue, toSubmitOutcome } from '../services/action-queue';
 import { actionDispatchers } from '../services/action-dispatchers';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Icon, IconButton, Input, Tappable } from './ui/primitives';
@@ -158,12 +158,16 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
     );
     setSending(false);
 
-    if (!result.success && !result.queued) {
-      feedback.error(tr('queries.sendFailedTitle'), serverErrorText(result.error, 'queries.sendFailedBody', result.code));
+    // A real refusal (the query was resolved, the reply was refused) stays an error and keeps the
+    // draft. A reply saved for sending later is a success: it used to be announced with the error
+    // style, which read as "your reply failed" to somebody whose reply was safely on its way.
+    const outcome = toSubmitOutcome(result);
+    if (!outcome.success) {
+      feedback.error(tr('queries.sendFailedTitle'), serverErrorText(outcome.error, 'queries.sendFailedBody', outcome.code));
       return;
     }
-    if (result.queued) {
-      feedback.error(tr('assignment.serverUnreachableTitle'), translate('common.willRetry'));
+    if (outcome.queued) {
+      feedback.success(tr('common.savedOfflineTitle'), tr('queries.replySavedOffline'));
     }
     setDraft('');
     setPending([]);

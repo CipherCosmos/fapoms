@@ -1749,7 +1749,16 @@ export class AssayerService implements OnModuleInit {
     });
   }
 
-  async update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity> {
+  async update(
+    id: string,
+    dto: UpdateAssayerDto,
+    userId: string,
+    /**
+     * `selfEdit`: the assayer is editing their own record (the app's profile/availability screens),
+     * as opposed to staff. Only rules that are the assayer's alone read it — today, the leave check.
+     */
+    opts: { selfEdit?: boolean } = {},
+  ): Promise<AssayerEntity> {
     // Before anything is merged onto the entity: see `assertNoMaskedPii`. This has to run ahead
     // of the copy loop below, which writes any key of the payload that matches a column.
     assertNoMaskedPii(dto as Record<string, any>);
@@ -1763,6 +1772,9 @@ export class AssayerService implements OnModuleInit {
     assertDatesAreSane(dto);
 
     const assayer = await this.findOne(id);
+    if (opts.selfEdit && dto.leaves !== undefined) {
+      await this.assertLeaveClearOfCommittedWork(id, assayer.leaves ?? [], dto.leaves ?? []);
+    }
     const orig = {
       address: assayer.address,
       city: assayer.city,
@@ -2191,6 +2203,73 @@ export class AssayerService implements OnModuleInit {
    * name, which is how a shared set stops being shared.
    */
   private static readonly HOLDS_ACTIVE_WORK: AssignmentStatus[] = [...COMMITTED_ASSIGNMENT_STATUSES];
+
+  /**
+   * A leave period may not cover a day on which the assayer holds accepted work.
+   *
+   * `leaves` is self-editable (the app's availability screen), and nothing compared it with the
+   * assayer's own diary: an assayer could accept a branch for Thursday and then mark Thursday as
+   * leave, leaving an assignment that says somebody is going and a record that says they are not.
+   * The planner already refuses to OFFER work on a leave day (`ConstraintEvaluator.checkLeaves`);
+   * this is the other direction — refusing the leave while the work stands.
+   *
+   * "Accepted work" is `COMMITTED_ASSIGNMENT_STATUSES` (ACCEPTED, CHECKED_IN, IN_PROGRESS) — the
+   * shared set for work somebody has taken on and owes. An unanswered offer (PENDING) is not
+   * held; a finished job is not owed.
+   *
+   * Days are Asia/Kolkata business dates on both sides (`businessDateKey`), inclusive at both ends
+   * as the planner reads them. The stored day is read back as text (`::text`), so the driver never
+   * turns a calendar date into a server-local midnight first. The assignment's day is its own `scheduled_date`, falling back to
+   * the branch's, the same fallback check-in uses.
+   *
+   * Only periods that are NEW in this request are judged: an unchanged period already on the
+   * record is not re-litigated, so an old overlap cannot block an unrelated edit of the list.
+   *
+   * The assayer's own edits only (owner decision 2026-09-24: "Only the assayer refused"). Staff may
+   * record leave that overlaps accepted work — somebody phoning in sick is the ordinary case — and
+   * it is then theirs to reassign the work.
+   */
+  private async assertLeaveClearOfCommittedWork(
+    assayerId: string,
+    before: Array<{ startDate: string; endDate: string }>,
+    after: Array<{ startDate: string; endDate: string }>,
+  ): Promise<void> {
+    const dayOf = (v: unknown) => (v == null || v === '' ? '' : businessDateKey(v as string));
+    const known = new Set(before.map((l) => `${dayOf(l?.startDate)}|${dayOf(l?.endDate)}`));
+    const fresh = after
+      .map((l) => ({ start: dayOf(l?.startDate), end: dayOf(l?.endDate) }))
+      .filter((l) => l.start && l.end && !known.has(`${l.start}|${l.end}`));
+    if (fresh.length === 0) return;
+
+    const held: Array<{ assignment_number: string | null; scheduled_on: string | Date | null; branch_name: string | null }> =
+      await this.dataSource.query(
+        `SELECT a.assignment_number,
+                COALESCE(a.scheduled_date, pb.scheduled_date)::text AS scheduled_on,
+                b.name AS branch_name
+           FROM assignments a
+           LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+           LEFT JOIN branches b ON b.id = pb.branch_id
+          WHERE a.assayer_id = $1 AND a.is_active = true AND a.status::text = ANY($2)`,
+        [assayerId, COMMITTED_ASSIGNMENT_STATUSES.map(String)],
+      );
+
+    const clashes = held
+      .map((h) => ({ ...h, day: h.scheduled_on ? dayOf(h.scheduled_on) : '' }))
+      .filter((h) => h.day && fresh.some((l) => l.start <= h.day && h.day <= l.end))
+      .sort((x, y) => x.day.localeCompare(y.day));
+    if (clashes.length === 0) return;
+
+    const named = clashes
+      .map((c) => `${formatDateOnly(c.day)} at ${c.branch_name ?? 'a branch'}${c.assignment_number ? ` (${c.assignment_number})` : ''}`)
+      .join('; ');
+    throw withCode(
+      new BadRequestException(
+        `This leave covers work you have already accepted: ${named}. `
+        + 'Ask operations to reassign or reschedule it before marking those days as leave.',
+      ),
+      ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK,
+    );
+  }
 
   /** Does this assayer currently hold work they have accepted and not yet completed? */
   async hasActiveAssignment(assayerId: string): Promise<boolean> {

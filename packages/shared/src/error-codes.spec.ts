@@ -135,3 +135,34 @@ describe('fallbackCodeForStatus', () => {
     }
   });
 });
+
+describe('codes added for the 2026-09-24 integrity fixes', () => {
+  it('names every check-in/check-out refusal the attendance routes send, with unchanged wire values', () => {
+    // These were bare literals in AssignmentService.recordCheckIn/recordCheckOut. Installed apps
+    // compare against the literal, so each value must equal the string that used to be sent.
+    for (const code of [
+      'NOT_YOUR_ASSIGNMENT', 'ASSIGNMENT_COMPLETED', 'ASSIGNMENT_NOT_FOUND', 'INVALID_STATE_FOR_CHECK_IN',
+      'ASSAYER_NOT_ACTIVE', 'CONFLICT_ASSIGNMENT_MODIFIED', 'NOT_SCHEDULED_TODAY', 'TOO_FAR_FROM_BRANCH',
+      'NOT_CHECKED_IN',
+      // Already catalogued elsewhere and sent by the same routes.
+      'ASSIGNMENT_CANCELLED', 'STALE_ASSIGNMENT_VERSION', 'INVALID_ASSIGNMENT_VERSION',
+    ]) {
+      expect(isApiErrorCode(code)).toBe(true);
+      expect((API_ERROR_CODES as Record<string, string>)[code]).toBe(code);
+    }
+    expect(catalogue.ATTENDANCE_ERROR_CODES.NOT_SCHEDULED_TODAY).toBe('NOT_SCHEDULED_TODAY');
+    expect(catalogue.ATTENDANCE_ERROR_CODES.TOO_FAR_FROM_BRANCH).toBe('TOO_FAR_FROM_BRANCH');
+  });
+
+  it('exports the upload, expense, document-lock and leave codes', () => {
+    expect(catalogue.ASSAYER_ERROR_CODES.DOCUMENT_VERIFIED_LOCKED).toBe('DOCUMENT_VERIFIED_LOCKED');
+    expect(catalogue.ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK).toBe('LEAVE_OVERLAPS_ASSIGNED_WORK');
+    expect(catalogue.OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CLOSED).toBe('ASSIGNMENT_CLOSED');
+    expect(catalogue.OTHER_CONFLICT_ERROR_CODES.EXPENSE_PAYOUT_ALREADY_APPROVED).toBe('EXPENSE_PAYOUT_ALREADY_APPROVED');
+    expect(catalogue.ASSAYER_ERROR_CODES.PHOTOGRAPH_LOCKED).toBe('PHOTOGRAPH_LOCKED');
+    expect(catalogue.OTHER_CONFLICT_ERROR_CODES.EXPENSE_JOB_ALREADY_BILLED).toBe('EXPENSE_JOB_ALREADY_BILLED');
+    for (const code of ['DOCUMENT_VERIFIED_LOCKED', 'PHOTOGRAPH_LOCKED', 'LEAVE_OVERLAPS_ASSIGNED_WORK', 'ASSIGNMENT_CLOSED', 'EXPENSE_PAYOUT_ALREADY_APPROVED', 'EXPENSE_JOB_ALREADY_BILLED']) {
+      expect(isApiErrorCode(code)).toBe(true);
+    }
+  });
+});

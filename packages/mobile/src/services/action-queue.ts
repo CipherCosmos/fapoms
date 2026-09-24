@@ -20,11 +20,12 @@ import { readCache, writeCache } from './token-store';
  *
  *  - It carries a `clientRequestId` (a v4-shaped UUID, generated once and persisted with the
  *    action) so a retry that actually reached the server the first time — the response was just
- *    lost — does not create a second expense claim. Check-in/out and offer accept/reject do not
- *    need this: the server already treats them as idempotent by nature (first arrival kept;
- *    already-checked-out returns success). The expense claim is the one queued action that
- *    creates a new record each time it is POSTed, so it is the one the backend contract keys
- *    on `clientRequestId`.
+ *    lost — does not create a second expense claim. The server honours it on the expense claim
+ *    (`expenses.client_request_id`) and on offer accept/decline (`POST /assignments/:id/transition`
+ *    keeps `assignment_idempotency_records`), so a replayed accept or decline is answered with the
+ *    original result instead of an "invalid transition" for a decline that already landed.
+ *    Check-in/out do not send one: the server treats them as idempotent by nature (first arrival
+ *    kept; already-checked-out returns success).
  *  - A failure can be terminal. A validation 4xx ("this claim is over the single-claim limit")
  *    will fail forever no matter how many times it is retried, and retrying it silently
  *    would leave the assayer thinking a rejected request was still "trying". Only a transport
@@ -67,6 +68,13 @@ export interface QueuedAction<TPayload = any> {
   code?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The signed-in user who filed this action. An action is only ever sent under its owner's
+   * session: on a shared handset, A's pending check-in, claim or offer reply must never reach the
+   * server under B's token. Absent only on entries written by builds before this field existed;
+   * see `adoptUnownedActions` for what happens to those.
+   */
+  ownerId?: string;
 }
 
 export interface ActionResult {
@@ -96,6 +104,29 @@ let buffer: QueuedAction[] | null = null;
 const listeners = new Set<() => void>();
 /** Guards against two overlapping drains — a foreground return and a manual action can race. */
 let processing = false;
+/**
+ * Whose session is live right now, or `null` when nobody is signed in. Set by `AuthContext` the
+ * moment a session starts or ends. Every entry is stamped with it when filed, and nothing is sent
+ * unless the entry's owner is this user.
+ */
+let owner: string | null = null;
+
+/** Tell the queue whose session is live. `null` (or an empty id) means nobody is signed in. */
+export function setActionQueueOwner(userId: string | null | undefined): void {
+  owner = userId ? userId : null;
+}
+
+export function getActionQueueOwner(): string | null {
+  return owner;
+}
+
+/** Said when something tries to file or send an action with no session to send it under. */
+export const NOT_SIGNED_IN_ERROR = 'You are not signed in.';
+
+/** Still waiting to go: written down, being retried, or in flight right now. */
+function isOpen(a: QueuedAction): boolean {
+  return a.status === 'PENDING' || a.status === 'RETRYING' || a.status === 'SENDING';
+}
 
 async function load(): Promise<QueuedAction[]> {
   if (buffer) return buffer;
@@ -155,21 +186,32 @@ export async function getQueuedActions(): Promise<QueuedAction[]> {
   return [...(await load())];
 }
 
-/** File an action. It starts PENDING; call `processActionQueue` (or `runQueuedAction`) to send it. */
+/**
+ * File an action for the signed-in user. It starts PENDING; call `processActionQueue` (or
+ * `enqueueAndRun`) to send it. Refuses (throws) when nobody is signed in: an action with no owner
+ * could never be sent, and silently keeping it would only let it surface under the wrong person.
+ *
+ * `clientRequestId` lets a caller supply the key itself — one generated when a form opened, so a
+ * second press on the same form reuses the key instead of minting a new one.
+ */
 export async function enqueueAction<TPayload>(
   kind: ActionKind,
   payload: TPayload,
+  opts: { clientRequestId?: string } = {},
 ): Promise<QueuedAction<TPayload>> {
+  const ownerId = owner;
+  if (!ownerId) throw new Error(NOT_SIGNED_IN_ERROR);
   const list = await load();
   const now = new Date().toISOString();
   const entry: QueuedAction<TPayload> = {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     kind,
     payload,
-    clientRequestId: generateClientRequestId(),
+    clientRequestId: opts.clientRequestId || generateClientRequestId(),
     status: 'PENDING',
     createdAt: now,
     updatedAt: now,
+    ownerId,
   };
   list.push(entry);
   await persist();
@@ -187,6 +229,14 @@ async function mutate(id: string, changes: Partial<QueuedAction>): Promise<void>
 /** Attempt one action now and record the outcome. Shared by the immediate call site and the
  *  background drain, so a manual "do it now" and an automatic retry behave identically. */
 async function attempt(entry: QueuedAction, dispatch: ActionDispatcher): Promise<ActionResult> {
+  // Checked immediately before sending, not only when the drain began: a sign-out or a switch to
+  // another account can land while an earlier action is still on the wire.
+  if (!owner || entry.ownerId !== owner) {
+    return { success: false, error: NOT_SIGNED_IN_ERROR, retryable: false };
+  }
+  // Claimed synchronously (the entry is the buffer's own object), so a drain and an
+  // `enqueueAndRun` that both looked at it in the same tick cannot both send it.
+  entry.status = 'SENDING';
   await mutate(entry.id, { status: 'SENDING', error: undefined, code: undefined });
   let result: ActionResult;
   try {
@@ -216,13 +266,60 @@ export async function enqueueAndRun<TPayload>(
   kind: ActionKind,
   payload: TPayload,
   dispatch: ActionDispatcher<TPayload>,
+  opts: {
+    /** A key the caller holds for this one submission (see `enqueueAction`). */
+    clientRequestId?: string;
+    /**
+     * Recognise an action already waiting that this one would duplicate — e.g. a second "Accept"
+     * on an offer whose first accept is still waiting for signal. When one matches, it is sent
+     * again (or left in flight) instead of a second copy being filed.
+     */
+    sameAs?: (existing: QueuedAction<TPayload>) => boolean;
+  } = {},
 ): Promise<ActionResult & { queued: boolean }> {
-  const entry = await enqueueAction(kind, payload);
+  if (!owner) {
+    return { success: false, error: NOT_SIGNED_IN_ERROR, retryable: false, queued: false };
+  }
+  const existing = (await load()).find(
+    (a) =>
+      a.ownerId === owner
+      && a.kind === kind
+      && isOpen(a)
+      && ((!!opts.clientRequestId && a.clientRequestId === opts.clientRequestId)
+        || (!!opts.sameAs && opts.sameAs(a as QueuedAction<TPayload>))),
+  );
+  if (existing?.status === 'SENDING') {
+    // Already on the wire from an earlier press or a background drain. Its outcome will land in
+    // the queue; filing it again is exactly the duplicate this exists to prevent.
+    return { success: false, retryable: true, queued: true };
+  }
+  const entry = existing ?? (await enqueueAction(kind, payload, { clientRequestId: opts.clientRequestId }));
   const result = await attempt(entry, dispatch as ActionDispatcher);
   if (result.success || !result.retryable) {
     await dismissAction(entry.id);
   }
   return { ...result, queued: !result.success && !!result.retryable };
+}
+
+/**
+ * What a screen should do with an `enqueueAndRun` result, in one place so the three callers that
+ * file offer replies and claims cannot drift apart.
+ *
+ * `queued` is a success from the assayer's point of view: the action is written down on the phone
+ * and will send itself. It used to be returned as a failure ("will retry"), which kept the form
+ * open and invited a second press — and every press filed another copy.
+ */
+export type SubmitOutcome =
+  | { success: true; queued: boolean }
+  | { success: false; queued: false; error?: string; code?: string };
+
+export function toSubmitOutcome(
+  result: ActionResult & { queued: boolean },
+  fallbackError?: string,
+): SubmitOutcome {
+  if (result.success) return { success: true, queued: false };
+  if (result.queued) return { success: true, queued: true };
+  return { success: false, queued: false, error: result.error || fallbackError, code: result.code };
 }
 
 /** Remove a terminal (SENT or ERROR) entry, or one the caller chooses to abandon. */
@@ -249,16 +346,27 @@ export async function processActionQueue(
   dispatchers: Partial<Record<ActionKind, ActionDispatcher>>,
 ): Promise<void> {
   if (processing) return;
+  // Nobody signed in: send nothing and drop nothing. The owner is set as a session starts, and a
+  // drain that happens to run first must not mistake "not yet known" for "someone else".
+  if (!owner) return;
   processing = true;
   try {
     const initial = await load();
-    const todo = initial
+
+    // Anything filed by a different user is dropped, never sent. Sign-out clears the queue, but
+    // a session can also end without one (the server revoking it) and the next person to sign
+    // in on the same handset must not have the previous person's actions sent under their name.
+    const foreign = initial.filter((a) => a.ownerId !== owner).map((a) => a.id);
+    for (const id of foreign) await dismissAction(id);
+
+    const todo = (await load())
       .filter((a) => a.status === 'PENDING' || a.status === 'RETRYING')
       .map((a) => a.id);
 
     for (const id of todo) {
       const entry = (await load()).find((a) => a.id === id);
       if (!entry || (entry.status !== 'PENDING' && entry.status !== 'RETRYING')) continue;
+      if (entry.ownerId !== owner) continue;
       const dispatch = dispatchers[entry.kind];
       if (!dispatch) continue;
 
@@ -272,7 +380,34 @@ export async function processActionQueue(
   }
 }
 
-/** Dropped on sign-out — one assayer's pending actions must never fire under another's session. */
+/**
+ * Give entries written before actions carried an owner to the user whose session was restored.
+ *
+ * Called only when the app resumes a saved session and has no record of whose queued work is on
+ * the phone — i.e. the first launch after this build replaced one that did not tag actions. Those
+ * entries were filed on this handset by the session that is still signed in (sign-out deletes the
+ * cache file), so dropping them would silently lose a claim or check-in the assayer believes is
+ * on its way. A fresh sign-in never adopts: there, an unowned entry can only be somebody else's.
+ */
+export async function adoptUnownedActions(userId: string): Promise<void> {
+  const list = await load();
+  let changed = false;
+  for (const a of list) {
+    if (!a.ownerId) {
+      a.ownerId = userId;
+      changed = true;
+    }
+  }
+  if (changed) await persist();
+}
+
+/**
+ * Dropped on sign-out — one assayer's pending actions must never fire under another's session.
+ *
+ * Replaces the in-memory copy as well as the stored one. Clearing only the file was not enough:
+ * the buffer outlived it and was written straight back on the next action, carrying the previous
+ * person's check-in or claim into the next session.
+ */
 export async function clearActionQueue(): Promise<void> {
   buffer = [];
   await persist();
@@ -282,5 +417,6 @@ export async function clearActionQueue(): Promise<void> {
 export function __resetActionQueueForTests(): void {
   buffer = null;
   processing = false;
+  owner = null;
   listeners.clear();
 }

@@ -42,8 +42,15 @@ export interface UploadOutbox {
 async function sendOne(
   entry: OutboxUpload,
   onProgress: (percent: number) => void,
-): Promise<{ success: boolean; error?: string; code?: string }> {
+): Promise<{ success: boolean; error?: string; code?: string; status?: number }> {
   if (entry.target.kind === 'REGISTRATION_DOCUMENT') {
+    // The route writes to whoever is signed in, not to the person the scan was taken for. A scan
+    // of one person's ID card left on a shared phone must never land on the next person's record,
+    // so it is refused (403: a permanent refusal, parked for attention) rather than sent.
+    const signedIn = MobileApiService.getCurrentUserId();
+    if (entry.target.assayerId && signedIn && entry.target.assayerId !== signedIn) {
+      return { success: false, error: 'This paper was scanned for a different account.', status: 403 };
+    }
     // Not chunked. These are single photographs of a card or a signed form — a few hundred
     // kilobytes against an audit packet's tens of megabytes — so the session handshake the
     // resumable uploader needs would cost more round trips than the file itself. A failure

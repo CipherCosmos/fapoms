@@ -26,7 +26,7 @@ import { rbacPrincipalCacheKey } from './auth.service';
  * held constant and no cache flush anywhere, `POST /assignments` answered 400 (allowed, bad body),
  * then 403 the instant OPERATIONS was swapped for AUDITOR, then 400 again the instant it was put
  * back. A region change narrowed the same token's branch list from 10 to 8 on the very next
- * request. See docs/verification-2026-09-10-open-findings.md.
+ * request (verified 2026-09-10).
  *
  * ## What is deliberately not claimed
  *

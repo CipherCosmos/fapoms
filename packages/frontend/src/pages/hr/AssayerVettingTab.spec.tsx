@@ -1485,3 +1485,69 @@ describe('referenceNoticeLine', () => {
   });
 });
 
+
+/**
+ * Owner decision 2026-09-24: verified details cannot be changed by the assayer until HR asks for
+ * them again — and, once someone is approved, their ID-card photo is locked the same way. "Ask to
+ * re-upload" is that one unlock, and its note is what the assayer's phone shows as the reason.
+ */
+describe('AssayerVettingTab — asking again for something already accepted', () => {
+  const doc = (over: Record<string, unknown> = {}) => ({
+    id: 'd-9', requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true,
+    filePaths: ['assayers/a-1/aadhaar-front.jpg'], softCopyReceived: true, hardCopyReceived: false,
+    hardCopyLocation: null, documentNumber: '234567890124', verificationStatus: 'VERIFIED', ...over,
+  });
+  const photo = (over: Record<string, unknown> = {}) => ({
+    id: 'd-p', requirement: 'PHOTOGRAPH', label: 'Photograph', identity: false,
+    filePaths: ['assayers/a-1/photo.jpg'], softCopyReceived: true, hardCopyReceived: false,
+    hardCopyLocation: null, documentNumber: null, verificationStatus: 'PENDING', ...over,
+  });
+  const reuploadCall = () => mockRequest.mock.calls.find(([url]: any[]) => String(url).endsWith('/request-reupload'));
+
+  it('offers it on a verified document, and sends the reason with a note the assayer will read', async () => {
+    serve(dossier({ onboarding: [doc()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="ACTIVE" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask for Aadhaar — front again' }));
+
+    expect(await screen.findByText('Ask for Aadhaar — front again?')).toBeInTheDocument();
+    const confirm = screen.getByRole('button', { name: 'Yes, ask them again' });
+    fireEvent.change(screen.getByLabelText(/Why this document is being sent back/), { target: { value: 'ILLEGIBLE' } });
+    // The note is required and goes to their phone: too short, and the button stays off.
+    fireEvent.change(screen.getByLabelText(/What to tell them/), { target: { value: 'Blurry' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/What to tell them/), { target: { value: 'The number is not readable. Please take it again.' } });
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(reuploadCall()).toBeDefined());
+    expect(reuploadCall()![0]).toBe('/assayers/a-1/document/AADHAAR_FRONT/request-reupload');
+    expect(JSON.parse(reuploadCall()![1].body)).toEqual({
+      reason: 'ILLEGIBLE', note: 'The number is not readable. Please take it again.',
+    });
+  });
+
+  it('is not offered on a document nobody has accepted yet — that is Send back', async () => {
+    serve(dossier({ onboarding: [doc({ verificationStatus: 'PENDING' })] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="ACTIVE" />);
+    await screen.findByText('Send back');
+    expect(screen.queryByRole('button', { name: /again$/ })).not.toBeInTheDocument();
+  });
+
+  it('offers it on the photo once the person is approved, not while they are still joining', async () => {
+    serve(dossier({ onboarding: [photo()] }));
+    const { unmount } = render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="TRAINING" />);
+    expect(await screen.findByRole('button', { name: 'Ask for their photo again' })).toBeInTheDocument();
+    unmount();
+
+    serve(dossier({ onboarding: [photo()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="DOCUMENT_VERIFICATION" />);
+    await screen.findAllByText('Photograph');
+    expect(screen.queryByRole('button', { name: 'Ask for their photo again' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer it again while an earlier request is still waiting on them', async () => {
+    serve(dossier({ onboarding: [photo({ verificationStatus: 'REJECTED' })] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="ACTIVE" />);
+    await screen.findAllByText('Photograph');
+    expect(screen.queryByRole('button', { name: 'Ask for their photo again' })).not.toBeInTheDocument();
+  });
+});

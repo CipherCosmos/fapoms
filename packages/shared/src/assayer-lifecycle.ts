@@ -223,6 +223,34 @@ export function mayReopenFinalApproval(from?: string | null, unavailableReason?:
     && reopenTargetFor(unavailableReason) === AssayerLifecycleStatus.FINAL_APPROVAL;
 }
 
+/**
+ * The joining stages that come BEFORE the senior's approval — derived from `ONBOARDING_STAGES`'s
+ * own order (everything up to and including FINAL_APPROVAL), so a stage added to the walk lands
+ * on the right side without a second list to update.
+ */
+const PRE_APPROVAL_STAGES: AssayerLifecycleStatus[] = ONBOARDING_STAGES.slice(
+  0,
+  ONBOARDING_STAGES.indexOf(AssayerLifecycleStatus.FINAL_APPROVAL) + 1,
+);
+
+/**
+ * Has this person been approved — passed the FINAL_APPROVAL decision (or, for the pre-2026-09-23
+ * estate, reached a working stage the old walk led to)?
+ *
+ * Read off the lifecycle because that is the one fact every record carries: TRAINING is entered
+ * only by the approver's decision, and every later state (ACTIVE, ON_LEAVE, SUSPENDED, RESIGNED,
+ * TERMINATED, ARCHIVED) comes after it. INACTIVE is the one state reachable from either side, so
+ * it is split by why the person was parked: BGV_FAILED and APPROVAL_REJECTED (`reopenTargetFor`)
+ * are people who never got through; any other INACTIVE reads as approved. A rehire goes back to
+ * INVITED and so reads as not approved again, which is right — they are joining again.
+ */
+export function hasPassedFinalApproval(lifecycleStatus?: string | null, unavailableReason?: string | null): boolean {
+  if (!lifecycleStatus) return false;
+  if ((PRE_APPROVAL_STAGES as string[]).includes(lifecycleStatus)) return false;
+  if (lifecycleStatus === AssayerLifecycleStatus.INACTIVE && reopenTargetFor(unavailableReason)) return false;
+  return true;
+}
+
 /** Stages an INACTIVE person can only re-enter for the matching reason. */
 const REOPEN_ONLY_FROM_INACTIVE: AssayerLifecycleStatus[] = [
   AssayerLifecycleStatus.BACKGROUND_VERIFICATION,

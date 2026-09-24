@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Modal, ScrollView, View, Platform } from 'react-native';
+import { Alert, Modal, RefreshControl, ScrollView, View, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, CollapsibleSection, Icon, IconButton, ProgressBar } from './ui/primitives';
@@ -19,13 +19,20 @@ interface RegistrationChecklistModalProps {
   /** Hands one captured document to the durable outbox. Wired to the app's single outbox. */
   onCapture: (requirement: string, documentLabel: string, fileName: string, fileUri: string) => Promise<void>;
   onRetry: (id: string) => void;
-  /** Re-reads the checklist from the server after something changes. */
-  onReload: () => void;
+  /** Re-reads the checklist from the server after something changes (and on pull-to-refresh). */
+  onReload: () => void | Promise<void>;
   /** The signed-in assayer. Used only for the address pin. */
   assayerId: string;
   /** True when the server says this person's map position is missing or too coarse to use. */
   locationNeedsConfirmation: boolean;
   onLocationConfirmed: () => void;
+  /**
+   * Set when the session may only finish registering, so there is nothing behind this screen to
+   * close back to. The close button is replaced by Sign out — the one way out of a
+   * registration-only session, and the only way a second person can use a shared phone.
+   */
+  forced?: boolean;
+  onSignOut?: () => void;
 }
 
 /**
@@ -144,11 +151,14 @@ export const RegistrationChecklistModal: React.FC<RegistrationChecklistModalProp
   assayerId,
   locationNeedsConfirmation,
   onLocationConfirmed,
+  forced = false,
+  onSignOut,
 }) => {
   const t = useTheme();
   const tr = useT();
   const feedback = useFeedback();
   const [capturing, setCapturing] = useState<ChecklistRow | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [pinning, setPinning] = useState(false);
   const [pinned, setPinned] = useState(false);
 
@@ -206,8 +216,36 @@ export const RegistrationChecklistModal: React.FC<RegistrationChecklistModalProp
     }
   };
 
+  /**
+   * Signing out empties the upload outbox, so a scan that has not reached the office yet would be
+   * lost. Said before it happens, in the confirmation, rather than discovered afterwards.
+   */
+  const unsent = uploads.filter(
+    (u) => u.target.kind === 'REGISTRATION_DOCUMENT' && u.status !== 'SENT',
+  ).length;
+  const confirmSignOut = () => {
+    if (!onSignOut) return;
+    Alert.alert(
+      tr('profile.signOutConfirm.title'),
+      unsent > 0 ? tr('registration.signOutUnsentBody', { count: unsent }) : tr('profile.signOutConfirm.body'),
+      [
+        { text: tr('common.cancel'), style: 'cancel' },
+        { text: tr('common.signOut'), style: 'destructive', onPress: onSignOut },
+      ],
+    );
+  };
+
+  const pullToRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await onReload();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={forced ? () => {} : onClose}>
       <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <View
           style={{
@@ -226,16 +264,28 @@ export const RegistrationChecklistModal: React.FC<RegistrationChecklistModalProp
               nothing behind it to go "back" to. Matches the same full-dismiss icon used
               everywhere else in the app (DocumentScanner, every ModalSheet-based sheet) rather
               than inventing a second meaning for the same action. */}
-          <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('common.close')} />
+          {!forced && <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('common.close')} />}
           <View style={{ flex: 1, minWidth: 0 }}>
             <AppText variant="h3" numberOfLines={1}>{tr('registration.title')}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>
               {tr('registration.progress', { done: progress.done, required: progress.required })}
             </AppText>
           </View>
+          {forced && onSignOut && (
+            <Button
+              label={tr('common.signOut')}
+              icon="log-out-outline"
+              variant="ghost"
+              size="sm"
+              onPress={confirmSignOut}
+            />
+          )}
         </View>
 
-        <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.md }}>
+        <ScrollView
+          contentContainerStyle={{ padding: t.space.lg, gap: t.space.md }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={pullToRefresh} />}
+        >
           <View style={{ gap: t.space.sm }}>
             <ProgressBar
               value={progress.required === 0 ? 0 : progress.done / progress.required}
@@ -362,7 +412,7 @@ export const RegistrationChecklistModal: React.FC<RegistrationChecklistModalProp
             }
             await onCapture(row.requirement, row.label, doc.fileName, uri);
             feedback.success(tr('registration.capture.addedTitle'), tr('registration.capture.addedBody', { document: row.label }));
-            onReload();
+            void onReload();
           }}
         />
       )}
