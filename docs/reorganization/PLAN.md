@@ -11,8 +11,8 @@ the state of the reorganization can always be read here.
 
 | Phase | Name | Status | Merged to `test` | Merged to `main` | Checkpoint tag |
 |---|---|---|---|---|---|
-| 0 | Safety net | not started | — | — | `reorg-p0` |
-| 1 | Repo hygiene & documentation | not started | — | — | `reorg-p1` |
+| 0 | Safety net | awaiting owner OK | — | — | `reorg-p0` |
+| 1 | Repo hygiene & documentation | awaiting owner OK | — | — | `reorg-p1` |
 | 2 | Backend relocation | not started | — | — | `reorg-p2` |
 | 3 | Frontend relocation | not started | — | — | `reorg-p3` |
 | 4 | One source of truth (routes, types, mobile API) | not started | — | — | `reorg-p4` |
@@ -480,3 +480,15 @@ cd ~/apps/fapoms && for k in DB_PASSWORD JWT_SECRET; do v=$(grep -E "^${k}=" .en
   `main.ts` / `security-controls.spec.ts`, `setup.sh`, four `scripts/acceptance/*.mjs` files,
   `packages/shared/src/coverage.ts`) and re-grepped every old path repo-wide to confirm zero
   stale references remain outside this plan's own historical text.
+- 2026-09-25: Phase 0 done on the branch — gate G1–G5 built and proven both ways (moves = zero diff;
+  a dropped permission, a nullable column, a lost export, a missing provider are each caught), CI
+  runs it on `refactor/**`, 42 specs move-proofed, NUL bytes escaped, roster CSV and the admin123
+  script removed. Found: MinIO's public images (minio/minio, minio/mc) are no longer pullable from
+  Docker Hub or quay — both servers run on cached images; CI's boot check uses adobe/s3mock.
+- 2026-09-25: Phase 1 done on the branch — docs sectioned with an index and an environments page;
+  stale deploy docs corrected; dead files removed; production backend image no longer ships ~480
+  compiled specs (tsconfig.build.json; dev compose mounts it beside nest-cli.json); jest declared
+  where used; .editorconfig/.nvmrc/PR template/CONTRIBUTING/SECURITY; backup.sh/restore.sh work
+  under docker (podman path byte-identical, proven with a fake-CLI harness). EC2 still needs a
+  backup timer installed — a server-side step, not a code change.
+

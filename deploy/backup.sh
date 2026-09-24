@@ -42,8 +42,13 @@
 #   FAPOMS_BACKUP_DIR       where backups live (default ~/backups/fapoms)
 #   FAPOMS_BACKUP_LOG       the history file (default ~/apps/fapoms-ops/backup.log)
 #   FAPOMS_REPO             checkout holding .env.docker (default ~/apps/fapoms)
-#   FAPOMS_PG_CONTAINER     Postgres container name (default deploy-postgres-1)
-#   FAPOMS_NETWORK          podman network the object store is on (default deploy_default)
+#   FAPOMS_CONTAINER_CLI    podman or docker (default: the same resolution auto-deploy.sh uses —
+#                           podman if it is on PATH, else docker; explicit setting always wins)
+#   FAPOMS_PG_CONTAINER     Postgres container name (default deploy-postgres-1 under podman;
+#                           resolved from the compose project, falling back to fapoms-postgres,
+#                           under docker — see resolve_pg_container() below)
+#   FAPOMS_NETWORK          container network the object store is on (default deploy_default
+#                           under podman, fapoms_default under docker — see NETWORK below)
 #   FAPOMS_OFFSITE_REMOTE   an rclone remote, e.g. "b2:fapoms-backups". When set and rclone is
 #                           installed, every run syncs there afterwards. Unset = local only, and
 #                           the log says so on every run rather than letting it be forgotten.
@@ -58,8 +63,66 @@ ENVFILE="$REPO/.env.docker"
 BACKUP_DIR="${FAPOMS_BACKUP_DIR:-$HOME/backups/fapoms}"
 LOG="${FAPOMS_BACKUP_LOG:-$HOME/apps/fapoms-ops/backup.log}"
 
-PG_CONTAINER="${FAPOMS_PG_CONTAINER:-deploy-postgres-1}"
-NETWORK="${FAPOMS_NETWORK:-deploy_default}"
+# Same resolution auto-deploy.sh already uses (see its FAPOMS_CONTAINER_CLI): an explicit setting
+# always wins, otherwise prefer podman when it is present. On the homeserver that means this
+# resolves to "podman" exactly as the old hardcoded call did — nothing about that host's behaviour
+# changes. Only a host with no podman at all (the EC2 box) falls through to docker.
+if [ -n "${FAPOMS_CONTAINER_CLI:-}" ]; then
+  CLI="$FAPOMS_CONTAINER_CLI"
+elif command -v podman >/dev/null 2>&1; then
+  CLI=podman
+else
+  CLI=docker
+fi
+
+# container_exists <name> — podman has a dedicated subcommand for this; docker does not, so it is
+# asked to describe the container and its exit status is read instead. Both are silent either way;
+# the caller decides what to say.
+container_exists() {
+  case "$CLI" in
+    podman) podman container exists "$1" ;;
+    *) docker inspect --type=container "$1" >/dev/null 2>&1 ;;
+  esac
+}
+
+# resolve_pg_container — an explicit FAPOMS_PG_CONTAINER always wins. Otherwise:
+#   podman (the homeserver): the same fixed default this script has always used, unchanged.
+#   docker (EC2, root docker-compose.yml): ask compose which container it made for the `postgres`
+#     service — the robust answer, since it is correct however the project happens to be named —
+#     and fall back to the name that compose file pins with `container_name: fapoms-postgres` if
+#     compose cannot be asked (e.g. run outside the checkout, or an older compose).
+resolve_pg_container() {
+  if [ -n "${FAPOMS_PG_CONTAINER:-}" ]; then
+    printf '%s' "$FAPOMS_PG_CONTAINER"
+    return
+  fi
+  case "$CLI" in
+    podman) printf '%s' "deploy-postgres-1" ;;
+    *)
+      local cid name compose_file="$REPO/docker-compose.yml"
+      if [ -r "$compose_file" ]; then
+        cid=$(docker compose -f "$compose_file" ps -q postgres 2>/dev/null || true)
+        if [ -n "$cid" ]; then
+          name=$(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null | sed 's#^/##')
+          [ -n "$name" ] && { printf '%s' "$name"; return; }
+        fi
+      fi
+      printf '%s' "fapoms-postgres"
+      ;;
+  esac
+}
+PG_CONTAINER="$(resolve_pg_container)"
+
+# The object store's network. podman's default here is unchanged. Under docker it is read from the
+# postgres container the script has just resolved (see below); FAPOMS_NETWORK overrides both.
+case "$CLI" in
+  podman) NETWORK="${FAPOMS_NETWORK:-deploy_default}" ;;
+  # Read off the postgres container rather than guessed from a folder name: the compose project
+  # name is not reliably the checkout directory, and a wrong guess only surfaces at the
+  # object-mirror step. fapoms_default is the last resort.
+  *) NETWORK="${FAPOMS_NETWORK:-$($CLI inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$PG_CONTAINER" 2>/dev/null | awk '{print $1}')}"
+     NETWORK="${NETWORK:-fapoms_default}" ;;
+esac
 MC_IMAGE="docker.io/minio/mc:latest"
 
 # Keep two weeks of nightlies, and one dump per month for a year. A fault noticed late — a
@@ -151,7 +214,7 @@ mkdir -p "$(dirname "$LOG")" 2>/dev/null || die "cannot create the log directory
 mkdir -p "$BACKUP_DIR"/{daily,monthly,objects} 2>/dev/null || die "cannot create the backup directories under $BACKUP_DIR (set FAPOMS_BACKUP_DIR)"
 [ -w "$BACKUP_DIR/daily" ] || die "backup directory $BACKUP_DIR/daily is not writable by $(id -un)"
 
-command -v podman >/dev/null 2>&1 || die "podman is not on PATH — this script dumps from the deployment's containers"
+command -v "$CLI" >/dev/null 2>&1 || die "$CLI is not on PATH — this script dumps from the deployment's containers"
 
 [ -r "$ENVFILE" ] || die "no readable env file at $ENVFILE (set FAPOMS_REPO if the checkout is elsewhere)"
 # shellcheck disable=SC1090
@@ -160,9 +223,9 @@ set -a; . "$ENVFILE" || die "could not read $ENVFILE — check that it parses as
 [ -n "${DB_USERNAME:-}" ] || die "DB_USERNAME is missing from $ENVFILE — no role to dump as"
 [ -n "${DB_DATABASE:-}" ] || die "DB_DATABASE is missing from $ENVFILE — no database named to dump"
 
-podman container exists "$PG_CONTAINER" \
+container_exists "$PG_CONTAINER" \
   || die "no container named $PG_CONTAINER — is the deployment up? (set FAPOMS_PG_CONTAINER)"
-[ "$(podman inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null || echo false)" = "true" ] \
+[ "$($CLI inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null || echo false)" = "true" ] \
   || die "container $PG_CONTAINER exists but is not running — start the deployment before backing up"
 
 # One backup at a time. The nightly timer and an operator taking a pre-migration dump by hand can
@@ -195,7 +258,7 @@ say "=== backup start ==="
 # PostGIS's spatial_ref_sys, is dumped as extension config data and so only ever makes the archive
 # larger than this count. The comparison below is therefore ">=", never "==".
 psql_scalar() {
-  podman exec "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$DB_DATABASE" -tAc "$1" 2>"$ERRFILE" | tr -d '[:space:]'
+  $CLI exec "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$DB_DATABASE" -tAc "$1" 2>"$ERRFILE" | tr -d '[:space:]'
 }
 EXPECTED_TABLES=$(psql_scalar "
   SELECT count(*) FROM pg_class c
@@ -209,7 +272,7 @@ case "$EXPECTED_TABLES" in
 esac
 [ "$EXPECTED_TABLES" -gt 0 ] || die "$DB_DATABASE reports zero tables in public — refusing to call an empty dump a backup"
 
-podman exec "$PG_CONTAINER" \
+$CLI exec "$PG_CONTAINER" \
   pg_dump -U "$DB_USERNAME" -d "$DB_DATABASE" -Fc --no-owner --no-acl \
   > "$PARTIAL" 2>"$ERRFILE" \
   || die "pg_dump of $DB_DATABASE as $DB_USERNAME failed: $(last_error "$ERRFILE")"
@@ -237,7 +300,7 @@ set_aside() {
     KEPT="and could not even be set aside for inspection"
   fi
 }
-if ! TOC=$(podman exec -i "$PG_CONTAINER" pg_restore --list < "$PARTIAL" 2>"$ERRFILE"); then
+if ! TOC=$($CLI exec -i "$PG_CONTAINER" pg_restore --list < "$PARTIAL" 2>"$ERRFILE"); then
   set_aside
   die "the file pg_dump wrote is not a readable Postgres archive (pg_restore --list failed): $(last_error "$ERRFILE") — $KEPT"
 fi
@@ -265,7 +328,7 @@ if [ -n "${MINIO_ROOT_USER:-}" ] && [ -n "${MINIO_ROOT_PASSWORD:-}" ]; then
   # The object count comes back on a sentinel line from the same container run, so the mirror can
   # be checked against the bucket instead of assumed. mc's own chatter goes to the log.
   MCOUT="$SCRATCH/mc.out"
-  podman run --rm --network "$NETWORK" \
+  $CLI run --rm --network "$NETWORK" \
     -v "$BACKUP_DIR/objects:/backup:z" \
     -e MC_USER="$MINIO_ROOT_USER" -e MC_PASS="$MINIO_ROOT_PASSWORD" \
     --entrypoint /bin/sh "$MC_IMAGE" -c \

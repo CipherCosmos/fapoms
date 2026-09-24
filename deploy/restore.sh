@@ -21,7 +21,45 @@ set -euo pipefail
 REPO="${FAPOMS_REPO:-$HOME/apps/fapoms}"
 ENVFILE="$REPO/.env.docker"
 BACKUP_DIR="${FAPOMS_BACKUP_DIR:-$HOME/backups/fapoms}"
-PG_CONTAINER="${FAPOMS_PG_CONTAINER:-deploy-postgres-1}"
+
+# Same resolution backup.sh and auto-deploy.sh use: an explicit FAPOMS_CONTAINER_CLI always wins,
+# otherwise prefer podman when it is present. On the homeserver this still resolves to "podman",
+# so that host's behaviour is unchanged; only a box with no podman (EC2) falls through to docker.
+if [ -n "${FAPOMS_CONTAINER_CLI:-}" ]; then
+  CLI="$FAPOMS_CONTAINER_CLI"
+elif command -v podman >/dev/null 2>&1; then
+  CLI=podman
+else
+  CLI=docker
+fi
+
+# resolve_container <default> <fixed-docker-name> <compose-service> — an explicit env override
+# (passed in $1's name, see callers) always wins. Otherwise podman keeps the old hardcoded default
+# unchanged, and docker asks the root compose file which container it made for that service,
+# falling back to the fixed container_name it pins if compose cannot be asked.
+resolve_container() {
+  local override="$1" podman_default="$2" docker_fixed="$3" service="$4"
+  if [ -n "$override" ]; then
+    printf '%s' "$override"
+    return
+  fi
+  case "$CLI" in
+    podman) printf '%s' "$podman_default" ;;
+    *)
+      local cid name compose_file="$REPO/docker-compose.yml"
+      if [ -r "$compose_file" ]; then
+        cid=$(docker compose -f "$compose_file" ps -q "$service" 2>/dev/null || true)
+        if [ -n "$cid" ]; then
+          name=$(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null | sed 's#^/##')
+          [ -n "$name" ] && { printf '%s' "$name"; return; }
+        fi
+      fi
+      printf '%s' "$docker_fixed"
+      ;;
+  esac
+}
+PG_CONTAINER="$(resolve_container "${FAPOMS_PG_CONTAINER:-}" deploy-postgres-1 fapoms-postgres postgres)"
+BACKEND_CONTAINER="$(resolve_container "${FAPOMS_BACKEND_CONTAINER:-}" deploy-backend-1 fapoms-backend backend)"
 
 [ -r "$ENVFILE" ] || { echo "no env file at $ENVFILE" >&2; exit 1; }
 # shellcheck disable=SC1090
@@ -32,7 +70,7 @@ MODE="${1:---drill}"
 DUMP="${2:-$(ls -t "$BACKUP_DIR"/daily/db-*.dump 2>/dev/null | head -1)}"
 [ -n "$DUMP" ] && [ -r "$DUMP" ] || { echo "no dump found — looked in $BACKUP_DIR/daily" >&2; exit 1; }
 
-psql_q() { podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -tAc "$1"; }
+psql_q() { $CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -tAc "$1"; }
 
 case "$MODE" in
   --drill)
@@ -41,21 +79,21 @@ case "$MODE" in
 
     # Always dropped, including when the restore dies partway. A drill that leaves debris behind
     # gets run once and then avoided.
-    trap 'podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
+    trap '$CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
             -c "DROP DATABASE IF EXISTS $SCRATCH" >/dev/null 2>&1 || true' EXIT
 
-    podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
+    $CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
       -c "CREATE DATABASE $SCRATCH" >/dev/null
 
     # PostGIS, uuid-ossp and pg_trgm have to exist before the schema that depends on them. A fresh
     # database does not inherit them, and this is exactly the class of thing a drill catches.
     for ext in "uuid-ossp" postgis pg_trgm; do
-      podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" \
+      $CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" \
         -c "CREATE EXTENSION IF NOT EXISTS \"$ext\"" >/dev/null 2>&1 || true
     done
 
     # Warnings are expected and fine (extension objects already present); a nonzero exit is not.
-    if ! podman exec -i "$PG_CONTAINER" \
+    if ! $CLI exec -i "$PG_CONTAINER" \
         pg_restore -U "$DB_USERNAME" -d "$SCRATCH" --no-owner --no-acl --exit-on-error \
         < "$DUMP" 2>/tmp/restore-drill.err; then
       echo "RESTORE FAILED — this dump is not usable:" >&2
@@ -63,11 +101,11 @@ case "$MODE" in
       exit 1
     fi
 
-    TABLES=$(podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" -tAc \
+    TABLES=$($CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" -tAc \
       "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
-    USERS=$(podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" -tAc \
+    USERS=$($CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" -tAc \
       "SELECT count(*) FROM users" 2>/dev/null || echo '?')
-    ASSIGNMENTS=$(podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" -tAc \
+    ASSIGNMENTS=$($CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$SCRATCH" -tAc \
       "SELECT count(*) FROM assignments" 2>/dev/null || echo '?')
 
     echo "  tables:      $TABLES"
@@ -88,27 +126,27 @@ case "$MODE" in
     # decision to restore is sometimes the wrong one; this is the way back.
     SAFETY="$BACKUP_DIR/daily/pre-restore-$(date +%Y%m%d-%H%M%S).dump"
     echo "Saving current state to $(basename "$SAFETY")…"
-    podman exec "$PG_CONTAINER" pg_dump -U "$DB_USERNAME" -d "$DB_DATABASE" -Fc --no-owner --no-acl > "$SAFETY"
+    $CLI exec "$PG_CONTAINER" pg_dump -U "$DB_USERNAME" -d "$DB_DATABASE" -Fc --no-owner --no-acl > "$SAFETY"
 
     echo "Stopping backend so nothing writes mid-restore…"
-    podman stop deploy-backend-1 >/dev/null 2>&1 || true
+    $CLI stop "$BACKEND_CONTAINER" >/dev/null 2>&1 || true
 
-    podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
+    $CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
       -c "DROP DATABASE IF EXISTS ${DB_DATABASE}_old" >/dev/null
-    podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
+    $CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
       -c "ALTER DATABASE $DB_DATABASE RENAME TO ${DB_DATABASE}_old" >/dev/null
-    podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
+    $CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d postgres \
       -c "CREATE DATABASE $DB_DATABASE" >/dev/null
 
     for ext in "uuid-ossp" postgis pg_trgm; do
-      podman exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$DB_DATABASE" \
+      $CLI exec -i "$PG_CONTAINER" psql -U "$DB_USERNAME" -d "$DB_DATABASE" \
         -c "CREATE EXTENSION IF NOT EXISTS \"$ext\"" >/dev/null 2>&1 || true
     done
 
-    podman exec -i "$PG_CONTAINER" \
+    $CLI exec -i "$PG_CONTAINER" \
       pg_restore -U "$DB_USERNAME" -d "$DB_DATABASE" --no-owner --no-acl < "$DUMP"
 
-    podman start deploy-backend-1 >/dev/null
+    $CLI start "$BACKEND_CONTAINER" >/dev/null
     echo "Restored. The previous database is kept as ${DB_DATABASE}_old — drop it once you are satisfied."
     ;;
 

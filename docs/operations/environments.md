@@ -20,8 +20,8 @@ runs on it (`push: branches: [main, test, 'refactor/**']`) but no host follows i
 | Health check the deploy gate polls | `http://127.0.0.1:3000/api/v1/health` (backend published directly) | `http://127.0.0.1:8080/api/v1/health` (through Caddy) |
 | Installer | `BRANCH=test MODE=saving bash deploy/aws/install-auto-deploy.sh` (root, system systemd units) | `bash deploy/install-auto-deploy.sh` (ordinary user, user systemd units — must **not** be run as root) |
 | Deploy now / status | `systemctl start fapoms-deploy.service` / `systemctl list-timers fapoms-deploy.timer` / `tail -f /opt/fapoms-ops/auto-deploy.log` | `systemctl --user start fapoms-deploy.service` / `systemctl --user status fapoms-deploy.timer` / `tail -f ~/apps/fapoms-ops/auto-deploy.log` |
-| Backup | not currently run — `deploy/backup.sh` requires `podman` on `PATH` and refuses otherwise (`deploy/backup.sh:154`); nothing in this repo makes it run under Docker as of this writing | nightly systemd user timer (`fapoms-backup.timer`) at 02:30 — `deploy/backup.sh` dumps Postgres with `pg_dump -Fc` and mirrors the MinIO object store append-only into `~/backups/fapoms/daily` and `~/backups/fapoms/objects`; verified on every run, retention 14 nightlies + 1/month for a year |
-| Restore | not applicable while backup is not run | `~/apps/fapoms-ops/restore.sh --drill` (restore into a scratch DB and verify) or `restore.sh --to-production <dump>` (dumps current state first, then restores; objects go back with `mc mirror`) |
+| Backup | not on a timer (no `fapoms-backup.timer` equivalent is installed on EC2), but `deploy/backup.sh` now runs here: it detects the engine (`FAPOMS_CONTAINER_CLI`, else podman-if-present, else docker) and resolves the Postgres container by asking `docker compose -f docker-compose.yml ps -q postgres`, falling back to the fixed `container_name: fapoms-postgres`. Run it by hand (or wire it to a systemd/cron timer) with `FAPOMS_REPO=/opt/fapoms deploy/backup.sh` | nightly systemd user timer (`fapoms-backup.timer`) at 02:30 — `deploy/backup.sh` dumps Postgres with `pg_dump -Fc` and mirrors the MinIO object store append-only into `~/backups/fapoms/daily` and `~/backups/fapoms/objects`; verified on every run, retention 14 nightlies + 1/month for a year |
+| Restore | `deploy/restore.sh --drill` / `--to-production <dump>` — same engine/container detection as backup.sh, plus a resolved `backend` container (`fapoms-backend` on Docker) to stop/start around a production restore | `~/apps/fapoms-ops/restore.sh --drill` (restore into a scratch DB and verify) or `restore.sh --to-production <dump>` (dumps current state first, then restores; objects go back with `mc mirror`) |
 | CI gate before deploy | reads GitHub check runs for the exact commit SHA via `deploy/auto-deploy.sh`'s `check-runs` call; a failing or absent-after-15-minutes check refuses, a still-running one waits for the next tick | same script, same logic |
 
 ## Source of the facts above
@@ -40,9 +40,9 @@ runs on it (`push: branches: [main, test, 'refactor/**']`) but no host follows i
   service_completed_successfully}`.
 - `deploy/aws/install-auto-deploy.sh` LAYOUTS comment for the "only what changed is rebuilt" /
   "the reset IS the deploy" distinction, mirrored in `deploy/auto-deploy.sh`'s own header comment.
-- Backup/restore behaviour and the podman requirement: `deploy/backup.sh:154` (`command -v podman
-  ... || die`), and `DEPLOYMENT.md`'s "Backups" section for the retention/verification model,
-  itself written from `deploy/backup.sh` and `deploy/restore.sh`.
+- Backup/restore behaviour and the engine detection (`FAPOMS_CONTAINER_CLI`, container/network
+  resolution per engine): `deploy/backup.sh`'s and `deploy/restore.sh`'s own header comments, and
+  `DEPLOYMENT.md`'s "Backups" section for the retention/verification model.
 - CI triggers and job names: `.github/workflows/ci.yml:20-24` (`push`/`pull_request` branches) and
   `:35,142` (`verify` and `database` jobs).
 
@@ -56,6 +56,9 @@ runs on it (`push: branches: [main, test, 'refactor/**']`) but no host follows i
   the hardened production compose with the migrator/runtime role split. Do not assume a fix
   verified on EC2 behaves identically on the homeserver, or vice versa — the migration path in
   particular is different (in-process on EC2, a separate `db-migrate` service on the homeserver).
-- **EC2 has no documented backup.** If that box starts holding data anyone depends on, `deploy/backup.sh`
-  needs a Docker code path before it can be relied on there (tracked as Phase 1.4 in
-  `docs/reorganization/PLAN.md`, out of scope for this documentation pass).
+- **EC2 has no scheduled backup, but it can now take one.** `deploy/backup.sh` and
+  `deploy/restore.sh` work under Docker as well as Podman (Phase 1.4 in
+  `docs/reorganization/PLAN.md`); the homeserver's podman path is unchanged. If EC2 starts holding
+  data anyone depends on, wire `deploy/backup.sh` to a timer there the way the homeserver's
+  `fapoms-backup.timer` does — `deploy/auto-deploy.sh` already self-updates both scripts by name on
+  every deploy, so whatever ships here reaches both hosts automatically.
