@@ -160,8 +160,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
       # Only for the boot check at the end of this job: the app refuses to start without a queue
-      # broker. (Its object store is started in that step: a service container cannot be given
-      # MinIO's `server` command.)
+      # broker and an object store it can reach.
       redis:
         image: redis:7-alpine
         ports:
@@ -171,6 +170,12 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # An S3 stand-in, not MinIO: MinIO's public images are no longer pullable from Docker Hub or
+      # quay. The app only needs to reach a bucket to boot; S3Mock is built for exactly that.
+      s3:
+        image: adobe/s3mock:4.7.0
+        ports:
+          - 9090:9090
 
     env:
       DB_ADMIN_URL: postgres://pgadmin:pgadmin_ci@127.0.0.1:5432/postgres
@@ -239,15 +244,11 @@ jobs:
           DB_DATABASE: fapoms_ci
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
-          S3_ENDPOINT: http://127.0.0.1:9000
+          S3_ENDPOINT: http://127.0.0.1:9090
           S3_FORCE_PATH_STYLE: 'true'
           AWS_ACCESS_KEY_ID: bootcheck
           AWS_SECRET_ACCESS_KEY: bootcheck-secret
           AWS_REGION: us-east-1
         run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=bootcheck -e MINIO_ROOT_PASSWORD=bootcheck-secret \
-            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
           npm run build:backend
-          timeout 60 sh -c 'until curl -fsS http://127.0.0.1:9000/minio/health/live; do sleep 2; done'
           node scripts/reorg/boot-check.mjs
