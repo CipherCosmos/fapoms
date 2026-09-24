@@ -41,7 +41,6 @@ import { GeoModule } from './modules/geo/geo.module';
 import { SearchModule } from './modules/search/search.module';
 import { CustomerMasterModule } from './modules/customer-master/customer-master.module';
 import { ValidationQueryModule } from './modules/validation-query/validation-query.module';
-import { QueueModule } from './infrastructure/queue/queue.module';
 import { SlaScannerModule } from './infrastructure/scheduler/sla-scanner.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { BillingEngineModule } from './modules/billing-engine/billing-engine.module';
@@ -55,6 +54,7 @@ import { RuleBypassModule } from './modules/platform/rule-bypass/rule-bypass.mod
 import { ServiceLogsModule } from './modules/platform/logs/service-logs.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { RetentionModule } from './infrastructure/retention/retention.module';
+import { BackgroundJobsModule } from './infrastructure/background-jobs/background-jobs.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
 import { ReportsModule } from './modules/reports/reports.module';
@@ -68,6 +68,7 @@ import { createResilientThrottlerStorage } from './infrastructure/http/throttlin
 import { MetricsService } from './infrastructure/observability/metrics.service';
 import { APP_GUARD } from '@nestjs/core';
 import { PlatformSettingsModule } from './infrastructure/settings/platform-settings.module';
+import { AppLinksModule } from './modules/app-links/app-links.module';
 import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
 
 @Module({
@@ -248,10 +249,14 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
     AssayerRemarksModule,
 
     // Background job queue
-    QueueModule,
+    // Uploads and other work that outlives its request: stored, queued, tracked on a row, and
+    // restored by every screen from the server (`/jobs`, the Jobs tray).
+    BackgroundJobsModule,
     SlaScannerModule,
 
     ExpenseModule,
+    // `/.well-known` files that let invite links open the field app (via deploy/Caddyfile rewrites).
+    AppLinksModule,
 
     // Reporting / Excel exports
     ReportsModule,

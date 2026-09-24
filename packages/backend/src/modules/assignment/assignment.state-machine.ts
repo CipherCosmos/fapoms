@@ -1,51 +1,22 @@
 import { BadRequestException } from '@nestjs/common';
 import { AssignmentEntity } from './assignment.entity';
-import { AssignmentStatus } from '@fapoms/shared';
+import { AssignmentStatus, ASSIGNMENT_TRANSITIONS, ASSIGNMENT_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 export class AssignmentStateMachine {
-  private static readonly VALID_PATHS: Record<AssignmentStatus, AssignmentStatus[]> = {
-    [AssignmentStatus.PENDING]: [AssignmentStatus.ACCEPTED, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED],
-    // COMPLETED is reachable from ACCEPTED, but only through `completeAudit`, which refuses it
-    // without a stated reason — see there. The desk cannot check in for somebody (the check-in
-    // is geofenced and lives in the field app), so without this a job whose assayer never
-    // opened the app could not be closed at all.
-    [AssignmentStatus.ACCEPTED]: [
-      AssignmentStatus.ACCEPTED,
-      AssignmentStatus.CHECKED_IN,
-      AssignmentStatus.COMPLETED,
-      AssignmentStatus.CANCELLED,
-    ],
-    [AssignmentStatus.CHECKED_IN]: [AssignmentStatus.CHECKED_IN, AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
-    // CHECKED_IN is reachable from IN_PROGRESS because a field check-in is retried: a flaky
-    // mobile connection, a GPS refresh, or a second attempt at the geofence all re-issue it
-    // after work has already started. Refusing that would fail a legitimate retry, so it is
-    // allowed here rather than being a backwards move nobody intended.
-    [AssignmentStatus.IN_PROGRESS]: [AssignmentStatus.IN_PROGRESS, AssignmentStatus.CHECKED_IN, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
-    // COMPLETED is a terminal workflow state that cannot be exited through generic transition endpoints.
-    // Reopening is strictly a privileged back-office operational command via AssignmentStateMachine.reopen().
-    [AssignmentStatus.COMPLETED]: [],
-    // A declined offer goes back on the market: reassigning it to somebody else is the whole
-    // point, and it re-enters as a PENDING offer to that person.
-    [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
-    /**
-     * Terminal. A cancellation is a decision that this work is not happening.
-     *
-     * This used to list PENDING, so the table declared that cancelled work could quietly become
-     * a live offer again. Nothing in the API could reach that edge — `POST :id/transition` has no
-     * PENDING branch at all — but `reassignAssignment` set the status directly, bypassing this
-     * table entirely, and so DID revive cancelled assignments: new owner, `cancel_reason` wiped,
-     * under an audit event that said only "reassigned". That path now refuses CANCELLED, and the
-     * table is corrected to match, so the declared machine and the enforced one agree.
-     *
-     * Reviving cancelled work needs its own command with its own permission, reason and audit —
-     * see `reopen()` below for the shape that takes. It is not an edge on this table.
-     */
-    [AssignmentStatus.CANCELLED]: [],
-  };
+  /**
+   * The transition table itself lives in `@fapoms/shared` (`ASSIGNMENT_TRANSITIONS`), with the
+   * notes on each edge, so the capability evaluators that tell the field app what it may do next
+   * read the very object this machine enforces. This is a reference to it, not a copy.
+   */
+  private static readonly VALID_PATHS: Record<AssignmentStatus, AssignmentStatus[]> = ASSIGNMENT_TRANSITIONS;
 
   private static validateTransition(current: AssignmentStatus, target: AssignmentStatus) {
     if (!AssignmentStateMachine.canTransition(current, target)) {
-      throw new BadRequestException(`Invalid transition path from '${current}' to '${target}'`);
+      throw withCode(
+        new BadRequestException(`Invalid transition path from '${current}' to '${target}'`),
+        ASSIGNMENT_ERROR_CODES.INVALID_ASSIGNMENT_TRANSITION,
+      );
     }
   }
 
@@ -71,6 +42,22 @@ export class AssignmentStateMachine {
     AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.CHECKED_IN);
     const prev = assignment.status;
     assignment.status = AssignmentStatus.CHECKED_IN;
+    return { previousState: prev, newState: assignment.status, userId };
+  }
+
+  /**
+   * Moving a job to another assayer as a fresh offer — `AssignmentService.reassignAssignment`.
+   *
+   * Through the table like every other move: PENDING -> PENDING (an open offer changes hands),
+   * ACCEPTED -> PENDING (before anyone has checked in), REJECTED -> PENDING (a declined offer goes to
+   * somebody else). CHECKED_IN and IN_PROGRESS have no PENDING edge, so a visit that has started
+   * cannot be reassigned; COMPLETED and CANCELLED have none either. The service refuses those with
+   * their own, more specific codes first; this is the backstop.
+   */
+  static reassign(assignment: AssignmentEntity, userId: string) {
+    AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.PENDING);
+    const prev = assignment.status;
+    assignment.status = AssignmentStatus.PENDING;
     return { previousState: prev, newState: assignment.status, userId };
   }
 
@@ -210,7 +197,15 @@ export class AssignmentStateMachine {
       throw new BadRequestException('A reason is required to reopen a completed assignment.');
     }
     const prev = assignment.status;
-    assignment.status = AssignmentStatus.ACCEPTED;
+    /**
+     * Reopen is a redo of the PAPERS, not of the visit (owner decision 2026-09-24, E6). The
+     * check-in and check-out the visit recorded still count and are not cleared, so the job goes
+     * back to the status that matches that evidence: CHECKED_IN when the assayer did arrive,
+     * ACCEPTED when the completion was closed without an arrival. (Reopening to ACCEPTED with
+     * `checkedInAt` still set was the incoherent pair the transition table warns about — a job
+     * "not yet arrived" carrying an arrival.)
+     */
+    assignment.status = assignment.checkedInAt ? AssignmentStatus.CHECKED_IN : AssignmentStatus.ACCEPTED;
     assignment.completionDate = null;
     assignment.completedWithoutCheckInReason = null;
     // Both explanations belong to the completion being undone. Left behind, the next completion
@@ -218,7 +213,12 @@ export class AssignmentStateMachine {
     // exist — and if the assayer does check out this time, the record would say a departure was
     // both present and explained away.
     assignment.completedWithoutCheckOutReason = null;
-    assignment.remarks = stated;
+    // `remarks` is NOT touched. It is the office's note on the job (edited through `update`, which
+    // tells the assayer via ASSIGNMENT_NOTE_CHANGED), and reopening used to overwrite it with the
+    // reopen reason — destroying the original note for good. The reason is recorded where reasons
+    // belong: the ASSIGNMENT_REOPENED audit event and the ASSIGNMENT_REOPENED notification, both
+    // written by `AssignmentService.reopen` from the same stated text. No screen reads a reopen
+    // reason back out of `remarks`.
     return { previousState: prev, newState: assignment.status, userId };
   }
 }

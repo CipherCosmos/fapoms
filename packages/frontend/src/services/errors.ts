@@ -328,6 +328,68 @@ const DOMAIN_ERROR_TRANSLATIONS: Partial<Record<ApiErrorCode, DomainErrorEntry>>
     action: 'Create a new assignment for this branch instead.',
     requiresRefresh: true,
   },
+  REASSIGN_AFTER_CHECK_IN: {
+    // The server names the assayer and the job; that sentence is the better one.
+    preferServerMessage: true,
+    message: 'The assayer has already checked in at this branch, so the job can no longer be moved to someone else.',
+    category: 'non-retryable',
+    translationCategory: 'business_rule',
+    title: 'Already Checked In',
+    action: 'Cancel the job instead, then plan the branch again.',
+    requiresRefresh: true,
+  },
+  RESCHEDULE_NOT_ALLOWED: {
+    // The server names the job and why (checked in, or finished); that sentence is the better one.
+    preferServerMessage: true,
+    message: 'This job can no longer be moved to another date.',
+    category: 'non-retryable',
+    translationCategory: 'business_rule',
+    title: 'Cannot Reschedule',
+    action: 'Only an open offer or an accepted job nobody has checked in to can take a new date.',
+    requiresRefresh: true,
+  },
+  OFFER_ALREADY_WITH_ASSAYER: {
+    // The server names the assayer and the offer number, and says what to do instead.
+    preferServerMessage: true,
+    message: 'This branch is already offered to this assayer and is waiting for their answer. Nothing new was created.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Already Offered To Them',
+    action: 'If they agreed on the phone, use Call & Assign to record their acceptance on that offer.',
+    requiresRefresh: true,
+  },
+  BRANCH_HAS_LIVE_OFFER: {
+    message: 'This branch is already offered to an assayer. A new offer was not created, and the existing one was not changed.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Branch Already Offered',
+    action: 'To give it to someone else, use Reassign on the existing job and write the reason.',
+    requiresRefresh: true,
+  },
+  ASSAYER_ON_LEAVE: {
+    // The server names the assayer and the leave dates; that sentence is the better one.
+    preferServerMessage: true,
+    message: 'The job date falls inside this assayer\'s recorded leave, so the job cannot be accepted for them.',
+    category: 'user-correction-required',
+    translationCategory: 'business_rule',
+    title: 'Assayer On Leave',
+    action: 'Pick a date outside their leave, or give the job to another assayer.',
+  },
+  ACCEPT_DATE_UNAVAILABLE: {
+    preferServerMessage: true,
+    message: 'That date cannot be used for this job — it is a holiday or non-working day, or outside the project dates.',
+    category: 'user-correction-required',
+    translationCategory: 'business_rule',
+    title: 'Date Not Available',
+    action: 'Choose a working day inside the project dates and try again.',
+  },
+  OFFICE_CHECK_IN_REASON_REQUIRED: {
+    message: 'Checking an assayer in from the office needs a written reason.',
+    category: 'user-correction-required',
+    translationCategory: 'validation',
+    title: 'Reason Needed',
+    action: 'Write why the office is checking them in, then try again.',
+  },
   NO_CLIENT_CONFIGURATION: {
     message: 'This client has no active billing configuration, so its work cannot be priced.',
     category: 'non-retryable',

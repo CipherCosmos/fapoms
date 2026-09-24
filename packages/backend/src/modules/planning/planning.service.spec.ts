@@ -252,4 +252,65 @@ describe('PlanningService', () => {
     mockRuleRepository.findOne.mockResolvedValue(null);
     await expect(service.updateRule('missing', {}, 'u-1')).rejects.toThrow(NotFoundException);
   });
+
+  /** The 2026-09-25 recommendations audit. */
+  describe('audit 2026-09-25', () => {
+    const branch = { id: 'b-1', latitude: 18.5, longitude: 73.8, clientId: null, state: 'Maharashtra' };
+    const ranked = (n: number) => Object.assign(
+      Array.from({ length: n }, (_, i) => ({
+        assayer: { id: `a-${i}`, displayName: `A${i}`, homeLatitude: 18.6, homeLongitude: 73.9, effectiveLatitude: 18.6, effectiveLongitude: 73.9 },
+        score: 100 - i * 0.1, breakdown: {}, contribution: {},
+        route: { distanceKm: 6, durationMinutes: 12, source: 'OSRM' },
+        homeRoute: { distanceKm: 140, durationMinutes: 170, source: 'OSRM' },
+        rankedFromLive: i === 0,
+      })),
+      { excluded: [] },
+    );
+
+    /** F9: the API returns the top N and says how many were ranked. */
+    it('F9: returns at most 100 candidates, and reports how many were ranked', async () => {
+      mockBranchRepository.findOne.mockResolvedValue(branch);
+      mockRecommendationEngine.recommend.mockResolvedValue(ranked(250));
+      const out = await service.getRecommendedCandidates('b-1');
+      expect(out).toHaveLength(100);
+      expect((out as any).candidateTotal).toBe(250);
+      // Fees are resolved for the returned rows only.
+      expect((mockFeePolicyService.resolveBaseFees.mock.calls.at(-1) as any)[0]).toHaveLength(100);
+    });
+
+    /** F2: the card carries the HOME figures the job is priced from, beside the ranked ones. */
+    it('F2: carries the home distance and says the ranking was live', async () => {
+      mockBranchRepository.findOne.mockResolvedValue(branch);
+      mockRecommendationEngine.recommend.mockResolvedValue(ranked(2));
+      const [live, home] = await service.getRecommendedCandidates('b-1');
+      expect(live).toMatchObject({ distanceKm: 6, homeDistanceKm: 140, homeDurationMinutes: 170, homeDistanceSource: 'OSRM', rankedFromLive: true });
+      expect(home.rankedFromLive).toBe(false);
+    });
+
+    it('passes the project through to the engine', async () => {
+      mockBranchRepository.findOne.mockResolvedValue(branch);
+      mockRecommendationEngine.recommend.mockResolvedValue(ranked(1));
+      await service.getRecommendedCandidates('b-1', {}, '2026-10-05', { projectId: 'p-1' });
+      const [, day, , , options] = mockRecommendationEngine.recommend.mock.calls.at(-1) as any[];
+      expect(options).toEqual({ projectId: 'p-1' });
+      // The requested calendar day, whatever zone reads it (F20).
+      expect((day as Date).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })).toBe('2026-10-05');
+    });
+
+    /**
+     * F20: the suggested date is stepped on the IST calendar. Faked at 01:00 IST on a Saturday
+     * (19:30 UTC the day before): "tomorrow" is Sunday the 4th in India — skipped — so Monday the 5th.
+     */
+    it('F20: suggests from the IST calendar, skipping an IST Sunday', async () => {
+      jest.useFakeTimers({ now: new Date('2026-10-02T19:30:00Z') }); // Sat 3 Oct, 01:00 IST
+      try {
+        mockBranchRepository.findOne.mockResolvedValue(branch);
+        const out = await service.suggestAuditDate('b-1');
+        expect(out.skipped[0]).toEqual({ date: '2026-10-04', reason: 'Sunday' });
+        expect(out.date).toBe('2026-10-05');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
 });

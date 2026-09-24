@@ -80,8 +80,23 @@ export const DOCUMENT_STAGE: Record<DocumentStage, StageWords> = {
   },
 };
 
-export const stageWords = (stage?: string | null): StageWords | null =>
-  (stage && DOCUMENT_STAGE[stage as DocumentStage]) || null;
+/**
+ * A file that has left the pipeline. It is not a stage anything moves THROUGH, so it stays out of
+ * `DOCUMENT_STAGE_ORDER` (the counts and the legend walk that), but a superseded file still shows
+ * up in a branch's history and must read as a word there — it used to fall through to the raw
+ * `ARCHIVED`.
+ */
+export const DOCUMENT_ARCHIVED: StageWords = {
+  label: 'Archived',
+  meaning: 'Replaced by a newer copy or withdrawn. Kept for the record only.',
+  color: 'var(--text-muted)', bg: 'var(--status-draft-bg)',
+};
+
+export const stageWords = (stage?: string | null): StageWords | null => {
+  if (!stage) return null;
+  if (stage === 'ARCHIVED') return DOCUMENT_ARCHIVED;
+  return DOCUMENT_STAGE[stage as DocumentStage] ?? null;
+};
 
 /**
  * The kinds of file, left to right in the order the paperwork actually flows: the data in, the

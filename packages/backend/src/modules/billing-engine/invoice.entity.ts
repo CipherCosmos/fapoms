@@ -9,7 +9,10 @@ import { InvoiceStatus } from '@fapoms/shared';
 /**
  * A client invoice: a set of completed assignments for one client.
  *
- *   DRAFT → ISSUED ("Sent") → PAID   (+ CANCELLED, which returns its lines to UNBILLED)
+ *   DRAFT → AWAITING_HOD → HOD_APPROVED → ISSUED ("Sent") → PAID
+ *   (+ CANCELLED, which returns its lines to UNBILLED; an HOD rejection returns it to DRAFT)
+ *
+ * The HOD step (2026-09-24): only an invoice the HOD approved may be marked sent to the client.
  *
  * Part-payment is derived (`paidAmount > 0 && outstandingAmount > 0`), not a status.
  */
@@ -63,6 +66,39 @@ export class BillingInvoiceEntity extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  /** Who sent the draft for the HOD's final approval, and when (DRAFT → AWAITING_HOD). */
+  @Column({ name: 'hod_requested_at', type: 'timestamptz', nullable: true })
+  hodRequestedAt: Date | null;
+
+  @Column({ name: 'hod_requested_by', type: 'uuid', nullable: true })
+  hodRequestedBy: string | null;
+
+  /**
+   * The HOD's final approval (owner, 2026-09-24) — the second approval, after the office's, that
+   * money needs before it can move. Moves the invoice
+   * AWAITING_HOD → HOD_APPROVED; only then can it be marked sent to the client.
+   * Never backfilled: whatever was waiting at deploy waits for the HOD like everything after it.
+   */
+  @Column({ name: 'hod_approved_at', type: 'timestamptz', nullable: true })
+  hodApprovedAt: Date | null;
+
+  @Column({ name: 'hod_approved_by', type: 'uuid', nullable: true })
+  hodApprovedBy: string | null;
+
+  /**
+   * The last time the HOD sent it back to the office, by whom and why. Kept (not cleared by the
+   * office's next approval) so the HOD's second look sees what the first one said; every
+   * rejection is also a `billing_history` row.
+   */
+  @Column({ name: 'hod_rejected_at', type: 'timestamptz', nullable: true })
+  hodRejectedAt: Date | null;
+
+  @Column({ name: 'hod_rejected_by', type: 'uuid', nullable: true })
+  hodRejectedBy: string | null;
+
+  @Column({ name: 'hod_reject_reason', type: 'text', nullable: true })
+  hodRejectReason: string | null;
 
   @ManyToOne(() => ClientEntity, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'client_id' })

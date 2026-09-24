@@ -62,4 +62,22 @@ describe('reading a single assignment', () => {
     const res: any = await (c as any).findOne('asg-1', staff, undefined);
     expect(res.id).toBe('asg-1');
   });
+
+  // Shape (2026-09-24): the detail drawer names the project — staff get its identity only.
+  it('loads the project for staff and sends only its identity', async () => {
+    const found = {
+      id: 'asg-1', assayerId: 'asr-2',
+      projectBranch: { branch: { name: 'Fort Branch' }, project: { id: 'p-1', name: 'SBI Q3', projectCode: 'SBI-Q3', contractValue: 900000 } },
+    };
+    const c = controllerWith(found);
+    const res: any = await (c as any).findOne('asg-1', { user: { id: 'u-9', roles: [SystemRole.OPERATIONS] } }, undefined);
+    expect(c.assignmentService.findOne).toHaveBeenCalledWith('asg-1', { withProject: true });
+    expect(res.projectBranch.project).toEqual({ id: 'p-1', name: 'SBI Q3', projectCode: 'SBI-Q3', clientId: null });
+  });
+
+  it('does not ask for the project on the field app\'s read', async () => {
+    const c = controllerWith(assignment('asr-1'));
+    await (c as any).findOne('asg-1', asAssayer('asr-1'), undefined);
+    expect(c.assignmentService.findOne).toHaveBeenCalledWith('asg-1', { withProject: false });
+  });
 });

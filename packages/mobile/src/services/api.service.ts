@@ -20,6 +20,9 @@ import {
 } from './server-config';
 import { cleanWorkforceVocabulary, type WorkforceVocabulary } from './workforce-vocabulary';
 import { mapAssayerStatementResponse } from './assayer-statement-mapping';
+import { readAttendanceResponse } from './attendance-response';
+import { expenseBranchName } from './expense-mapping';
+import { registrationGateVerdict, type RegistrationGateVerdict } from './registration-gate-verdict';
 
 /** One row of the per-category notification preference set returned by the API. */
 export interface NotificationPreference {
@@ -371,6 +374,33 @@ export class MobileApiService {
       return 'unreachable';
     } catch {
       return 'unreachable';
+    }
+  }
+
+  /**
+   * Ask the server whether this session is still registration-only. See
+   * `registration-gate-verdict.ts` for how the answer is read.
+   *
+   * `GET /notifications/unread-count` is the probe because it is the cheapest route every
+   * signed-in assayer may read that is NOT marked `@OnboardingAllowed()` — so the registration
+   * gate answers it, and it answers with a few bytes. The server re-reads the person's stage when
+   * its short-lived principal cache expires, so an approval shows up within minutes, not at once.
+   */
+  static async checkRegistrationGate(): Promise<RegistrationGateVerdict> {
+    if (!this.authToken) return 'unknown';
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/unread-count`, {}, 8000);
+      let code: string | undefined;
+      if (!response.ok) {
+        try {
+          code = (await response.clone().json())?.code;
+        } catch {
+          code = undefined;
+        }
+      }
+      return registrationGateVerdict(response.status, code);
+    } catch {
+      return 'unknown';
     }
   }
 
@@ -1097,8 +1127,9 @@ export class MobileApiService {
   static async rejectAssignment(
     assignmentId: string,
     reason: string,
+    clientRequestId?: string,
   ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
-    const { ok, status, error, code } = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
+    const { ok, status, error, code } = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason, clientRequestId);
     return { success: ok, error: ok ? undefined : (error || 'Failed to reject assignment'), status, code };
   }
 
@@ -1123,6 +1154,33 @@ export class MobileApiService {
       return { success: response.ok && body?.success !== false, error: body?.message, code: body?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error updating availability' };
+    }
+  }
+
+  /**
+   * The assayer's own digital ID card — its face, whether it is issued (and if not, why), and their
+   * photograph. There is no download: the card is shown only in this app (owner, 2026-09-23).
+   */
+  static async getMyIdCard(): Promise<{ success: boolean; data?: MyIdCard; error?: string; code?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/me/id-card`, {}, 15000);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body?.success === false) return { success: false, error: body?.message, code: body?.code };
+      return { success: true, data: (body?.data ?? body) as MyIdCard };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error loading your ID card' };
+    }
+  }
+
+  /** The live QR and 6-digit code — asked again every minute while the card is on screen. */
+  static async getIdCardCode(): Promise<{ success: boolean; data?: LiveIdCardCode; error?: string; code?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/me/id-card/code`, {}, 10000);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body?.success === false) return { success: false, error: body?.message, code: body?.code };
+      return { success: true, data: (body?.data ?? body) as LiveIdCardCode };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error refreshing your ID card code' };
     }
   }
 
@@ -1557,8 +1615,8 @@ export class MobileApiService {
       return (data.data || []).map((e: any) => ({
         id: e.id,
         assignmentId: e.assignmentId,
-        branchName:
-          e.assignment?.projectBranch?.branchName || e.assignment?.branchName || 'Unknown branch',
+        // `projectBranch.branch.name` (see `expense-mapping.ts`); the fallback stays for an older server.
+        branchName: expenseBranchName(e) || 'Unknown branch',
         category: e.category,
         amount: Number(e.amount) || 0,
         description: e.description || '',
@@ -1698,6 +1756,9 @@ export class MobileApiService {
           // way. The earnings screen sums these with `+`, so leaving them as strings would
           // concatenate rather than add ("0" + "180.00" = "0180.00") and show a nonsense total.
           expenses: (item.expenses || []).map((e: any) => ({ ...e, amount: Number(e.amount) || 0 })),
+          // Passed through untouched: the server's own verdict per action (see `record-capabilities`).
+          // Absent from an older server, which the reader treats as "not allowed".
+          capabilities: item.capabilities ?? undefined,
         };
       });
   }
@@ -1772,9 +1833,13 @@ export class MobileApiService {
     assignmentId: string,
     status: AssayerAssignment['status'],
     reason?: string,
+    clientRequestId?: string,
   ): Promise<{ ok: boolean; status: number; error?: string; code?: string }> {
-    const body: { targetStatus: string; reason?: string } = { targetStatus: status };
+    const body: { targetStatus: string; reason?: string; clientRequestId?: string } = { targetStatus: status };
     if (reason) body.reason = reason;
+    // The server's idempotency key for this route (`assignment_idempotency_records`): a retry of
+    // an accept or decline whose first response was lost is answered with the original result.
+    if (clientRequestId) body.clientRequestId = clientRequestId;
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -1800,21 +1865,22 @@ export class MobileApiService {
     lng: number,
     accuracy?: number,
     syncToken?: string,
+    /**
+     * When the phone noticed the arrival (the geofence event, or the tap), which can be well before
+     * this request goes out if it waited for signal. Sent as `arrivedAt`; `timestamp` keeps meaning
+     * "when this request was made". The server records `arrivedAt` after checking it against the
+     * same day, its age and the location trail; an older server ignores it (untyped body).
+     */
+    arrivedAt?: string,
   ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-in`, {
       method: 'POST',
-      body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
+      body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString(), ...(arrivedAt ? { arrivedAt } : {}) }),
     });
-    const resData = await response.json().catch(() => ({}));
-    return {
-      success: response.ok && resData.success !== false,
-      // The human sentence, not the machine code. The server refuses check-ins with a code
-      // ("NOT_SCHEDULED_TODAY", "TOO_FAR_FROM_BRANCH") *and* a message explaining what to do;
-      // surfacing the code put "TOO_FAR_FROM_BRANCH" in the assayer's toast.
-      error: resData.message || resData.error,
-      code: resData.code,
-      status: response.status,
-    };
+    // The human sentence, not the machine code, goes in `error`; the code comes from `code` OR —
+    // on the route's HTTP 200 `{ success: false, error: CODE, message }` refusal — from `error`.
+    // See `attendance-response.ts`: reading only `code` lost every 200-shaped refusal's code.
+    return readAttendanceResponse(response.ok, response.status, await response.json().catch(() => ({})));
   }
 
   /**
@@ -1838,14 +1904,8 @@ export class MobileApiService {
       method: 'POST',
       body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
     });
-    const resData = await response.json().catch(() => ({}));
-    return {
-      success: response.ok && resData.success !== false,
-      // The sentence, not the code — same reasoning as check-in above.
-      error: resData.message || resData.error,
-      code: resData.code,
-      status: response.status,
-    };
+    // Same two refusal shapes as check-in above; one reader for both.
+    return readAttendanceResponse(response.ok, response.status, await response.json().catch(() => ({})));
   }
 
   /**
@@ -2403,4 +2463,33 @@ export class MobileApiService {
       return false;
     }
   }
+}
+
+/** The digital ID card's face, as the server decides it (`idCardFace`) — plus the person's photo. */
+export interface MyIdCard {
+  issued: boolean;
+  blockedBecause: string[];
+  gaps: string[];
+  issuedOn: string;
+  validTill: string;
+  jobTitle: string;
+  fullName: string;
+  assayerCode: string;
+  department: string | null;
+  location: string | null;
+  organisation: string | null;
+  signatoryName: string | null;
+  signatoryTitle: string | null;
+  helplinePhone: string | null;
+  officeAddress: string | null;
+  photo: string | null;
+}
+
+/** The next minute's QR (a PNG data URL) and 6-digit code, and when they change. */
+export interface LiveIdCardCode {
+  verifyUrl: string;
+  qr: string;
+  code: string;
+  changesAt: number;
+  serverNow: number;
 }

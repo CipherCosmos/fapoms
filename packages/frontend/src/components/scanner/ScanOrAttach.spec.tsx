@@ -1,8 +1,9 @@
 import React from 'react';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { scanProfileFor } from '@fapoms/shared';
-import { ScanOrAttach } from './ScanOrAttach';
+import { ScanOrAttach, combineScannedPages } from './ScanOrAttach';
 import { DocumentScanner } from './DocumentScanner';
+import { blobBytes } from './jpeg-pages-to-pdf';
 
 /**
  * The scanner's own maths is tested in `scan-image.spec.ts`, against photographs built pixel by
@@ -240,5 +241,122 @@ describe('knowing which document it is scanning', () => {
 
     expect(scanProfileFor('PAN_CARD').multiPage).toBe(false);
     expect(scanProfileFor('NDA').multiPage).toBe(true);
+  });
+});
+
+/**
+ * The candidate's own form is filled in on a phone, paper in hand: one big camera button per
+ * document and the file picker as a small link. HR's screens keep the two equal buttons.
+ */
+describe('the candidate form\'s camera-first layout', () => {
+  it('draws one big camera button and a small "or choose file" link', () => {
+    withCamera(jest.fn());
+    render(<ScanOrAttach variant="primary" documentLabel="PAN card" requirement="PAN_CARD" onFiles={jest.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Take photo' })).toHaveClass('btn-primary');
+    expect(screen.getByText('or choose file')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Scan' })).not.toBeInTheDocument();
+  });
+
+  it('names the camera button for what it does next — "Retake" once something is attached', () => {
+    withCamera(jest.fn());
+    render(<ScanOrAttach variant="primary" scanLabel="Retake" documentLabel="PAN card" onFiles={jest.fn()} />);
+    expect(screen.getByRole('button', { name: 'Retake' })).toBeInTheDocument();
+  });
+
+  it('makes the file picker the big button where there is no camera', () => {
+    withCamera(undefined);
+    render(<ScanOrAttach variant="primary" documentLabel="PAN card" onFiles={jest.fn()} />);
+
+    expect(screen.queryByRole('button', { name: 'Take photo' })).not.toBeInTheDocument();
+    expect(screen.getByText('Choose file').closest('label')).toHaveClass('btn-primary');
+  });
+
+  it('keeps the equal pair everywhere else', () => {
+    withCamera(jest.fn());
+    render(<ScanOrAttach documentLabel="PAN card" onFiles={jest.fn()} />);
+    expect(screen.getByRole('button', { name: 'Scan' })).toHaveClass('btn-secondary');
+    expect(screen.getByText('Choose file').closest('label')).toHaveClass('btn-secondary');
+  });
+});
+
+describe('a multi-page scan', () => {
+  const jpeg = (fill: number) => new File(
+    [new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x20, 0x00, 0x10, 0x03,
+      0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01, fill, fill, 0xff, 0xd9])],
+    `page-${fill}.jpg`, { type: 'image/jpeg' },
+  );
+
+  /** It used to upload page 1 and drop the rest. */
+  it('becomes one PDF with every page in it', async () => {
+    const [pdf, ...rest] = await combineScannedPages([jpeg(1), jpeg(2), jpeg(3)], 'Rent agreement');
+    expect(rest).toEqual([]);
+    expect(pdf.type).toBe('application/pdf');
+    expect(pdf.name).toBe('rent-agreement.pdf');
+    const text = new TextDecoder('latin1').decode(await blobBytes(pdf));
+    expect(text).toMatch(/\/Count 3/);
+    expect(text.trimEnd().endsWith('%%EOF')).toBe(true);
+  });
+
+  it('leaves a single page as the JPEG it was', async () => {
+    const one = jpeg(1);
+    expect(await combineScannedPages([one], 'PAN card')).toEqual([one]);
+  });
+});
+
+describe('the camera it opens', () => {
+  /** A face photo is taken of oneself, so it starts on the screen-side camera. */
+  it('starts on the front camera for the face photograph', async () => {
+    const getUserMedia = jest.fn().mockResolvedValue(stream);
+    withCamera(getUserMedia);
+
+    await act(async () => {
+      render(<DocumentScanner documentLabel="Photograph" profile={scanProfileFor('PHOTOGRAPH')} onCancel={jest.fn()} onScanned={jest.fn()} />);
+    });
+
+    expect(getUserMedia.mock.calls[0][0].video.facingMode).toEqual({ ideal: 'user' });
+  });
+
+  it('switches between the front and back cameras, stopping the one it leaves', async () => {
+    const getUserMedia = jest.fn().mockResolvedValue(stream);
+    withCamera(getUserMedia);
+
+    await act(async () => {
+      render(<DocumentScanner documentLabel="PAN card" profile={scanProfileFor('PAN_CARD')} onCancel={jest.fn()} onScanned={jest.fn()} />);
+    });
+    stopped.mockClear();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Use the front camera' })); });
+
+    expect(stopped).toHaveBeenCalled();
+    expect(getUserMedia.mock.calls.at(-1)[0].video.facingMode).toEqual({ ideal: 'user' });
+    expect(screen.getByRole('button', { name: 'Use the back camera' })).toBeInTheDocument();
+  });
+
+  /** The finish is the document's: no Colour / Document / High contrast choice put to the person. */
+  it('asks nobody to choose a finish', async () => {
+    withCamera(jest.fn().mockResolvedValue(stream));
+    await act(async () => {
+      render(<DocumentScanner documentLabel="NDA" profile={scanProfileFor('NDA')} onCancel={jest.fn()} onScanned={jest.fn()} />);
+    });
+    expect(screen.queryByRole('button', { name: /High contrast|Colour/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-finish', 'document');
+  });
+
+  /** A refused camera is not a dead end: the photo already on the phone is one press away. */
+  it('offers "Choose photo" when the camera cannot be opened, and hands the file back', async () => {
+    withCamera(jest.fn().mockRejectedValue(Object.assign(new Error('nope'), { name: 'NotAllowedError' })));
+    const onScanned = jest.fn();
+
+    await act(async () => {
+      render(<DocumentScanner documentLabel="Photograph" profile={scanProfileFor('PHOTOGRAPH')} onCancel={jest.fn()} onScanned={onScanned} />);
+    });
+
+    expect(await screen.findByRole('button', { name: 'Choose photo' })).toBeInTheDocument();
+    const input = screen.getByTestId('scanner-choose-photo') as HTMLInputElement;
+    // A face photo is an image, never a PDF.
+    expect(input.accept).not.toMatch(/pdf/);
+    const file = new File(['x'], 'me.jpg', { type: 'image/jpeg' });
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(onScanned).toHaveBeenCalledWith([file]);
   });
 });

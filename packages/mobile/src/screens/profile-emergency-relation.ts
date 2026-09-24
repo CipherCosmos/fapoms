@@ -27,21 +27,40 @@ export interface EmergencyRelationSelection {
   otherText: string;
 }
 
-/** Read a stored value into `{ choice, otherText }`. Blank input means nothing is chosen yet -
- *  it is not forced into "Other" with an empty box, which would look like a required field the
- *  assayer had already answered wrong. */
+/** Read a stored (or in-progress) value into `{ choice, otherText }`. Blank input means nothing
+ *  is chosen yet - it is not forced into "Other" with an empty box, which would look like a
+ *  required field the assayer had already answered wrong.
+ *
+ *  The typed text is returned exactly as typed, spaces included. It used to be trimmed here, and
+ *  since the box re-reads its text from this on every keystroke, a space typed at the end of a word
+ *  vanished before the next letter arrived - "Family friend" could not be typed at all. Trimming
+ *  happens once, on save (`emergencyRelationForSave`). */
 export function resolveEmergencyRelation(value: string | null | undefined): EmergencyRelationSelection {
-  const trimmed = String(value ?? '').trim();
+  const raw = String(value ?? '');
+  const trimmed = raw.trim();
   if (!trimmed) return { choice: '', otherText: '' };
+  // "Other" chosen with nothing typed yet - see `composeEmergencyRelation`.
+  if (trimmed === EMERGENCY_RELATION_OTHER) return { choice: EMERGENCY_RELATION_OTHER, otherText: '' };
   if ((EMERGENCY_RELATIONS as readonly string[]).includes(trimmed)) {
     return { choice: trimmed, otherText: '' };
   }
-  return { choice: EMERGENCY_RELATION_OTHER, otherText: trimmed };
+  return { choice: EMERGENCY_RELATION_OTHER, otherText: raw.replace(/^\s+/, '') };
 }
 
-/** The value actually saved: the fixed choice as-is, or the typed text when the choice is
- *  "Other" - never the literal word "Other" itself, since that would replace whatever the
- *  assayer typed with a label that names nothing. */
+/** The in-progress value while the form is being edited: the fixed choice as-is, or the typed text
+ *  when the choice is "Other".
+ *
+ *  "Other" with nothing typed yet is held as the word "Other" itself. It used to become '', which
+ *  reads back as nothing chosen - so tapping "Other" did nothing at all and the box to type in
+ *  never appeared. The word is never saved: `emergencyRelationForSave` turns it back into ''. */
 export function composeEmergencyRelation(choice: string, otherText: string): string {
-  return choice === EMERGENCY_RELATION_OTHER ? otherText.trim() : choice;
+  if (choice !== EMERGENCY_RELATION_OTHER) return choice;
+  return otherText.trim() ? otherText : EMERGENCY_RELATION_OTHER;
+}
+
+/** What is actually sent: trimmed, and never the bare word "Other", which names nobody - an
+ *  "Other" left empty saves as no relation, the same as it did before. */
+export function emergencyRelationForSave(value: string | null | undefined): string {
+  const trimmed = String(value ?? '').trim();
+  return trimmed === EMERGENCY_RELATION_OTHER ? '' : trimmed;
 }

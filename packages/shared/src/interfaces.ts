@@ -662,6 +662,14 @@ export interface BillingInvoice extends AuditMetadata {
   paidAmount: number;
   outstandingAmount: number;
   notes?: string | null;
+  /** The HOD step (2026-09-24): who sent it for final approval, who approved it, and the last rejection. */
+  hodRequestedAt?: string | null;
+  hodRequestedBy?: string | null;
+  hodApprovedAt?: string | null;
+  hodApprovedBy?: string | null;
+  hodRejectedAt?: string | null;
+  hodRejectedBy?: string | null;
+  hodRejectReason?: string | null;
   entries?: BillingEntry[];
   payments?: BillingPayment[];
   /** On list rows only. */
@@ -709,6 +717,16 @@ export interface AssayerPayable extends AuditMetadata {
   paidAmount: number;
   approvedAt?: string | null;
   approvedBy?: string | null;
+  /**
+   * The HOD's final approval (2026-09-24). An APPROVED payable without it is waiting for the HOD
+   * and cannot be paid; with it, it is ready to pay.
+   */
+  hodApprovedAt?: string | null;
+  hodApprovedBy?: string | null;
+  /** The last HOD rejection, kept so the office sees why the payout came back to them. */
+  hodRejectedAt?: string | null;
+  hodRejectedBy?: string | null;
+  hodRejectReason?: string | null;
   paidAt?: string | null;
   paidBy?: string | null;
   rateSnapshot?: Record<string, unknown> | null;
@@ -774,6 +792,12 @@ export interface BillingOverview {
     dueCount: number;
     approvedCount: number;
     heldCount: number;
+    /**
+     * The part of `approved` still waiting for the HOD's final approval (2026-09-24) — approved by
+     * the office, not payable yet. Ready to pay = `approvedCount − awaitingHodCount`.
+     */
+    awaitingHod?: number;
+    awaitingHodCount?: number;
     /** Σ net on PENDING payables not yet in any claim invoice cycle. */
     unbilled?: number;
     unbilledCount?: number;

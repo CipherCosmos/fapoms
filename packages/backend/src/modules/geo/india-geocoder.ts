@@ -226,6 +226,15 @@ export async function pincodeAuthority(pin: string): Promise<{ state: string; di
  * a wrong guess from an unreliable source is worse than "unknown", so when
  * Google has no key, errors, or returns no sane in-state result, we return
  * null and let the caller treat the location as missing. */
+/**
+ * Whether the precise Google tier is configured. Without it the bulk (`precise: false`) path answers
+ * from the pincode, district and state alone, so a bulk caller can treat two addresses in one
+ * pincode as one question (see the branch import's `geocodeKey`).
+ */
+export function isGoogleGeocodingConfigured(): boolean {
+  return !!process.env.GOOGLE_MAPS_API_KEY;
+}
+
 export async function geocodeIndia(
   address: string,
   city: string,
@@ -233,7 +242,7 @@ export async function geocodeIndia(
   state: string,
   pincode?: string | null,
 ): Promise<GeocodeResult | null> {
-  if (!process.env.GOOGLE_MAPS_API_KEY) return null;
+  if (!isGoogleGeocodingConfigured()) return null;
   const pin = pincode || (address || '').match(/\b\d{6}\b/)?.[0] || null;
   return googleGeocode(address, city, district, state, pin);
 }

@@ -14,6 +14,10 @@ import {
   isQualifyingStanding, lifecycleBucketOf, LIFECYCLE_BUCKET_TINT,
   ASSAYER_LIFECYCLE_BUCKETS, LIFECYCLE_RING_COLORS, MapEmpanelment,
 } from '../utils/clientColors';
+import { SATELLITE_TILE_OPTIONS, SATELLITE_TILE_URL, STREET_TILE_OPTIONS, STREET_TILE_URL } from './geo/basemap';
+import {
+  assayerPopupHtml as buildAssayerPopupHtml, branchSlaTooltip, densityPopupHtml, PopupVerdict,
+} from './planningMapPopups';
 
 /** Stable empty roster, so "not loaded yet" is not a new array on every render. */
 const NO_ASSAYERS: any[] = [];
@@ -737,17 +741,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
      * for the street map and Esri's public World Imagery for satellite.
      */
     const isSatellite = effectiveMapStyle === 'satellite';
-    const tileUrl = isSatellite
-      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-
-    tileLayerRef.current = L.tileLayer(tileUrl, {
-      subdomains: ['a', 'b', 'c'], // ignored by the Esri URL (it has no {s})
-      maxZoom: 19,
-      attribution: isSatellite
-        ? '&copy; Esri, Maxar, Earthstar Geographics'
-        : '&copy; OpenStreetMap contributors',
-    }).addTo(map);
+    tileLayerRef.current = isSatellite
+      ? L.tileLayer(SATELLITE_TILE_URL, SATELLITE_TILE_OPTIONS).addTo(map)
+      : L.tileLayer(STREET_TILE_URL, STREET_TILE_OPTIONS).addTo(map);
 
     /**
      * No keyless DARK raster provider survives, so the dark style is OpenStreetMap inverted at the
@@ -873,9 +869,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
           if (effectiveSlaEnabled && (isSelectedForSla || (isHighRiskSla && !selectedBranchId))) {
             const slaColor = slaEnabledProp ? '#f97316' : '#ef4444';
-            const slaLabel = slaEnabledProp
-              ? `🛡️ Minimum distance met: more than ${effectiveSlaRadius} km away\nCurrent branch: ${b.name}`
-              : `⚠️ Too close to branch — inside the ${effectiveSlaRadius} km minimum distance: ${b.name}`;
+            const slaLabel = branchSlaTooltip(b.name, effectiveSlaRadius, !!slaEnabledProp);
             const riskCircle = L.circle([lat, lng], {
               radius: effectiveSlaRadius * 1000,
               color: slaColor,
@@ -1082,27 +1076,23 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
           // What every assayer popup now says regardless of branch selection: who they are in
           // the lifecycle, whether they are already committed today, and which banks they hold
-          // a standing with — the control-center facts, on the pin itself.
+          // a standing with — the control-center facts, on the pin itself. Built by
+          // `assayerPopupHtml`, which escapes every value that came from a record: Leaflet sets
+          // a popup string as innerHTML.
           const bucket = lifecycleBucketOf(assayer.lifecycleStatus);
           const tint = LIFECYCLE_BUCKET_TINT[bucket.key] ?? { bg: '#e2e8f0', fg: '#334155' };
-          const lifecycleChip = `<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:${tint.bg};color:${tint.fg};font-size:var(--text-3xs);font-weight:700;">${assayer.lifecycleStatus ?? '—'}</span>`;
-          const availabilityLine = assayer.assignedToday
-            ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">📌 Assigned today${assayer.openAssignments > 1 ? ` · ${assayer.openAssignments} open` : ''}</div>`
-            : `<div style="margin-top:3px;color:#047857;font-weight:600;">✅ Free today${assayer.openAssignments > 0 ? ` · ${assayer.openAssignments} open elsewhere` : ''}</div>`;
-          const approxLine = assayer.approxLocation
-            ? `<div style="margin-top:3px;font-size:var(--text-3xs);color:#92400e;">📍 Approximate area — the exact address is still being located</div>`
-            : '';
           const emps: MapEmpanelment[] = assayer.empanelments ?? [];
-          const bankRows = emps.slice(0, 4).map((e) =>
-            `<div style="display:flex;align-items:center;gap:5px;font-size:var(--text-2xs);">`
-            + `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${clientColorOf(e.clientId)};"></span>`
-            + `<span>${e.clientName}</span><span style="color:#666;">— ${e.status}</span></div>`,
-          ).join('');
-          const banksBlock = emps.length
-            ? `<div style="margin-top:4px;border-top:1px solid #e2e8f0;padding-top:3px;">${bankRows}`
-              + (emps.length > 4 ? `<div style="font-size:var(--text-3xs);color:#666;">+${emps.length - 4} more</div>` : '')
-              + `</div>`
-            : `<div style="margin-top:4px;font-size:var(--text-3xs);color:#94a3b8;">No bank empanelments</div>`;
+          const popupBase = {
+            markerColor,
+            displayName: assayer.displayName,
+            assayerCode: assayer.assayerCode,
+            lifecycleStatus: assayer.lifecycleStatus,
+            tint,
+            assignedToday: assayer.assignedToday,
+            openAssignments: assayer.openAssignments,
+            approxLocation: assayer.approxLocation,
+            empanelments: emps.map((e) => ({ clientName: e.clientName, status: e.status, color: clientColorOf(e.clientId) })),
+          };
 
           // Filled in by whichever of the two branches below applies, then handed to the
           // reconciler together with the icon. Assayer pins away from a selected branch carry a
@@ -1115,34 +1105,27 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             // reassigned out from under it while the pin waits for a click.
             const routeTarget = selectedBranchLatLng;
             const routeBranchName = selectedBranch?.name || 'Target Branch';
-            const slaStatus = slaCompliant === null ? '' : slaCompliant
-              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ More than ${effectiveSlaRadius} km away — minimum distance met</div>`
-              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Too close to branch — within ${effectiveSlaRadius} km</div>`;
             // Surface the engine's verdict on the pin itself — rank and score when eligible,
             // the blocking reason when not. A breach always wins over a stale ranking: an
             // assayer can be in `rankedCandidates` (unfiltered by radius, e.g. when only the
             // map's own SLA-risk layer is on) while still standing inside the restricted zone.
-            const verdict = blocked
-              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — ${blocked.reason}</div>` +
-                (blocked.detail ? `<div style="font-size:var(--text-3xs);color:#92400e;">└─ ${blocked.detail}</div>` : '')
+            const verdict: PopupVerdict = blocked
+              ? { kind: 'blocked', reason: blocked.reason, detail: blocked.detail }
               : inBreach
-              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — within the ${effectiveSlaRadius}km restricted zone</div>`
+              ? { kind: 'breach' }
               : ranking
-              ? `<div style="margin-top:3px;color:#047857;font-weight:600;">#${ranking.rank} recommended · score ${ranking.score ?? '—'}</div>`
-              : '';
-            assayerPopupHtml = `
-              <div style="color:#000;font-family:sans-serif;font-size:var(--text-xs);min-width:180px;">
-                <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.displayName} ${lifecycleChip}</b>
-                <div>Code: <b>${assayer.assayerCode}</b></div>
-                <div>Distance: <b>~${straightDist.toFixed(1)} km</b> <span style="color:#666;">straight line</span></div>
-                ${verdict}
-                ${slaStatus}
-                ${availabilityLine}
-                ${approxLine}
-                ${banksBlock}
-                ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:var(--text-3xs);color:#666;">Click to show route</div>'}
-              </div>
-            `;
+              ? { kind: 'ranked', rank: ranking.rank, score: ranking.score }
+              : null;
+            assayerPopupHtml = buildAssayerPopupHtml({
+              ...popupBase,
+              selectedBranch: {
+                straightDistanceKm: straightDist,
+                slaRadiusKm: effectiveSlaRadius,
+                slaCompliant,
+                verdict,
+                routable: !(blocked || inBreach),
+              },
+            });
             assayerOnClick = () => {
               setSelectedAssayerForRouting({
                 ...assayer,
@@ -1155,15 +1138,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               });
             };
           } else {
-            assayerPopupHtml = `
-              <div style="color:#000; font-family:sans-serif; font-size:var(--text-xs); min-width: 170px;">
-                <b style="color:${markerColor}; display:block; margin-bottom: 4px;">${assayer.displayName} ${lifecycleChip}</b>
-                <div>Code: <b>${assayer.assayerCode}</b></div>
-                ${availabilityLine}
-                ${approxLine}
-                ${banksBlock}
-              </div>
-            `;
+            assayerPopupHtml = buildAssayerPopupHtml(popupBase);
           }
 
           desiredMarkers.set(`assayer-${assayer.id}`, {
@@ -1217,13 +1192,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           dashArray: isHigh ? 'none' : '4, 6'
         }).addTo(map);
 
-        densityCircle.bindPopup(`
-          <div style="color:#000; font-size:var(--text-2xs); font-family:sans-serif; min-width: 120px;">
-            <b style="display:block; margin-bottom: 4px;">${city} Audit Density</b>
-            <div>Audit sites: <b>${data.count}</b></div>
-            <div style="margin-top: 4px; font-weight:600; color:${color}">${isHigh ? '🔥 High Volume' : 'Standard Volume'}</div>
-          </div>
-        `);
+        densityCircle.bindPopup(densityPopupHtml(city, data.count, color, isHigh));
         circlesRef.current.push(densityCircle);
       });
     }
@@ -1476,7 +1445,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             </div>
           </div>
         ) : (
-          <button type="button" onClick={() => setShowLegend(true)} style={{
+          <button type="button" onClick={() => setShowLegend(true)} title="Show what the map colours and symbols mean" style={{
             position: 'absolute',
             bottom: '20px',
             left: '20px',

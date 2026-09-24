@@ -260,16 +260,22 @@ const signIn = async (username, seedPw, changePath) => {
   rec('EXC-5', afterReplay.length === 1, `a redelivered worker event books nothing extra (${afterReplay.length} payable)`);
 
   // ── Finance under segregation of duties ─────────────────────────────────────────────────────
-  const bookerApprove = await billingRun(exec, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const bookerApprove = await billingRun(exec, '/billing-engine/payouts/approve', { payableIds: [pay.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   let p = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [pay.id]);
   // A duties refusal is a per-row outcome: it is in the finished run's `refused`, not an HTTP status.
   const reason = (bookerApprove.result?.refused?.[0]?.reason ?? bookerApprove.r.body?.message ?? '').toString();
   rec('SOD-1', p.status === 'PENDING' && /duti|approve/i.test(reason),
     `whoever booked it cannot approve it — "${reason.slice(0, 72)}" (${describeJobOutcome(bookerApprove)})`);
 
-  const approved = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const approved = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   p = await one(`SELECT status, destination_verified_source FROM assayer_payables WHERE id=$1`, [pay.id]);
   rec('SOD-2', p.status === 'APPROVED', `a second person approves it (${p.status}; ${describeJobOutcome(approved)})`);
+
+  // The HOD's final approval (2026-09-24): the office's approval alone is not payable. admin2 is
+  // the HOD here — an ADMIN who did not approve it at the office.
+  const hodOk = await call(admin2.token, 'POST', `/billing-engine/final-approval/payouts/${pay.id}/approve`, {});
+  p = await one(`SELECT hod_approved_at FROM assayer_payables WHERE id=$1`, [pay.id]);
+  rec('HOD-1', hodOk.status === 200 && !!p.hod_approved_at, `the HOD gives the final approval (HTTP ${hodOk.status})`);
 
   const ref = `FINAL-${stamp}`;
   const approverPays = await billingRun(admin, '/billing-engine/payouts/pay', { payableIds: [pay.id], paymentReference: ref, method: 'NEFT' });

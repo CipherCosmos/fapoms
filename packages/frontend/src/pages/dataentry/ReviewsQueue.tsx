@@ -195,21 +195,21 @@ export const ReviewsQueue: React.FC = () => {
       {confirmDialog}
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         {STATUS_TABS.map((t) => (
-          <button key={t.key || 'all'} onClick={() => setStatus(t.key)}
+          <button key={t.key || 'all'} onClick={() => setStatus(t.key)} title={`Show reports with status: ${t.label}`}
             className={status === t.key ? 'btn btn-primary' : 'btn btn-secondary'}
             style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', width: 'auto' }}>
             {t.label}
           </button>
         ))}
         {isHead && status === 'HUMAN_REVIEW' && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', color: unroutedOnly ? 'var(--danger)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+          <label title="Show only reports waiting for someone to be assigned to check them" style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', color: unroutedOnly ? 'var(--danger)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
             {/* "Routed" was the pipeline's word for the reviewer having been chosen. */}
             <input type="checkbox" checked={unroutedOnly} onChange={toggleUnrouted} /> Only ones nobody is checking yet
           </label>
         )}
         <span style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 10px' }}>
           <Search size={13} style={{ color: 'var(--text-muted)' }} />
-          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search branch / code…"
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search branch / code…" title="Search by branch name or SOL ID"
             style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 'var(--text-xs)', width: '170px' }} />
         </span>
       </div>
@@ -236,18 +236,18 @@ export const ReviewsQueue: React.FC = () => {
           {/* Same taxonomy as CaseWorkspace's case-level correction note — one reviewer, one
               vocabulary, whichever screen they happen to be sending work back from. A datalist,
               so a reason the list hasn't seen yet is still one keystroke away, same as before. */}
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the decision (required to send back)"
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the decision (required to send back)" title="Decision note — required when sending back for rework, optional when approving"
             list="rework-note-suggestions"
             style={{ flex: '1 1 220px', padding: '6px 10px', fontSize: 'var(--text-xs)', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }} />
           <datalist id="rework-note-suggestions">
             {CORRECTION_NOTE_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
           </datalist>
-          <button onClick={() => bulkDecide('APPROVED')} disabled={selectedIds.length === 0 || busy === '__bulk__'} className="btn btn-primary"
+          <button onClick={() => bulkDecide('APPROVED')} disabled={selectedIds.length === 0 || busy === '__bulk__'} className="btn btn-primary" title={selectedIds.length === 0 ? 'Tick one or more reports first' : `Approve ${selectedIds.length} selected report${selectedIds.length === 1 ? '' : 's'}`}
             style={{ fontSize: 'var(--text-2xs)', padding: '6px 12px', width: 'auto' }}>
             {busy === '__bulk__' ? 'Saving…' : 'Approve selected'}
           </button>
           <button onClick={() => bulkDecide('CORRECTION_REQUIRED')} disabled={selectedIds.length === 0 || busy === '__bulk__' || !note.trim()} className="btn btn-secondary"
-            title={!note.trim() ? 'Add a note saying what needs correcting' : undefined}
+            title={!note.trim() ? 'Add a note saying what needs correcting' : `Send ${selectedIds.length} selected report${selectedIds.length === 1 ? '' : 's'} back for rework`}
             style={{ fontSize: 'var(--text-2xs)', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}>
             Send back for rework
           </button>
@@ -266,7 +266,7 @@ export const ReviewsQueue: React.FC = () => {
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
               {showBulk && <th style={{ width: '34px' }} />}
               {['Branch', 'Status', 'Reviewer', ''].map((h) => (
-                <th key={h} style={{ ...deskLabel, textAlign: 'left', padding: '10px 14px', whiteSpace: 'nowrap' }}>{h}</th>
+                <th key={h} title={h === 'Branch' ? 'Branch and SOL ID under review' : h === 'Status' ? 'Where this report sits in the review flow' : h === 'Reviewer' ? 'Who is checking this report' : undefined} style={{ ...deskLabel, textAlign: 'left', padding: '10px 14px', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -293,15 +293,15 @@ export const ReviewsQueue: React.FC = () => {
                 <tr key={c.id} style={{ borderBottom: '1px solid var(--border-hair)' }}>
                   {showBulk && (
                     <td style={{ padding: '9px 0 9px 14px' }}>
-                      <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} style={{ cursor: 'pointer' }} />
+                      <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} title={`Tick to include ${branch?.name ?? 'this branch'} in the bulk decision`} style={{ cursor: 'pointer' }} />
                     </td>
                   )}
                   <td style={{ padding: '9px 14px' }}>
-                    <div style={{ fontWeight: 600 }}>{branch?.name ?? 'Branch'}</div>
-                    <div style={{ ...deskLabel, fontSize: 'var(--text-3xs)' }}>{branch?.solId ?? '—'}</div>
+                    <div title={branch?.name ?? 'Branch'} style={{ fontWeight: 600 }}>{branch?.name ?? 'Branch'}</div>
+                    <div title={branch?.solId ? `SOL ID ${branch.solId}` : 'No SOL ID'} style={{ ...deskLabel, fontSize: 'var(--text-3xs)' }}>{branch?.solId ?? '—'}</div>
                   </td>
                   <td style={{ padding: '9px 14px' }}>
-                    <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: tone, border: `1px solid ${tone}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                    <span title={`Report status: ${c.status}`} style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: tone, border: `1px solid ${tone}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
                       {validationStatusLabel(c.status)}
                     </span>
                   </td>
@@ -323,7 +323,7 @@ export const ReviewsQueue: React.FC = () => {
                     )}
                   </td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', textAlign: 'right' }}>
-                    <button onClick={() => navigate(`/data-entry/case/${c.projectBranchId}`)} className="btn btn-secondary"
+                    <button onClick={() => navigate(`/data-entry/case/${c.projectBranchId}`)} className="btn btn-secondary" title={isHead && c.status === 'HUMAN_REVIEW' ? `Review the report for ${branch?.name ?? 'this branch'}` : `Open the workspace for ${branch?.name ?? 'this branch'}`}
                       style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                       <FileText size={12} /> {isHead && c.status === 'HUMAN_REVIEW' ? 'Review' : 'Open'}
                     </button>
@@ -336,12 +336,12 @@ export const ReviewsQueue: React.FC = () => {
       </section>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-        <span>{total} case{total === 1 ? '' : 's'}</span>
+        <span title={`${total} report${total === 1 ? '' : 's'} in this view`}>{total} case{total === 1 ? '' : 's'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }} title="Go to the previous page"
             disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
-          <span style={{ fontVariantNumeric: 'tabular-nums' }}>{page} / {totalPages}</span>
-          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
+          <span title={`Page ${page} of ${totalPages}`} style={{ fontVariantNumeric: 'tabular-nums' }}>{page} / {totalPages}</span>
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }} title="Go to the next page"
             disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
         </span>
       </div>

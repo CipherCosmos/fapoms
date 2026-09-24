@@ -5,6 +5,9 @@ import {
   getDayPlans,
   offerBranchesInBulk,
   markBranchesUnableToCover,
+  buildRouteOptimizePayload,
+  optimizeRoute,
+  getProjects,
 } from './planning';
 import { api } from './api';
 import { waitForQueuedJob } from './queued-job';
@@ -162,5 +165,47 @@ describe('bulk actions from the planning queue', () => {
     expect(mockRequest.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
     expect(mockRequest.mock.calls.some(([url]) => String(url).includes('/unable-to-cover') && String(url).startsWith('/projects/'))).toBe(false);
     expect(JSON.parse(mockRequest.mock.calls[0][1].body)).toEqual({ projectBranchIds: ids, reason: 'No assayer within range' });
+  });
+});
+
+/**
+ * Coordinates are Postgres decimals and arrive as strings. The optimize route validates numbers,
+ * so a string refused the whole "Optimize route" request.
+ */
+describe('optimizeRoute — coordinates are numbers on the wire', () => {
+  it('coerces string decimals to numbers and drops a stop with no usable coordinates', async () => {
+    const built = buildRouteOptimizePayload({
+      origin: { latitude: '19.0760', longitude: '72.8777' },
+      destinations: [
+        { id: 'b1', latitude: '19.1136', longitude: '72.8697' },
+        { id: 'b2', latitude: 'not-a-number', longitude: '72.1' },
+      ],
+      roundTrip: true,
+      mode: 'driving',
+    });
+    expect(built).toEqual({
+      origin: { latitude: 19.076, longitude: 72.8777 },
+      destinations: [{ id: 'b1', latitude: 19.1136, longitude: 72.8697 }],
+      roundTrip: true,
+      mode: 'driving',
+    });
+
+    mockRequest.mockReset();
+    mockRequest.mockResolvedValue({ optimizedSequence: [], totalDistanceKm: 0, totalDurationMinutes: 0 });
+    await optimizeRoute({ origin: { latitude: '19.0760', longitude: '72.8777' }, destinations: [{ id: 'b1', latitude: '19.1', longitude: '72.8' }] });
+    const [url, opts] = mockRequest.mock.calls[0];
+    expect(url).toBe('/geo/route/optimize');
+    const sent = JSON.parse(opts.body);
+    expect(typeof sent.origin.latitude).toBe('number');
+    expect(typeof sent.destinations[0].longitude).toBe('number');
+  });
+});
+
+describe('getProjects — asks for the server\'s ceiling, not its 50-row default', () => {
+  it('passes limit=200', async () => {
+    mockRequest.mockReset();
+    mockRequest.mockResolvedValue([]);
+    await getProjects();
+    expect(mockRequest.mock.calls[0][0]).toBe('/projects?limit=200');
   });
 });

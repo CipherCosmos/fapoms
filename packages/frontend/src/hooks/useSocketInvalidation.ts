@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { queryClient } from '../queryClient';
 import { connectSocket } from '../services/socket';
 import { createCoalescer } from './invalidationCoalescer';
+import { BACKGROUND_JOB_EVENT, type BackgroundJobSummary } from '@fapoms/shared';
+import { applyJobUpdate } from '../services/background-jobs';
 import { queryKeys } from './queryKeys';
 
 /**
@@ -35,7 +37,19 @@ const DESK_QUEUES = [
  */
 const PLANNING_DESK = [queryKeys.planning.queue, queryKeys.planning.recommendationsAll];
 
-const EVENT_KEYS: [string, ...any[]][] = [
+/** `ProjectXxxEvent` — the class names in the backend's `core/events/domain-events.ts`. */
+const PROJECT_EVENTS = [
+  'ProjectPlanningStartedEvent', 'ProjectSchedulingReadyEvent', 'ProjectExecutionStartedEvent',
+  'ProjectValidationStartedEvent', 'ProjectCompletedEvent', 'ProjectCancelledEvent', 'ProjectOnHoldEvent',
+  'ProjectArchivedEvent',
+] as const;
+const PROJECT_BRANCH_EVENTS = [
+  'ProjectBranchPlanningStartedEvent', 'ProjectBranchAssignmentConfirmedEvent', 'ProjectBranchAuditScheduledEvent',
+  'ProjectBranchAuditCompletedEvent', 'ProjectBranchValidationCompletedEvent', 'ProjectBranchClosedEvent',
+  'ProjectBranchUnableToCoverEvent', 'ProjectBranchCoverageReopenedEvent',
+] as const;
+
+export const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.commandCenter.all],
   ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.commandCenter.all],
   // `assignment:counter-offered` used to sit here; the gateway stopped emitting it when in-app
@@ -48,9 +62,38 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:escalated', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.planning.queue, queryKeys.dashboard.all],
   ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
   ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
-  ['ProjectCompleted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
-  ['ProjectCancelled', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
-  ['ProjectPlanningStarted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
+  /**
+   * A reassignment moves a job between two assayers' lists and changes what the desk queues show;
+   * the gateway sends it to both phones, the job's room and the desk.
+   */
+  ['assignment:reassigned', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.commandCenter.all],
+  /**
+   * Project lifecycle. The server publishes these under their CLASS names — `ProjectCompletedEvent`,
+   * not `ProjectCompleted` (`project.service.ts` publishes `event.constructor.name`). The names
+   * listened for here used to lack the `Event` suffix, so no project transition ever refreshed a
+   * screen. `project:created/updated/deleted` are the record's own create/edit/delete events.
+   */
+  ...PROJECT_EVENTS.map((event): [string, ...any[]] => [
+    event, queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all,
+  ]),
+  ...PROJECT_BRANCH_EVENTS.map((event): [string, ...any[]] => [
+    event, queryKeys.projects.all, queryKeys.branches.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all,
+  ]),
+  ...(['project:created', 'project:updated', 'project:deleted'] as const).map((event): [string, ...any[]] => [
+    event, queryKeys.projects.all, queryKeys.planning.queue, queryKeys.commandCenter.all,
+  ]),
+  // The assignment record's discussion, contact log and clarification threads (the detail drawer).
+  ['comment:added', queryKeys.desk.assignmentDetail, queryKeys.assignments.all],
+  ['communication:created', queryKeys.desk.assignmentDetail, queryKeys.assignments.all],
+  ...(['query:raised', 'query:reopened', 'query:responded'] as const).map((event): [string, ...any[]] => [
+    event, queryKeys.desk.assignmentDetail, queryKeys.assignments.all, queryKeys.documents.dataEntry,
+  ]),
+  // An expense claim decided: its claim lists and the money it books.
+  ['expense:decided', queryKeys.assignments.all, queryKeys.desk.assignmentDetail, queryKeys.billing.all],
+  // Reference data with screens of their own (Holidays, Zones, Users & Roles) and the planning desk's zone picker.
+  ...(['holiday:created', 'holiday:updated', 'holiday:deleted'] as const).map((event): [string, ...any[]] => [event, ['holidays']]),
+  ...(['zone:created', 'zone:updated', 'zone:deleted'] as const).map((event): [string, ...any[]] => [event, ['zones'], queryKeys.planning.all]),
+  ...(['user:created', 'user:updated', 'user:role-changed'] as const).map((event): [string, ...any[]] => [event, ['users']]),
   ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],
   ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry, queryKeys.schedules.all, queryKeys.assignments.all],
   ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],
@@ -97,9 +140,21 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ...[
     'AssayerActivatedEvent', 'AssayerSuspendedEvent', 'AssayerDeactivatedEvent', 'AssayerOnLeaveEvent',
     'AssayerResignedEvent', 'AssayerTerminatedEvent', 'AssayerArchivedEvent',
-    'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerTrainingStartedEvent',
+    'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerSentForApprovalEvent',
+    'AssayerTrainingStartedEvent',
     'assayer:updated', 'assayer:created', 'assayer:deleted',
-  ].map((event): [string, ...any[]] => [event, queryKeys.hr.rosterAll, queryKeys.hr.workforce]),
+  /*
+    And the maps. `queryKeys.assayers.all` is the planning map's pin roster and
+    `commandCenter.all` the Command Center's workforce layer; neither was refreshed by any of these
+    events, so a person added (or placed by the address lookup, or pinned by hand — which now
+    publishes `assayer:updated` too) did not appear on an open map until its five-minute cache ran
+    out AND the map was opened again. Reported as "created assayer doesn't come on the map".
+  */
+  /*
+    And the approver's list (`/hr/approvals`, and its counts): sent for approval puts somebody on it,
+    approval (→ training) and rejection (→ inactive) take them off.
+  */
+  ].map((event): [string, ...any[]] => [event, queryKeys.hr.rosterAll, queryKeys.hr.workforce, queryKeys.assayers.all, queryKeys.commandCenter.all, queryKeys.hr.approvals]),
 ];
 
 /**
@@ -126,7 +181,12 @@ const EVENT_KEYS: [string, ...any[]][] = [
  * covers `hr.importIssues` — that one is not in `EVENT_KEYS` today, so this has no effect on it yet,
  * but it would need no separate decision if it ever is.
  */
-const SLOW_ROOTS = new Set<string>(['dashboard', 'command-center', 'hr']);
+/*
+ * `'assayers'` joined them with the map fix (2026-09-23): its only reader is the maps' pin roster
+ * (`/assayers/map-roster`), the whole scoped roster again — refreshed per event, a bulk stage move
+ * would re-download it once per person.
+ */
+const SLOW_ROOTS = new Set<string>(['dashboard', 'command-center', 'hr', 'assayers']);
 
 /**
  * Coalescing windows.
@@ -218,6 +278,17 @@ export function useSocketInvalidation() {
     socket.on('disconnect', handleDisconnect);
     socket.on('connect', handleReconnect);
 
+    /**
+     * Background jobs are the one event that PATCHES the cache rather than invalidating it.
+     *
+     * The event carries the whole job summary, and a running import sends one about every second.
+     * Invalidating on each would refetch `/jobs` once a second from every open tab for as long as
+     * the import ran; writing the pushed state into the cached lists costs nothing. The server
+     * sends it to the requester's own room only (see the gateway's `job:updated` case).
+     */
+    const handleJobUpdated = (job: BackgroundJobSummary) => applyJobUpdate(queryClient, job);
+    socket.on(BACKGROUND_JOB_EVENT, handleJobUpdated);
+
     return () => {
       live.cancel();
       slow.cancel();
@@ -227,6 +298,7 @@ export function useSocketInvalidation() {
       }
       socket.off('disconnect', handleDisconnect);
       socket.off('connect', handleReconnect);
+      socket.off(BACKGROUND_JOB_EVENT, handleJobUpdated);
     };
   }, []);
 }

@@ -26,7 +26,8 @@ import { RoutingService, DestinationCoords } from '../geo/routing.provider';
 import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import { FeePolicyService } from '../pricing/fee-policy.service';
-import { calculateHaversineDistance, AssayerStatus, businessDateKey } from '@fapoms/shared';
+import { calculateHaversineDistance, AssayerStatus, businessTodayDateKey, addDaysToDateKey, weekdayOfDateKey, businessNoonOf } from '@fapoms/shared';
+import { ASSIGNED_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 // Type-only: the planner counts clusters, and stays ignorant of whether a queue is watching.
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
@@ -77,6 +78,14 @@ export interface DayPlanCandidate {
   costPerPacket: number | null;   // null when packet counts are unknown for the cluster
   idleHours: number;              // paid-but-unproductive hours left in the working day
   stops: DayPlanStop[];
+  /**
+   * Work this assayer ALREADY has on the plan's date, outside this cluster (F5, 2026-09-25). Its
+   * hours are part of `totalDayHours` — the day planner used to plan every assayer as if their day
+   * were empty, so somebody with a full day booked elsewhere was offered a second full day.
+   */
+  existingSameDayJobs: { count: number; hours: number };
+  /** True when the day, existing jobs included, runs past the working day (still within the grace). */
+  exceedsWorkingDay: boolean;
   clientPreferencesMatch: {
     skillsMatch: boolean;
     certificationsMatch: boolean;
@@ -107,6 +116,8 @@ export interface BranchCluster {
     /** Where the branch sits, so travel can be priced from the transport rate card. */
     state: string | null;
     region: string | null;
+    /** The project this branch belongs to — the engine reads project skills and rotation from it. */
+    projectId?: string | null;
   }>;
   /** Total packets across the cluster — the throughput this day actually buys. */
   totalPackets: number;
@@ -210,6 +221,14 @@ const DEFAULT_AUDIT_HOURS = 4;
 const UNDERUTILIZED_IDLE_HOURS_THRESHOLD = 3;
 /** How far forward to search for a workable date before giving up. */
 const MAX_DATE_LOOKAHEAD_DAYS = 30;
+/**
+ * How many search nodes the exact cluster↔assayer assignment may visit before it stops and falls
+ * back to a deterministic greedy assignment (F3, 2026-09-25). The branch-and-bound is exponential
+ * in the number of clusters that share candidates: 50 clusters drawing on the same five assayers
+ * never finished. 200k nodes is well under a second; past it the answer is "best found so far, or
+ * greedy, whichever scores higher" — the same every run.
+ */
+export const DAY_PLAN_SEARCH_NODE_BUDGET = 200_000;
 
 // ─── Service ───────────────────────────────────────────────────────────────────
 
@@ -335,7 +354,8 @@ export class DayPlannerService {
     // 2. Resolve a date the audit can actually be worked. Holidays are state-specific, so this
     //    needs the branches in scope — hence it runs after loading them.
     const { scheduledDate, dateStr, dateAdjustment } = await this.resolveWorkingDate(
-      targetDate ? new Date(targetDate) : new Date(),
+      // A calendar key, not an instant (F20): the walk below steps and reads weekdays on the key.
+      targetDate ? String(targetDate).slice(0, 10) : businessTodayDateKey(),
       unassigned,
       // Strictest calendar across the engagements in scope: a day only works if it works for
       // every client whose branches the plan covers.
@@ -390,6 +410,15 @@ export class DayPlannerService {
      */
     const enginePreload = { client: client ?? null, assayers };
 
+    /**
+     * What each assayer already has booked on the plan's date (F5), outside the branches this run is
+     * planning. One grouped read for the whole roster. Sized like a cluster branch: this cycle's
+     * packets at the branch's own client's minutes-per-packet, else the stored estimate.
+     */
+    const inRun = new Set(unassigned.map((pb) => pb.id));
+    const existingDayByAssayer = await this.loadExistingDayWork(
+      assayers.map((a) => a.id), dateStr, inRun, clientById,
+    );
     // 5. Generate day plans for each cluster
     const clusterResults: ProjectDayPlan['clusters'] = [];
     const unclusteredBranches: ProjectDayPlan['unclusteredBranches'] = [];
@@ -461,7 +490,7 @@ export class DayPlannerService {
       }
 
       let { dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
-        cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, false, clientByProjectBranchId, enginePreload,
+        cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, false, clientByProjectBranchId, enginePreload, existingDayByAssayer,
       );
 
       // Fallback: if no candidates found within client constraints, retry with relaxed
@@ -471,7 +500,7 @@ export class DayPlannerService {
       // every candidate is too close.
       if (dayPlans.length === 0) {
         ({ dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
-          cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true, clientByProjectBranchId, enginePreload,
+          cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true, clientByProjectBranchId, enginePreload, existingDayByAssayer,
         ));
       }
 
@@ -536,40 +565,39 @@ export class DayPlannerService {
    * chosen an assayer.
    */
   private async resolveWorkingDate(
-    requested: Date,
+    /** The requested day as a `YYYY-MM-DD` key. */
+    requestedKey: string,
     branches: ProjectBranchEntity[],
     clientIds: string[] = [],
   ): Promise<{ scheduledDate: Date; dateStr: string; dateAdjustment: ProjectDayPlan['dateAdjustment'] }> {
     const states = [...new Set(branches.map((pb) => pb.branch?.state).filter(Boolean))] as string[];
     /**
-     * Every date in this walk is an Indian calendar date.
-     *
-     * This formatted in UTC while stepping with `setDate`/`getDate`, which are server-LOCAL —
-     * two clocks in one loop. `recommendation.engine.ts`, which consumes the plan, already
-     * uses `businessDateKey`; this diverged from its own sibling. The visible effect is a plan
-     * scheduled, and reported back to the operator, on the day before the one they asked for.
+     * Every date in this walk is an Indian calendar date, stepped and weekday-read ON THE KEY
+     * (F20, 2026-09-25). This stepped with server-local `setDate` and read server-local `getDay()`
+     * of an instant it then formatted in IST — on a UTC server the "Sunday" it skipped and the date
+     * it reported could be different days. The instant handed to the holiday check and to the
+     * engine is noon IST of the key, which every formatter reads back as the same day.
      */
-    const requestedStr = businessDateKey(requested);
+    const requestedStr = /^\d{4}-\d{2}-\d{2}/.test(requestedKey) ? requestedKey.slice(0, 10) : businessTodayDateKey();
 
-    const candidate = new Date(requested);
+    let key = requestedStr;
     for (let attempt = 0; attempt <= MAX_DATE_LOOKAHEAD_DAYS; attempt++) {
-      const blocker = await this.describeDateBlocker(candidate, states, clientIds);
+      const blocker = await this.describeDateBlocker(key, states, clientIds);
       if (!blocker) {
-        const dateStr = businessDateKey(candidate);
         return {
-          scheduledDate: candidate,
-          dateStr,
-          dateAdjustment: dateStr === requestedStr
+          scheduledDate: businessNoonOf(key),
+          dateStr: key,
+          dateAdjustment: key === requestedStr
             ? null
-            : { requestedDate: requestedStr, reason: (await this.describeDateBlocker(requested, states, clientIds)) || 'Not a working day' },
+            : { requestedDate: requestedStr, reason: (await this.describeDateBlocker(requestedStr, states, clientIds)) || 'Not a working day' },
         };
       }
-      candidate.setDate(candidate.getDate() + 1);
+      key = addDaysToDateKey(key, 1);
     }
 
     // Nothing workable in range — return the original rather than silently inventing a date.
     return {
-      scheduledDate: requested,
+      scheduledDate: businessNoonOf(requestedStr),
       dateStr: requestedStr,
       dateAdjustment: {
         requestedDate: requestedStr,
@@ -579,7 +607,7 @@ export class DayPlannerService {
   }
 
   /** Returns why a date can't be worked, or null when it can. */
-  private async describeDateBlocker(date: Date, states: string[], clientIds: string[] = []): Promise<string | null> {
+  private async describeDateBlocker(dateKey: string, states: string[], clientIds: string[] = []): Promise<string | null> {
     /**
      * Weekends are decided by the holiday calendar, not here.
      *
@@ -589,8 +617,9 @@ export class DayPlannerService {
      * the platform accepts, pushing plans forward for no reason, and the two components
      * disagreed about what a working day is.
      */
-    const day = date.getDay();
+    const day = weekdayOfDateKey(dateKey);
     if (day === 0) return 'Falls on a Sunday';
+    const date = businessNoonOf(dateKey);
 
     // Every client in scope must be able to work the day, and with no branch state to scope by
     // the national rule still applies.
@@ -604,6 +633,54 @@ export class DayPlannerService {
       }
     }
     return null;
+  }
+
+  /**
+   * Hours and job count each assayer already has on `dateKey`, excluding the project branches in
+   * `excludeProjectBranchIds` (the ones this run is planning). Live work only — offered, accepted,
+   * on site or done (`ASSIGNED_ASSIGNMENT_STATUSES`). Fails open to "nothing booked" with a log
+   * line: a failed read must not empty the plan, and the create path still books travel once.
+   */
+  async loadExistingDayWork(
+    assayerIds: string[],
+    dateKey: string,
+    excludeProjectBranchIds: Set<string>,
+    clientById: Map<string, ClientEntity>,
+  ): Promise<Map<string, { count: number; hours: number }>> {
+    const out = new Map<string, { count: number; hours: number }>();
+    if (assayerIds.length === 0 || !dateKey) return out;
+    const rows: Array<{ assayer_id: string; project_branch_id: string; packet_count: number | null; estimated_duration_hours: string | number | null; client_id: string | null }> =
+      await this.projectBranchRepository
+        .query(
+          `/* day-planner:existing-day-work */
+           SELECT a.assayer_id, a.project_branch_id, pb.packet_count, b.estimated_duration_hours, p.client_id
+             FROM assignments a
+             JOIN project_branches pb ON pb.id = a.project_branch_id
+             JOIN branches b ON b.id = pb.branch_id
+             LEFT JOIN projects p ON p.id = a.project_id
+            WHERE a.is_active = true
+              AND a.scheduled_date = $1::date
+              AND a.status IN (${sqlStatusList(ASSIGNED_ASSIGNMENT_STATUSES)})
+              AND a.assayer_id = ANY($2::uuid[])`,
+          [dateKey, assayerIds],
+        )
+        .catch((err: any) => {
+          this.logger.warn(`Could not read existing work for ${dateKey}; planning as if nobody is booked: ${err?.message ?? err}`);
+          return [];
+        });
+    for (const r of rows ?? []) {
+      if (excludeProjectBranchIds.has(r.project_branch_id)) continue;
+      const mpp = Number(clientById.get(r.client_id ?? '')?.planningPreferences?.minutesPerPacket) || DEFAULT_MINUTES_PER_PACKET;
+      const packets = Number(r.packet_count);
+      const hours = Number.isFinite(packets) && packets > 0
+        ? (packets * mpp) / 60
+        : Number(r.estimated_duration_hours) || DEFAULT_AUDIT_HOURS;
+      const cur = out.get(r.assayer_id) ?? { count: 0, hours: 0 };
+      cur.count += 1;
+      cur.hours += hours;
+      out.set(r.assayer_id, cur);
+    }
+    return out;
   }
 
   /**
@@ -670,6 +747,7 @@ export class DayPlannerService {
           city: pb.branch.city,
           state: pb.branch.state ?? null,
           region: pb.branch.region ?? null,
+          projectId: pb.projectId ?? null,
         };
       })
       // Seed clusters from the heaviest branches so the biggest workloads anchor a day and
@@ -816,6 +894,8 @@ export class DayPlannerService {
      * once instead of twenty times.
      */
     preloaded?: Parameters<RecommendationEngine['recommend']>[3],
+    /** What each assayer already has booked that day, outside this run (F5). */
+    existingDayByAssayer: Map<string, { count: number; hours: number }> = new Map(),
   ): Promise<{ dayPlans: DayPlanCandidate[]; excludedAssayers: ExcludedDayPlanCandidate[] }> {
     /**
      * The clients that own branches in THIS cluster.
@@ -888,6 +968,8 @@ export class DayPlannerService {
         scheduledDate,
         {},
         preloaded ? { ...preloaded, client: branchClient } : undefined,
+        // The branch's own project: project skills, and "this cycle" for the rotation rule.
+        branch.projectId ? { projectId: branch.projectId } : undefined,
       );
       branchRecommendations.set(branch.branchId, {
         ranked,
@@ -902,7 +984,6 @@ export class DayPlannerService {
 
     for (const assayerEntity of assayers) {
       const assayer = assayerEntity as AssayerWithWorkforceAttributes;
-      if (!assayer.homeLatitude || !assayer.homeLongitude) continue;
 
       // ─── Eligibility: must be eligible for EVERY branch in the cluster ──
       let exclusion: ExcludedDayPlanCandidate | null = null;
@@ -921,6 +1002,24 @@ export class DayPlannerService {
       }
       if (exclusion) {
         excludedAssayers.push(exclusion);
+        continue;
+      }
+
+      /**
+       * No home location, no day plan — said, not silently skipped (F5, 2026-09-25).
+       *
+       * The route and its travel are priced from home, so without a home pin there is nothing to
+       * route. This used to `continue` before any other check, so an eligible assayer whose address
+       * had not geocoded vanished from both the plans and the exclusions — the one person the desk
+       * could fix in a minute was the one it could not see.
+       */
+      if (assayer.homeLatitude == null || assayer.homeLongitude == null) {
+        excludedAssayers.push({
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: 'Home address not located — the day\'s route and travel cannot be planned',
+          detail: 'Add a map pin on their profile, or wait for the address lookup to finish.',
+        });
         continue;
       }
 
@@ -1014,14 +1113,18 @@ export class DayPlannerService {
       const totalTravelMinutes = routeResult.totalDurationMinutes;
       const totalTravelKm = routeResult.totalDistanceKm;
       const totalAuditHours = cluster.totalEstimatedAuditHours;
-      const totalDayHours = totalAuditHours + totalTravelMinutes / 60;
+      // Work already booked for this assayer that day, elsewhere (F5): it uses up the same day.
+      const existing = existingDayByAssayer.get(assayer.id) ?? { count: 0, hours: 0 };
+      const totalDayHours = totalAuditHours + totalTravelMinutes / 60 + existing.hours;
 
       // Skip if the day exceeds max working hours (allow 2h grace)
       if (totalDayHours > MAX_DAILY_WORK_HOURS + 2) {
         excludedAssayers.push({
           assayerId: assayer.id,
           displayName: assayer.displayName,
-          reason: `Day too long — ${totalDayHours.toFixed(1)}h exceeds the ${MAX_DAILY_WORK_HOURS + 2}h working-day limit`,
+          reason: existing.count > 0
+            ? `Day too long — ${totalDayHours.toFixed(1)}h including ${existing.hours.toFixed(1)}h already booked (${existing.count} job${existing.count > 1 ? 's' : ''}) that day exceeds the ${MAX_DAILY_WORK_HOURS + 2}h working-day limit`
+            : `Day too long — ${totalDayHours.toFixed(1)}h exceeds the ${MAX_DAILY_WORK_HOURS + 2}h working-day limit`,
         });
         continue;
       }
@@ -1055,9 +1158,11 @@ export class DayPlannerService {
       let baseFee = 0;
       let travelFee = 0;
 
-      // Travel is one physical route; its transport pricing follows the first stop's place —
-      // the same rule the assign path applies, so the plan's figure survives assignment.
-      const firstStop = cluster.branches[0];
+      // Travel is one physical route; its transport pricing follows the FIRST STOP OF THE ROUTE —
+      // the stop the commit books the whole loop's travel on (F6), so the plan's figure is the
+      // figure that is booked. (This read `cluster.branches[0]`, the heaviest branch, which is
+      // not necessarily where the route starts.)
+      const firstStop = cluster.branches.find((b) => b.branchId === routeResult.optimizedSequence[0]) ?? cluster.branches[0];
       const clusterPlace = firstStop
         ? { state: firstStop.state, region: firstStop.region }
         : null;
@@ -1083,18 +1188,19 @@ export class DayPlannerService {
         travelFee = quote.travelFee;
       } else {
         const perBranchQuotes = await Promise.all(
-          cluster.branches.map(async (b, index) => {
+          cluster.branches.map(async (b) => {
             const owner = clientByProjectBranchId?.get(b.id) ?? client;
+            const carriesTravel = b === firstStop;
             return this.feePolicyService.quote({
               assayerId: assayer.id,
               clientId: owner?.id ?? null,
               configuration: owner?.configuration ?? undefined,
-              // Travel is attributed to the first stop only, so a shared journey is not
-              // billed once per branch.
-              distanceKm: index === 0 ? totalTravelKm : 0,
+              // Travel is attributed to the route's first stop only, so a shared journey is not
+              // billed once per branch — and it is the stop the commit books it on.
+              distanceKm: carriesTravel ? totalTravelKm : 0,
               branchCount: 1,
               onDate: scheduledDate,
-              place: index === 0 ? clusterPlace : null,
+              place: carriesTravel ? clusterPlace : null,
               // The route km on the first stop are the full loop, not one way.
               distanceIsRoundTrip: true,
             });
@@ -1124,8 +1230,11 @@ export class DayPlannerService {
         : 0;
 
       // ─── Utilization: % of day spent on productive audit vs. total ────
-      const utilizationPercent = totalDayHours > 0
-        ? parseFloat(((totalAuditHours / totalDayHours) * 100).toFixed(1))
+      // This route's own productive share — the jobs already booked elsewhere that day are audit
+      // time too, so counting them as unproductive would wrongly fail a well-packed route (F5).
+      const routeHours = totalAuditHours + totalTravelMinutes / 60;
+      const utilizationPercent = routeHours > 0
+        ? parseFloat(((totalAuditHours / routeHours) * 100).toFixed(1))
         : 0;
 
       // Skip candidates with very poor utilization (<60% productive audit time)
@@ -1139,9 +1248,11 @@ export class DayPlannerService {
       }
 
       // ─── Client Preference Match Summary ───────────────────────────────
-      // Informational only now — required skills/certifications are already enforced by the
-      // engine's own filters above, so every surviving candidate matches by construction.
-      // Kept here purely to render the confirmation badges the UI already shows.
+      // Informational only — the engine's RequiredSkillsFilter now excludes on the project's AND
+      // each branch's client's required skills/certifications (owner decision 2026-09-25), and a
+      // candidate must be eligible for every branch in the cluster, so everyone reaching here
+      // matches by construction (unless an administrator has the skills rule suspended). Kept to
+      // render the confirmation badges the UI already shows.
       const assayerSkills = (assayer.skills || []).map((s: string) => s.toLowerCase());
       const assayerCerts = (assayer.certifications || []).map((c: any) =>
         (typeof c === 'string' ? c : c.name || '').toLowerCase(),
@@ -1175,6 +1286,8 @@ export class DayPlannerService {
         // are done. This is the number that quantifies "we paid for a day and got two hours".
         idleHours: parseFloat(Math.max(0, MAX_DAILY_WORK_HOURS - totalDayHours).toFixed(1)),
         stops,
+        existingSameDayJobs: { count: existing.count, hours: parseFloat(existing.hours.toFixed(1)) },
+        exceedsWorkingDay: totalDayHours > MAX_DAILY_WORK_HOURS,
         clientPreferencesMatch: {
           skillsMatch: requiredSkills.length === 0 || requiredSkills.every((s) => assayerSkills.includes(s.toLowerCase())),
           certificationsMatch: requiredCerts.length === 0 || requiredCerts.every((c) => assayerCerts.includes(c.toLowerCase())),
@@ -1198,17 +1311,23 @@ export class DayPlannerService {
   }
 
   /**
-   * Global optimal assignment of assayers to clusters using branch-and-bound.
-   * Each assayer can cover at most one cluster per day. This maximizes the
-   * sum of overallScores across all clusters, avoiding the greedy order bias.
+   * Global assignment of assayers to clusters: each assayer covers at most one cluster per day
+   * (kept — owner decision), maximising the sum of overallScores.
+   *
+   * Exact branch-and-bound first, under a node budget (F3, 2026-09-25). The search is exponential
+   * in how many clusters share candidates — 50 clusters over the same five assayers ran for minutes
+   * and held the queue worker. Past `nodeBudget` it stops and takes the better of the best complete
+   * assignment it had found and a deterministic greedy one (highest score first; ties by cluster
+   * order, then assayer id). Both halves are deterministic, so the same plan comes back every run.
    */
-  private globalOptimizeAssignments(
+  globalOptimizeAssignments(
     clusterResults: Array<{
       cluster: BranchCluster;
       dayPlans: DayPlanCandidate[];
       bestPlan: DayPlanCandidate | null;
     }>,
-  ): void {
+    nodeBudget: number = DAY_PLAN_SEARCH_NODE_BUDGET,
+  ): { exact: boolean; nodes: number } {
     const n = clusterResults.length;
 
     // For each cluster, keep candidates with score > 0 (already sorted by score desc)
@@ -1224,6 +1343,8 @@ export class DayPlannerService {
 
     let bestScore = -1;
     let bestAssignment: (DayPlanCandidate | null)[] = new Array(n).fill(null);
+    let nodes = 0;
+    let exhausted = false;
 
     const dfs = (
       idx: number,
@@ -1231,6 +1352,8 @@ export class DayPlannerService {
       currentScore: number,
       assignment: (DayPlanCandidate | null)[],
     ): void => {
+      if (exhausted) return;
+      if (++nodes > nodeBudget) { exhausted = true; return; }
       if (currentScore + maxRemaining[idx] <= bestScore) return; // prune
 
       if (idx === n) {
@@ -1247,6 +1370,7 @@ export class DayPlannerService {
         dfs(idx + 1, assigned, currentScore + plan.overallScore, assignment);
         assignment.pop();
         assigned.delete(plan.assayerId);
+        if (exhausted) return;
       }
 
       // Also valid: no assayer assigned to this cluster (e.g. Nagpur)
@@ -1257,9 +1381,41 @@ export class DayPlannerService {
 
     dfs(0, new Set(), 0, []);
 
-    for (let i = 0; i < n; i++) {
-      clusterResults[i].bestPlan = bestAssignment[i];
+    if (exhausted) {
+      const greedy = DayPlannerService.greedyAssignment(candidates);
+      const greedyScore = greedy.reduce((sum, p) => sum + (p?.overallScore ?? 0), 0);
+      if (greedyScore > bestScore) bestAssignment = greedy;
+      this.logger.warn(
+        `Day plan: exact assignment stopped at ${nodeBudget} nodes across ${n} clusters; `
+          + `used the ${greedyScore > bestScore ? 'greedy' : 'best exact-so-far'} assignment.`,
+      );
     }
+
+    for (let i = 0; i < n; i++) {
+      clusterResults[i].bestPlan = bestAssignment[i] ?? null;
+    }
+    return { exact: !exhausted, nodes: Math.min(nodes, nodeBudget) };
+  }
+
+  /**
+   * Highest score first, one cluster per assayer. Ties break by cluster position, then assayer id,
+   * so the answer never depends on sort stability or input order beyond the clusters' own.
+   */
+  static greedyAssignment(candidates: DayPlanCandidate[][]): (DayPlanCandidate | null)[] {
+    const pairs: Array<{ i: number; plan: DayPlanCandidate }> = [];
+    candidates.forEach((list, i) => list.forEach((plan) => pairs.push({ i, plan })));
+    pairs.sort((a, b) =>
+      b.plan.overallScore - a.plan.overallScore
+      || a.i - b.i
+      || (a.plan.assayerId < b.plan.assayerId ? -1 : a.plan.assayerId > b.plan.assayerId ? 1 : 0));
+    const out: (DayPlanCandidate | null)[] = new Array(candidates.length).fill(null);
+    const used = new Set<string>();
+    for (const { i, plan } of pairs) {
+      if (out[i] || used.has(plan.assayerId)) continue;
+      out[i] = plan;
+      used.add(plan.assayerId);
+    }
+    return out;
   }
 
   private minutesToTime(minutes: number): string {

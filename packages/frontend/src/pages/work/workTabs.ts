@@ -60,12 +60,12 @@ export const WORK_TABS: readonly WorkTab[] = [
   {
     path: '/scheduling',
     label: 'Scheduling',
-    hint: 'Put an agreed visit on the calendar, or move one that has to change.',
+    hint: 'Calendar timetable to book visit dates, check bank holidays, and avoid assayer double-booking.',
   },
   {
     path: '/assignments',
     label: 'Field work',
-    hint: 'Visits that are booked, under way or finished.',
+    hint: 'Track on-site visits, attendance check-ins, field issues, and close completed audits.',
   },
 ] as const;
 

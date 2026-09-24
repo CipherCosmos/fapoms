@@ -32,7 +32,7 @@ describe('assayer self-editable fields', () => {
   it('never lets an assayer change terms that decide their own eligibility or pay', () => {
     // Capacity limits remove someone from the planning pool; employment type and joining date
     // drive tenure, settlement and rate.
-    for (const field of ['maxDailyWorkload', 'maxWeeklyWorkload', 'employmentType', 'joiningDate', 'performanceRating']) {
+    for (const field of ['maxWeeklyWorkload', 'employmentType', 'joiningDate', 'performanceRating']) {
       expect(isSelfEditableAssayerField(field)).toBe(false);
     }
   });

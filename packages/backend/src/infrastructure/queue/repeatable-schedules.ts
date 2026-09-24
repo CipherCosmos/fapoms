@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { JobOptions, Queue } from 'bull';
 import { FAILED_JOB_RETENTION } from './queued-job';
+import { errorAlerter, type ErrorAlerter } from '../observability/error-alerter';
 
 /**
  * One wanted schedule on a queue: a named job that fires on `cron` (optionally in `tz`).
@@ -85,8 +86,9 @@ export function ensureRepeatableSchedules(
   queue: Queue,
   wanted: WantedSchedule[],
   logger: Logger,
-  opts: { retryDelaysMs?: number[]; reconcileIntervalMs?: number } = {},
+  opts: { retryDelaysMs?: number[]; reconcileIntervalMs?: number; alerter?: Pick<ErrorAlerter, 'report'> } = {},
 ): void {
+  const alerter = opts.alerter ?? errorAlerter;
   const delays = opts.retryDelaysMs ?? [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
   /**
    * Five minutes: short enough that the worst case is one missed tick of the most frequent
@@ -113,13 +115,24 @@ export function ensureRepeatableSchedules(
   void attempt(0);
 
   if (reconcileEvery > 0) {
+    /*
+      One re-check timer per queue. A caller that re-converges (the SLA scanner does, whenever the
+      digest schedule is edited in settings) used to add a SECOND interval that kept checking the
+      OLD wanted list for the life of the process; now the newest list replaces the previous one.
+    */
+    const previous = reconcileTimers.get(queue.name);
+    if (previous) clearInterval(previous);
     const timer = setInterval(() => {
-      void reconcile(queue, wanted, logger);
+      void reconcile(queue, wanted, logger, alerter);
     }, reconcileEvery);
     // Never keep the process alive just to re-check a cron registration.
     timer.unref?.();
+    reconcileTimers.set(queue.name, timer);
   }
 }
+
+/** The live re-check timer per queue name — see `ensureRepeatableSchedules`. */
+const reconcileTimers = new Map<string, ReturnType<typeof setInterval>>();
 
 /**
  * Re-check, and say something only when there was something to say.
@@ -129,7 +142,12 @@ export function ensureRepeatableSchedules(
  * opposite: that is the failure this exists for, and it is reported at warn level with the queue
  * and the job named, whether or not the re-add succeeds.
  */
-async function reconcile(queue: Queue, wanted: WantedSchedule[], logger: Logger): Promise<void> {
+export async function reconcile(
+  queue: Queue,
+  wanted: WantedSchedule[],
+  logger: Logger,
+  alerter: Pick<ErrorAlerter, 'report'> = errorAlerter,
+): Promise<void> {
   try {
     const existing = await queue.getRepeatableJobs();
     const present = new Set(existing.map((j) => scheduleKey(j.name, (j as { id?: string | null }).id)));
@@ -141,6 +159,8 @@ async function reconcile(queue: Queue, wanted: WantedSchedule[], logger: Logger)
         `${missing.map((m) => `${m.name} (${m.cron})`).join(', ')}. Re-registering. ` +
         'A schedule vanishing from Redis is silent in Bull — nothing else would have reported this.',
     );
+    // A warn line is exactly what nobody read during the nine silent minutes described above.
+    alerter.report({ method: 'SCHEDULE', route: `/${queue.name}/${missing.map((m) => m.name).join(',')}`, errorName: 'ScheduleVanished' });
     await convergeOnce(queue, wanted, logger);
   } catch (err) {
     // Never throw out of a timer. Redis being unreachable is already the louder symptom, and the
@@ -152,7 +172,7 @@ async function reconcile(queue: Queue, wanted: WantedSchedule[], logger: Logger)
 /** A schedule's identity: the job name, plus the jobId when one distinguishes it from a sibling. */
 const scheduleKey = (name: string, jobId?: string | null): string => `${name}::${jobId ?? ''}`;
 
-async function convergeOnce(queue: Queue, wanted: WantedSchedule[], logger: Logger): Promise<void> {
+export async function convergeOnce(queue: Queue, wanted: WantedSchedule[], logger: Logger): Promise<void> {
   // Keyed by name AND jobId. Keyed by name alone, two schedules of one job name collapsed to
   // whichever was listed last, and the stale-removal below then compared every firing against
   // that one — so a sibling with a different cron was deleted as though it had drifted.
@@ -161,9 +181,17 @@ async function convergeOnce(queue: Queue, wanted: WantedSchedule[], logger: Logg
   const existing = await queue.getRepeatableJobs();
   for (const job of existing) {
     const want = wantedByName.get(scheduleKey(job.name, (job as { id?: string | null }).id));
-    if (want && (job.cron !== want.cron || (want.tz && job.tz !== want.tz))) {
+    /*
+      Removed when it has drifted (same job, another cron/tz) AND when nothing wants it any more.
+      The second case used to be left alone: a schedule dropped from the code (or a job renamed)
+      kept firing from Redis for ever, into a handler that no longer existed — every tick a dead
+      letter. Each queue has exactly one caller of this helper, so "not in `wanted`" means unwanted.
+    */
+    if (!want || job.cron !== want.cron || (want.tz && job.tz !== want.tz)) {
       await queue.removeRepeatableByKey(job.key);
-      logger.warn(`Removed stale ${job.name} schedule on "${queue.name}": ${job.cron}${job.tz ? ` ${job.tz}` : ''}`);
+      logger.warn(
+        `Removed ${want ? 'stale' : 'unwanted'} ${job.name} schedule on "${queue.name}": ${job.cron}${job.tz ? ` ${job.tz}` : ''}`,
+      );
     }
   }
 

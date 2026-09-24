@@ -24,8 +24,8 @@
  * ## The split, and the reasoning behind it
  *
  * Overridable rules are **judgement calls an operator is entitled to make** and be accountable
- * for. Non-overridable ones are of two kinds: things that are physically impossible (a person
- * cannot audit two branches at once), and one integrity rule that is deliberately not an
+ * for. Non-overridable ones are of two kinds: facts no reason changes (the branch already has
+ * live work, is closed, or the profile is not deployable), and one integrity rule that is deliberately not an
  * operator's to waive — the conflict-of-interest distance floor, which exists precisely to stop
  * somebody valuing gold at a branch beside their own home, and which a platform administrator
  * lifts for a client in Settings if it is genuinely wrong.
@@ -45,8 +45,8 @@ export enum AssignmentRule {
   REPEAT_AUDITOR_ROTATION = 'REPEAT_AUDITOR_ROTATION',
   /** On leave, or the date is a holiday or outside the project timeline. */
   DATE_AVAILABILITY = 'DATE_AVAILABILITY',
-  /** Already assigned somewhere else that day. */
-  ASSAYER_DOUBLE_BOOKED = 'ASSAYER_DOUBLE_BOOKED',
+  // ASSAYER_DOUBLE_BOOKED was removed 2026-09-24: an assayer may hold several branches on one day
+  // (owner decision E2), and no check produced it any more.
   /** This branch already has a live assignment. */
   BRANCH_ALREADY_ASSIGNED = 'BRANCH_ALREADY_ASSIGNED',
   /** The branch is cancelled or completed — there is no work to give. */
@@ -61,8 +61,13 @@ export enum AssignmentRule {
  * Each is a decision an operator can legitimately make and be held to afterwards: this person is
  * not on the bank's panel but the desk has cleared it; the certification lapsed last week and the
  * renewal is in hand; they are further out than usual because nobody nearer is free; they audited
- * this branch last time and the rotation is worth breaking for continuity; they are on leave and
- * have agreed to come in.
+ * this branch last time and the rotation is worth breaking for continuity.
+ *
+ * DATE_AVAILABILITY is deliberately NOT here (F17, 2026-09-25). It sat on this list while every
+ * write path refused a holiday, an out-of-window date or a recorded leave day outright — so the
+ * panel offered "Assign anyway" on a leave exclusion, the operator typed a reason, and the server
+ * refused anyway. The owner's leave-day decision is that a date clash is resolved by moving the
+ * date or recording the leave change, not by a reason typed on the planning screen.
  *
  * Every one is audited against the assignment with the reason attached — see
  * `ASSIGNMENT_ELIGIBILITY_OVERRIDDEN`.
@@ -72,7 +77,6 @@ export const OVERRIDABLE_WITH_A_REASON: readonly AssignmentRule[] = [
   AssignmentRule.SKILLS_AND_CERTIFICATIONS,
   AssignmentRule.DISTANCE_CEILING,
   AssignmentRule.REPEAT_AUDITOR_ROTATION,
-  AssignmentRule.DATE_AVAILABILITY,
 ];
 
 /**
@@ -87,13 +91,14 @@ export const NOT_OVERRIDABLE_BECAUSE: Partial<Record<AssignmentRule, string>> = 
     'This is the conflict-of-interest rule — the appraiser lives too close to the branch to value '
     + 'its gold independently. It is not an operator\'s to waive. A platform administrator can '
     + 'change this client\'s minimum-distance rule in Settings if it is set wrongly.',
-  [AssignmentRule.ASSAYER_DOUBLE_BOOKED]:
-    'They are already booked elsewhere that day. Nobody can be in two branches at once — pick '
-    + 'another date, or another person.',
   [AssignmentRule.BRANCH_ALREADY_ASSIGNED]:
     'This branch already has a live assignment. Cancel or reassign the existing one first.',
   [AssignmentRule.BRANCH_NOT_OPEN]:
     'This branch is closed or cancelled, so there is no work to assign.',
+  [AssignmentRule.DATE_AVAILABILITY]:
+    'The date itself is not workable for this person — a holiday, outside the project\'s dates, or '
+    + 'recorded leave. A reason does not change the calendar: pick another date, or correct the leave '
+    + 'on their record if it is wrong.',
   [AssignmentRule.PROFILE_NOT_DEPLOYABLE]:
     'Their profile is not deployable — onboarding is unfinished or the record is deleted. Finish '
     + 'onboarding on their record; dispatching somebody who has not cleared document and '

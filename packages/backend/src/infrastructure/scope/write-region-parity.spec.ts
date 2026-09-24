@@ -264,6 +264,13 @@ interface Exemption { kind: 'by-design' | 'open'; reason: string }
 
 const EXEMPT: Record<string, Exemption> = {
   // ── by design ───────────────────────────────────────────────────────────
+  'assayer/assayer-self-service.controller.ts::myCapabilities': {
+    kind: 'by-design',
+    reason:
+      'ASSAYER-only and self-only: the path carries no id, the answer is always about req.user, so ' +
+      'there is no other record to reach. An assayer principal carries no regions, so the ceiling ' +
+      'would be a no-op for the only caller the route admits.',
+  },
   'planning/planning.controller.ts::queueBulkOffers': {
     kind: 'by-design',
     reason:
@@ -280,45 +287,39 @@ const EXEMPT: Record<string, Exemption> = {
       'assertProjectBranchInScope per branch with the scope captured at enqueue, and reports a refused ' +
       'branch as a failure of its own — the same per-branch outcome the separate requests had.',
   },
-  'project/project.controller.ts::findOne': {
-    kind: 'by-design',
-    reason:
-      'A project has no region of its own — it is a set of branches and may legitimately span ' +
-      'several, which is why `assertProjectInScope` refuses a project outright rather than ' +
-      'narrowing it. Applying that here would stop a regional operator opening the very project ' +
-      'their own branches sit in. The branch-level routes underneath it (`:id/branches`, ' +
-      '`branches/:pbId/*`) are each scoped, so what is readable through a project is narrowed ' +
-      'even though the project row is not.',
-  },
-  'project/project.controller.ts::update': {
-    kind: 'by-design',
-    reason:
-      'Same as findOne: the record edited here is the project row — name, dates, budget, ' +
-      'priority — none of which is region-anchored, and its read sibling is deliberately open ' +
-      'for the reason above. Guarding the write while the read stays open would invert the ' +
-      'asymmetry rather than close it. Confirmed at runtime on 2026-09-10 that an EAST-scoped ' +
-      'OPERATIONS account can edit a Maharashtra-only project; that is the intended answer.',
-  },
-  'project/project.controller.ts::transition': {
-    kind: 'by-design',
-    reason: 'A lifecycle move on the project row itself — same reasoning as update.',
-  },
   'project/project.controller.ts::remove': {
     kind: 'by-design',
     reason:
       'Soft-deletes the project row. ADMIN-only and permission-gated; the project is not region ' +
       'anchored, and its branches keep their own ceiling on every route that reaches them.',
   },
-  'project/project.controller.ts::getBranchImportJob': {
-    kind: 'by-design',
-    reason:
-      'Polls a Bull job by id and answers only state/progress/counts. The job is refused unless ' +
-      'its payload names this project, and the upload that created it is region-checked at the ' +
-      'door (`uploadBranches`), so there is no job here a caller was not allowed to start.',
-  },
   'project/project.controller.ts::downloadTemplate': {
     kind: 'by-design',
     reason: 'Generates an empty spreadsheet template. Contains no branch data of any region.',
+  },
+  'project/project.controller.ts::importBranches': {
+    kind: 'by-design',
+    reason:
+      'The ceiling for a branch upload depends on the ROWS of the file (the states they name, and the '
+      + 'regions of the branches they match), so it cannot be asserted from the route parameters. It '
+      + 'is asserted in `BranchImportJob.prepare` — which the Jobs foundation runs in this request, '
+      + 'before anything is stored, with the caller\'s regions — via `RegionGuardService.assertRegionSettable` '
+      + 'for every region the file touches, and again per row in the worker. Pinned by '
+      + '`branch-import/branch-import.region.spec.ts` (mutation-checked).',
+  },
+  'project/project.controller.ts::commitBranchImport': {
+    kind: 'by-design',
+    reason:
+      'A commit is started through the same `BranchImportJob.prepare`, which re-applies the review decisions '
+      + 'to the stored rehearsal and asserts `assertRegionSettable` for every region the committed rows would '
+      + 'land in or already sit in, before the job is queued; the worker refuses any row outside them again.',
+  },
+  'project/project.controller.ts::retryBranchImport': {
+    kind: 'by-design',
+    reason:
+      'Re-runs a failed import over its own stored file: only a job the caller may see (their own, or an '
+      + 'administrator\'s within their regions) can be retried, and the retry goes through `BranchImportJob.prepare` '
+      + 'and the worker\'s per-row region check exactly as the original did.',
   },
   'reports/reports.controller.ts::queueBilling': {
     kind: 'by-design',
@@ -367,12 +368,7 @@ const EXEMPT: Record<string, Exemption> = {
   'document/document.controller.ts::mobileUploadBinary': { kind: 'open', reason: 'document workstream; the binary transport for the same upload, with the same body identifiers and the same gap.' },
   'document/document.controller.ts::completeUpload': { kind: 'open', reason: 'document workstream; finalises a resumable upload session and commits the packet against its branch.' },
   'document/document.controller.ts::downloadFile': { kind: 'open', reason: 'document workstream; streams a branch document packet keyed by document id — the read half of the same boundary.' },
-  'document/document.controller.ts::updateStatus': { kind: 'open', reason: 'document workstream; moves a branch packet through the pipeline, which is what the operations board is measured on.' },
-  'document/document.controller.ts::receiveDocument': { kind: 'open', reason: 'document workstream; records physical receipt of another region’s paperwork at a location this caller chose.' },
   'document/document.controller.ts::operationsOverview': { kind: 'open', reason: 'document workstream; a cross-branch operations board that aggregates packets from every region.' },
-  'document/document.controller.ts::sendToExternalOcr': { kind: 'open', reason: 'document workstream; sends another region’s bank paperwork to a third-party OCR provider.' },
-  'document/document.controller.ts::assignDataEntry': { kind: 'open', reason: 'document workstream; routes another region’s packet to a named person for keying.' },
-  'document/document.controller.ts::completeDataEntry': { kind: 'open', reason: 'document workstream; records the keyed result against a packet in a region this caller may not read.' },
 
   /**
    * Both entries below were found by the DTO-aware anchoring added on 2026-09-10, after a
@@ -387,16 +383,6 @@ const EXEMPT: Record<string, Exemption> = {
       '`assertScheduleInScope` since the ceiling existed. The exact family this campaign is ' +
       'about — the route that brings the record into existence has no ceiling while the route ' +
       'that moves it does — and the file is being edited by another session as this lands.',
-  },
-  'billing-engine/billing-engine.controller.ts::listAssayerInvoices': {
-    kind: 'open',
-    reason:
-      'A read-side gap, not fixable from the controller: the list is served by ' +
-      '`AssayerInvoiceService.list(q)`, which accepts no scope argument at all, and that file is ' +
-      'outside what this campaign may change. Adding a guard on the OPTIONAL `?assayerId=` filter ' +
-      'would refuse the narrow call and let the unfiltered one through — a decorative guard, ' +
-      'which is worse than none. The three by-id routes beside it (`assayer-invoices/:id`, ' +
-      '`approve`, `cancel`) are now guarded; this is the list.',
   },
 
   'expense/expense.controller.ts::create': { kind: 'open', reason: 'expense workstream; raises a reimbursement claim against an assignment — money in, keyed on `:assignmentId`, which is the same anchor `assertAssignmentInScope` already guards elsewhere.' },
@@ -417,7 +403,7 @@ const EXEMPT: Record<string, Exemption> = {
  * dealt with: a new hole makes this fail, and the only ways to make it pass again are to fix the
  * route or to fix another one.
  */
-const OPEN_DEFECT_BUDGET = 23;
+const OPEN_DEFECT_BUDGET = 17; // 22 → 17: document updateStatus/receive/send-external-ocr/assign-data-entry/complete-data-entry now assert the ceiling (2026-09-24). 23 → 22: assayer-invoices list narrowed to the caller's regions (audit F12, 2026-09-24)
 
 const ALL: Handler[] = [];
 for (const f of controllerFiles(MODULES)) ALL.push(...handlersIn(f));

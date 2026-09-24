@@ -268,7 +268,7 @@ export const DataEntryOverview: React.FC = () => {
               const items = bucket.items;
               return (
                 <div key={b.key} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
-                  <button onClick={() => navigate(b.link)}
+                  <button onClick={() => navigate(b.link)} title={`Open the queue for: ${b.label} — ${bucket.total} overdue`}
                     style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: b.tone, fontSize: 'var(--text-xs)', fontWeight: 700, width: 'auto' }}>
                     {b.label} ({bucket.total}) →
                   </button>
@@ -277,7 +277,7 @@ export const DataEntryOverview: React.FC = () => {
                       <span key={i.id}>
                         {idx > 0 && ' · '}
                         {i.projectBranchId ? (
-                          <button onClick={() => navigate(`/data-entry/case/${i.projectBranchId}`)}
+                          <button onClick={() => navigate(`/data-entry/case/${i.projectBranchId}`)} title={`Open the case for ${i.branchName ?? 'this branch'} — waiting ${i.ageHours}h`}
                             style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 'var(--text-2xs)', width: 'auto' }}>
                             {i.branchName ?? 'branch'}
                           </button>
@@ -360,7 +360,7 @@ export const DataEntryOverview: React.FC = () => {
               return (
                 // The card is the drill-down: it opens the Packets queue filtered to this
                 // member, answering "what exactly does <name> hold?" in one click.
-                <button key={m.id} onClick={() => navigate(`/data-entry/packets?assignedTo=${m.id}`)}
+                <button key={m.id} onClick={() => navigate(`/data-entry/packets?assignedTo=${m.id}`)} title={`See every packet ${m.name} is holding — ${m.openPackets} packets, ${m.reworkPackets} to redo, ${m.casesInReview} reports to check`}
                   style={{ padding: '9px 11px', borderRadius: '8px', border: `1px solid ${stale ? 'var(--danger)' : 'var(--border-hair)'}`, background: 'var(--bg-surface-2)', cursor: 'pointer', textAlign: 'left', color: 'inherit', width: 'auto' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
                     <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700 }}>{m.name}</span>
@@ -437,11 +437,11 @@ export const DataEntryOverview: React.FC = () => {
               </span>
               {a.branchName && (
                 a.projectBranchId ? (
-                  <button onClick={() => navigate(`/data-entry/case/${a.projectBranchId}`)}
+                  <button onClick={() => navigate(`/data-entry/case/${a.projectBranchId}`)} title={`Open the case for ${a.branchName}`}
                     style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontSize: 'var(--text-xs)', fontWeight: 600, width: 'auto' }}>
                     {a.branchName}
                   </button>
-                ) : <span style={{ color: 'var(--accent)' }}>{a.branchName}</span>
+                ) : <span title={a.branchName} style={{ color: 'var(--accent)' }}>{a.branchName}</span>
               )}
               {a.remarks && !isSystemRemark(a.remarks) && (
                 <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', flexBasis: '100%' }}>{a.remarks}</span>
@@ -472,7 +472,7 @@ const MetricWord: React.FC<{
 const NumberCard: React.FC<{
   icon: React.ReactNode; value: number | undefined | null; caption: string; tone?: string; onClick: () => void;
 }> = ({ icon, value, caption, tone, onClick }) => (
-  <button onClick={onClick} style={{
+  <button onClick={onClick} title={`${caption}${typeof value === 'number' ? `: ${value}` : ' — loading'} — click to open the queue`} style={{
     ...deskCard, textAlign: 'left', cursor: 'pointer', color: 'inherit', width: 'auto',
   }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: tone ?? 'var(--text-primary)' }}>

@@ -19,6 +19,7 @@ import { api } from '../../../services/api';
 
 jest.mock('../../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   useCurrentUserId: () => 'hr-1',
   canManageAssayers: () => true,
@@ -99,7 +100,7 @@ describe('the hiring pipeline, as one list', () => {
     draw();
     await waitFor(() => expect(screen.getByText('Ramesh Kumar')).toBeInTheDocument());
     expect(screen.getByText('Check their form and documents, then approve or send it back')).toBeInTheDocument();
-    expect(screen.getByText('Record the result of their background check')).toBeInTheDocument();
+    expect(screen.getByText('Record the result of their background check, then send them for approval')).toBeInTheDocument();
   });
 
   it('filters by stage, and keeps the choice in the URL', async () => {

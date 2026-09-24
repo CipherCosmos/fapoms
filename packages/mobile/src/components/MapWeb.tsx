@@ -3,6 +3,7 @@ import { View, Text } from 'react-native';
 import { Icon } from './ui/primitives';
 import { useTheme } from '../theme/ThemeProvider';
 import { useT } from '../i18n';
+import { getApiBaseUrl } from '../services/api.service';
 
 // Web implementation of the in-app map. Uses Leaflet + OpenStreetMap tiles with an
 // optional OSRM route polyline. Kept free with no API key. Native uses react-native-maps.
@@ -58,7 +59,10 @@ export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destinatio
         attributionControl: false,
       });
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      // The India map, from our own API — the same tiles MapPicker draws. OpenStreetMap's public
+      // tiles show India's borders as administered on the ground, not as the Survey of India does.
+      L.tileLayer(`${getApiBaseUrl()}/geo/tiles/{z}/{x}/{y}`, {
+        minZoom: 2,
         maxZoom: 19,
       }).addTo(map);
 

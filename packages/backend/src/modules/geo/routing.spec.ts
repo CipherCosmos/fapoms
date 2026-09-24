@@ -6,6 +6,8 @@ import {
   estimateRoute,
   routingModeForTravelMode,
   ROUTING_MODE_BY_TRAVEL_MODE,
+  mapWithConcurrency,
+  TABLE_REQUEST_CONCURRENCY,
 } from './routing.provider';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -215,6 +217,29 @@ describe('Geo Routing & Optimization', () => {
       }
       expect(Object.keys(results)).toHaveLength(5);
       expect(Object.values(results).every((r) => r.source === 'OSRM' && r.distanceKm === 200)).toBe(true);
+    });
+
+    /**
+     * F9 (2026-09-25): a national pool is dozens of chunks. They used to be fired all at once at a
+     * router whose breaker trips on the fifth timeout; now at most TABLE_REQUEST_CONCURRENCY are
+     * in flight.
+     */
+    it('keeps at most TABLE_REQUEST_CONCURRENCY /table requests in flight', async () => {
+      const module = await buildModule({ OSRM_URL: 'http://osrm.test', OSRM_TABLE_MAX_COORDS: '3' });
+      const osrm = module.get(OSRMRoutingProvider);
+      let inFlight = 0;
+      let peak = 0;
+      fetchMock.mockImplementation(async (url: string) => {
+        inFlight += 1; peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        const n = url.split('/table/v1/driving/')[1].split('?')[0].split(';').length - 1;
+        return tableResponse(Array(n).fill(200000), Array(n).fill(600));
+      });
+      const dests = Array.from({ length: 12 }, (_, i) => ({ id: `d${i}`, latitude: 18 + i * 0.01, longitude: 73 + i * 0.01 }));
+      await osrm.calculateDistances(PUNE_CAMP, dests);
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+      expect(peak).toBeLessThanOrEqual(TABLE_REQUEST_CONCURRENCY);
     });
 
     it('estimates only the pair OSRM could not reach, and does not trip the breaker for it', async () => {
@@ -589,5 +614,23 @@ describe('Geo Routing & Optimization', () => {
       expect(travelTimeScore(900)).toBeGreaterThan(0);
       expect(travelTimeScore(60)).toBeCloseTo(70.3, 0);
     });
+  });
+});
+
+describe('mapWithConcurrency', () => {
+  it('never runs more than the limit at once, and keeps input order', async () => {
+    let inFlight = 0; let peak = 0;
+    const out = await mapWithConcurrency([5, 1, 4, 2, 3, 0], 2, async (n) => {
+      inFlight += 1; peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, n));
+      inFlight -= 1;
+      return n * 10;
+    });
+    expect(peak).toBe(2);
+    expect(out).toEqual([50, 10, 40, 20, 30, 0]);
+  });
+  it('handles an empty list and a limit larger than the list', async () => {
+    await expect(mapWithConcurrency([], 4, async (x) => x)).resolves.toEqual([]);
+    await expect(mapWithConcurrency([1], 9, async (x) => x + 1)).resolves.toEqual([2]);
   });
 });

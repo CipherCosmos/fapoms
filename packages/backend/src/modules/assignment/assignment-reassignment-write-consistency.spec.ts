@@ -81,6 +81,8 @@ describe('AssignmentService.reassignAssignment — write consistency', () => {
         return null;
       }),
       create: jest.fn((_cls: any, dto: any) => ({ id: 'lineage-1', ...dto })),
+      // The outgoing assayer's calendar entry is retired on the same transaction (retireSchedule).
+      getRepository: jest.fn(() => ({ findOne: jest.fn(async () => null), save: jest.fn(async (x: any) => x) })),
       save: jest.fn(async (e: any) => {
         if (e?.previousAssayerId !== undefined) { lineageSaved.push(e); return e; }
         assignmentsSaved.push(e);
@@ -101,6 +103,7 @@ describe('AssignmentService.reassignAssignment — write consistency', () => {
     };
     (service as any).auditService = auditService;
     (service as any).assayerService = {
+      disableLiveTrackingWhenWorkEnds: jest.fn(async () => undefined),
       findOne: jest.fn(async () => ({
         id: NEW_ASSAYER, status: AssayerStatus.ACTIVE, isActive: true,
         displayName: 'Incoming', assayerCode: 'AS-NEW',
@@ -116,6 +119,8 @@ describe('AssignmentService.reassignAssignment — write consistency', () => {
     // Reassignment now tells the losing assayer, the gaining assayer and the desk. `emitSafe`
     // never throws in production; the stub records so the tests can assert who was told.
     (service as any).notificationDispatch = { emitSafe: jest.fn() };
+    // A declined job's branch goes back to PLANNING on reassignment (E9).
+    (service as any).projectService = { initiateBranchPlanning: jest.fn(async () => undefined) };
 
     return {
       service, manager, auditService, lineageSaved, assignmentsSaved, emit,

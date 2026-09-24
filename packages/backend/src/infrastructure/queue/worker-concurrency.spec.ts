@@ -123,3 +123,18 @@ describe('worker concurrency', () => {
     });
   });
 });
+
+/**
+ * The deployment example quotes the slot total so an operator can size the worker's pool. It said
+ * 33 while the table summed to 47 — a number written down as a fact about one day. Pinned here.
+ */
+describe('.env.production.example quotes the live slot total', () => {
+  it('matches totalWorkerSlots()', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { totalWorkerSlots: total } = require('./worker-concurrency');
+    const env = readFileSync(require('path').join(__dirname, '..', '..', '..', '..', '..', '.env.production.example'), 'utf8');
+    const quoted = /sized above the (\d+) slots/.exec(env);
+    expect(quoted).not.toBeNull();
+    expect(Number(quoted![1])).toBe(total());
+  });
+});

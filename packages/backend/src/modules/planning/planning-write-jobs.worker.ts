@@ -15,7 +15,8 @@ import { AssignmentService } from '../assignment/assignment.service';
 import { ProjectService } from '../project/project.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { runAsJobActor } from '../../infrastructure/queue/job-actor';
-import { progressReporter } from '../../infrastructure/queue/queued-job';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
 import {
   BulkBranchResult,
   BulkBranchSucceeded,
@@ -45,6 +46,19 @@ export function refusalOf(err: unknown): string {
   return err instanceof Error && err.message ? err.message : 'Failed without a reason.';
 }
 
+/** The tracked row's one line for a bulk run: "35 of 37 branches offered to Ravi; 2 refused." */
+export function describeBulk(result: BulkBranchResult, done: string, countKey: string) {
+  const ok = result.succeeded.length;
+  const total = ok + result.failed.length;
+  const branches = total === 1 ? 'branch' : 'branches';
+  return {
+    summary: result.failed.length === 0
+      ? `${ok} ${branches} ${done}.`
+      : `${ok} of ${total} ${branches} ${done}; ${result.failed.length} refused.`,
+    counts: { [countKey]: ok, refused: result.failed.length },
+  };
+}
+
 /**
  * ONE loop for the whole queue, dispatching on the job name — not a `@Process` per job.
  *
@@ -63,6 +77,7 @@ export class PlanningWriteJobsWorker {
     private readonly assignmentService: AssignmentService,
     private readonly projectService: ProjectService,
     private readonly regionGuard: RegionGuardService,
+    private readonly tracker: BackgroundJobTracker,
   ) {}
 
   @Process({ name: '*', concurrency: 1 })
@@ -82,30 +97,50 @@ export class PlanningWriteJobsWorker {
     }
   }
 
-  /** The deploy. Returns exactly the body the synchronous route used to answer with. */
+  /**
+   * The deploy. Returns exactly the body the synchronous route used to answer with.
+   *
+   * Every handler runs through the tracker: the row that lets a refreshed page find this run goes
+   * RUNNING → SUCCEEDED/FAILED with a one-line summary, while the Bull return value — what the poll
+   * route hands the page — and the rethrow on failure are unchanged.
+   */
   async executePlan(job: Job<ExecutePlanJobData>) {
     const { planId, scheduledDate, actor } = job.data;
     this.logger.log(`Deploy job ${job.id} starting for plan ${planId}.`);
-    const result = await runAsJobActor(actor, () =>
-      this.operationsPlanning.executeApprovedPlan(planId, actor.userId, scheduledDate, progressReporter(job)));
-    this.logger.log(
-      `Deploy job ${job.id} finished: ${result.deployed.length} deployed (${result.alreadyDeployedCount} by an earlier run), ${result.skipped.length} skipped.`,
-    );
-    return describeDeployment(result);
+    return this.tracker.run(job, async (t) => {
+      const result = await runAsJobActor(actor, () =>
+        this.operationsPlanning.executeApprovedPlan(planId, actor.userId, scheduledDate, t.progress));
+      this.logger.log(
+        `Deploy job ${job.id} finished: ${result.deployed.length} deployed (${result.alreadyDeployedCount} by an earlier run), ${result.skipped.length} skipped.`,
+      );
+      return describeDeployment(result);
+    }, {
+      describe: (r) => ({
+        summary: r.message,
+        counts: { deployed: r.deployedCount, skipped: r.skippedCount, alreadyDeployed: r.alreadyDeployedCount },
+      }),
+    });
   }
 
   async generateVersion(job: Job<GenerateVersionJobData>) {
-    const { projectId, overrides, justification, actor } = job.data;
-    const onProgress = progressReporter(job);
-    await onProgress(0, 1, 'Loading project and workforce');
-    return runAsJobActor(actor, () =>
-      this.operationsPlanning.createOrRegeneratePlan(
-        projectId,
-        (overrides ?? []) as unknown as PlanOverrideDto[],
-        actor.userId,
-        justification,
-        onProgress,
-      ));
+    const { projectId, overrides, justification, actor, scope, startDate } = job.data;
+    return this.tracker.run(job, async (t) => {
+      await t.progress(0, 1, 'Loading project and workforce');
+      return runAsJobActor(actor, () =>
+        this.operationsPlanning.createOrRegeneratePlan(
+          projectId,
+          (overrides ?? []) as unknown as PlanOverrideDto[],
+          actor.userId,
+          justification,
+          t.progress,
+          { scope: scope ?? undefined, startDate: startDate ?? null },
+        ));
+    }, {
+      describe: (plan) => ({
+        summary: `Coverage plan version ${plan.currentVersion} generated (${String(plan.status).toLowerCase()}).`,
+        counts: { version: plan.currentVersion },
+      }),
+    });
   }
 
   /**
@@ -115,10 +150,10 @@ export class PlanningWriteJobsWorker {
    * arrive in a body, and a batch must not be a way around the check a single offer meets.
    */
   async bulkOffer(job: Job<BulkOfferJobData>): Promise<BulkBranchResult> {
-    const { projectBranchIds, assayerId, assayerName, scheduledDate, acceptOnBehalf, acceptanceReason, scope, actor } = job.data;
+    const { projectBranchIds, assayerId, assayerName, scheduledDate, acceptOnBehalf, acceptanceReason, overrideReason, scope, actor } = job.data;
     this.logger.log(`Bulk offer job ${job.id}: ${projectBranchIds.length} branch(es) to ${assayerId}.`);
-    return runAsJobActor(actor, () =>
-      this.eachBranch(job, projectBranchIds, 'Offering branches', async (projectBranchId): Promise<BulkBranchSucceeded> => {
+    return this.tracker.run(job, (t) => runAsJobActor(actor, () =>
+      this.eachBranch(t.progress, projectBranchIds, 'Offering branches', async (projectBranchId): Promise<BulkBranchSucceeded> => {
         await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope ?? undefined);
         const created = await this.assignmentService.create({
           projectBranchId,
@@ -127,20 +162,22 @@ export class PlanningWriteJobsWorker {
           remarks: `Bulk-assigned to ${assayerName || 'the selected assayer'} from the planning queue`,
           acceptOnBehalf,
           acceptanceReason: acceptOnBehalf ? acceptanceReason : undefined,
+          // Waives an overridable rule (e.g. rotation) on this branch; recorded by create().
+          ...(overrideReason ? { overrideReason } : {}),
         }, actor.userId);
         return { projectBranchId, assignmentId: created?.id, status: created?.status };
-      }));
+      })), { describe: (r) => describeBulk(r, `offered to ${assayerName || 'the assayer'}`, 'offered') });
   }
 
   async bulkUnableToCover(job: Job<BulkUnableToCoverJobData>): Promise<BulkBranchResult> {
     const { projectBranchIds, reason, scope, actor } = job.data;
     this.logger.log(`Unable-to-cover job ${job.id}: ${projectBranchIds.length} branch(es).`);
-    return runAsJobActor(actor, () =>
-      this.eachBranch(job, projectBranchIds, 'Recording branches', async (projectBranchId): Promise<BulkBranchSucceeded> => {
+    return this.tracker.run(job, (t) => runAsJobActor(actor, () =>
+      this.eachBranch(t.progress, projectBranchIds, 'Recording branches', async (projectBranchId): Promise<BulkBranchSucceeded> => {
         await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope ?? undefined);
         await this.projectService.markBranchUnableToCover(projectBranchId, actor.userId, reason);
         return { projectBranchId };
-      }));
+      })), { describe: (r) => describeBulk(r, 'marked unable to cover', 'recorded') });
   }
 
   /**
@@ -149,12 +186,11 @@ export class PlanningWriteJobsWorker {
    * failure the browser loop had when the rate limit refused some of its requests.
    */
   private async eachBranch(
-    job: Job,
+    onProgress: ProgressCallback,
     ids: string[],
     stage: string,
     work: (projectBranchId: string) => Promise<BulkBranchSucceeded>,
   ): Promise<BulkBranchResult> {
-    const onProgress = progressReporter(job);
     const result: BulkBranchResult = { succeeded: [], failed: [] };
     for (let i = 0; i < ids.length; i++) {
       await onProgress(i, ids.length, stage);

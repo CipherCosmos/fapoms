@@ -64,6 +64,11 @@ export enum AssayerUnavailableReason {
    * path back, and the activation gate enforces exactly that.
    */
   BGV_FAILED = 'BGV_FAILED',
+  /**
+   * Rejected at the final approval before training, with the approver's reason on the approval
+   * round. Stamped by the rejection itself; re-opening the approval is the one way back.
+   */
+  APPROVAL_REJECTED = 'APPROVAL_REJECTED',
 }
 
 /** The outcome of a background check, separate from how risky it was judged to be. */
@@ -191,6 +196,7 @@ export const ASSAYER_UNAVAILABLE_LABELS: Record<AssayerUnavailableReason, string
   [AssayerUnavailableReason.MOVED_ABROAD]: 'Moved out of India',
   [AssayerUnavailableReason.MOVED_TO_COMPANY]: 'Now engaged through a company',
   [AssayerUnavailableReason.BGV_FAILED]: 'Background verification failed',
+  [AssayerUnavailableReason.APPROVAL_REJECTED]: 'Not approved to join',
 };
 
 export const EMPANELMENT_STANDING_LABELS: Record<EmpanelmentStatus, string> = {
@@ -264,6 +270,12 @@ export enum OnboardingDocument {
   /** The background-verification report itself, filed as a document like any other. */
   BGV_REPORT = 'BGV_REPORT',
   /**
+   * The re-checks done over time (2026-09-23): the police clearance certificate and the credit
+   * bureau's report, each filed like the BGV report and claimed by the check it was read for.
+   */
+  POLICE_CERTIFICATE = 'POLICE_CERTIFICATE',
+  CREDIT_REPORT = 'CREDIT_REPORT',
+  /**
    * The five documents the Appraiser Recruitment spec asks for beyond the shared list, split by
    * `EmploymentCategory` below. `OFFICE_ADDRESS_PROOF` above already covers the spec's "Shop
    * Address Proof" for both categories — these five are the ones nothing existing covers.
@@ -307,6 +319,23 @@ export const IDENTITY_DOCUMENTS: readonly OnboardingDocument[] = [
 export const isIdentityDocument = (d: OnboardingDocument | string): boolean =>
   IDENTITY_DOCUMENTS.includes(d as OnboardingDocument);
 
+/**
+ * Documents a reviewer VERIFIES — reads, compares with the record, and signs off.
+ *
+ * The identity documents, plus the passbook. Kept as its own list rather than adding the passbook
+ * to `IDENTITY_DOCUMENTS`, because that list also means "counts towards KYC", "feeds the
+ * qualification score" and "carries its own number and expiry" — none of which a passbook does.
+ * What it does share is the act of checking: the account a payout goes to is only as good as the
+ * evidence that it is this person's, and a passbook that merely "arrived" was evidence of nothing.
+ */
+export const VERIFIED_DOCUMENTS: readonly OnboardingDocument[] = [
+  ...IDENTITY_DOCUMENTS,
+  OnboardingDocument.BANK_PASSBOOK,
+];
+
+export const isVerifiableDocument = (d: OnboardingDocument | string): boolean =>
+  VERIFIED_DOCUMENTS.includes(d as OnboardingDocument);
+
 /** Where a document is up to. Only identity documents are verified; the rest just arrive. */
 export enum DocumentVerification {
   PENDING = 'PENDING',
@@ -321,8 +350,11 @@ export enum DocumentVerification {
  * `aadhaarNumber` on the person — and it prints no name at all, so demanding a name before it can
  * be verified would ask a reviewer for something that is not on the card in front of them.
  */
-export const DOCUMENTS_PRINTING_A_NAME: readonly OnboardingDocument[] =
-  IDENTITY_DOCUMENTS.filter((d) => d !== OnboardingDocument.AADHAAR_BACK);
+export const DOCUMENTS_PRINTING_A_NAME: readonly OnboardingDocument[] = [
+  ...IDENTITY_DOCUMENTS.filter((d) => d !== OnboardingDocument.AADHAAR_BACK),
+  // The account holder's name: the check that catches a payout routed to a relative's account.
+  OnboardingDocument.BANK_PASSBOOK,
+];
 
 /**
  * What each card actually prints, and therefore what a reviewer can be asked to type from it.
@@ -359,6 +391,9 @@ export const DOCUMENT_PRINTED_FIELDS: Partial<Record<OnboardingDocument, Printed
   [OnboardingDocument.DRIVING_LICENCE]: PRINTS({ name: true, dateOfBirth: true, address: true }),
   [OnboardingDocument.ID_PROOF]: PRINTS({ name: true }),
   [OnboardingDocument.ADDRESS_PROOF]: PRINTS({ name: true, address: true }),
+  // The name here; the account number and IFSC are read too, but checked against the record by
+  // the verification itself rather than stored on the document — see `verifyDocument`.
+  [OnboardingDocument.BANK_PASSBOOK]: PRINTS({ name: true }),
 };
 
 /**
@@ -570,6 +605,8 @@ export const ONBOARDING_DOCUMENT_COLUMNS: Record<OnboardingDocument, string> = {
   // None of these six have a roster-spreadsheet column either — they only ever arrive through
   // self-registration or the BGV stage view.
   [OnboardingDocument.BGV_REPORT]: '',
+  [OnboardingDocument.POLICE_CERTIFICATE]: '',
+  [OnboardingDocument.CREDIT_REPORT]: '',
   [OnboardingDocument.SHOP_ENTITY_PROOF]: '',
   [OnboardingDocument.ASSOCIATION_LETTER]: '',
   [OnboardingDocument.RENT_AGREEMENT]: '',
@@ -601,6 +638,8 @@ export const ONBOARDING_DOCUMENT_LABELS: Record<OnboardingDocument, string> = {
   [OnboardingDocument.VOTER_ID]: 'Voter ID',
   [OnboardingDocument.PASSPORT]: 'Passport',
   [OnboardingDocument.BGV_REPORT]: 'Background verification report',
+  [OnboardingDocument.POLICE_CERTIFICATE]: 'Police verification certificate',
+  [OnboardingDocument.CREDIT_REPORT]: 'Credit (CIBIL) report',
   [OnboardingDocument.SHOP_ENTITY_PROOF]: 'Shop entity proof',
   [OnboardingDocument.ASSOCIATION_LETTER]: 'Association letter',
   [OnboardingDocument.RENT_AGREEMENT]: 'Rent agreement',

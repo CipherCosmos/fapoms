@@ -99,6 +99,19 @@
 		file_server browse
 	}
 
+	# Invite links open the field app. Android App Links and iOS Universal Links fetch these two
+	# files from the site root; the backend serves them from Platform Settings
+	# (registration.androidAppCertSha256, registration.iosAppTeamId — the iOS one answers 404
+	# until a Team ID is set). See packages/backend/src/modules/app-links.
+	handle /.well-known/assetlinks.json {
+		rewrite * /api/v1/public/app-links/assetlinks.json
+		reverse_proxy backend:3000
+	}
+	handle /.well-known/apple-app-site-association {
+		rewrite * /api/v1/public/app-links/apple-app-site-association
+		reverse_proxy backend:3000
+	}
+
 	# --- Everything else is the web app -------------------------------------------------------
 	# The frontend image handles SPA fallback internally (try_files → index.html), so a deep link
 	# forwarded here returns the app rather than a 404.
@@ -111,12 +124,14 @@
 	# the running stack found 398 lines each holding a working one. The token is replaced before the
 	# line is written, in the request path AND in the Referer the browser sends from the form page.
 	# The same rule lives in packages/backend/src/infrastructure/http/redact-url.ts for the API's logs.
+	# A password-setup link (/account-setup/<token>, /api/v1/public/account-setup/<token>) is the same
+	# kind of thing for a staff account — until it is spent it IS the password — so it gets the same rule.
 	log {
 		output stdout
 		format filter {
-			request>uri regexp "(/public/registration/|/register/)[^/?#]+" "${1}[token]"
+			request>uri regexp "(/public/registration/|/register/|/account-setup/)[^/?#]+" "${1}[token]"
 			request>uri regexp "(?i)([?&](?:panNumber|aadhaarNumber|bankAccountNumber|token)=)[^&#]*" "${1}[redacted]"
-			request>headers>Referer regexp "(/public/registration/|/register/)[^/?#]+" "${1}[token]"
+			request>headers>Referer regexp "(/public/registration/|/register/|/account-setup/)[^/?#]+" "${1}[token]"
 			wrap console
 		}
 	}

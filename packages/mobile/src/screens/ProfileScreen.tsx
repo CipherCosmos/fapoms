@@ -111,7 +111,6 @@ export function lockReasonFor(key: string): TranslationKey | undefined {
  * import, before any language has been chosen.
  */
 const HR_LOCK_REASONS: Record<string, TranslationKey> = {
-  maxDailyWorkload: 'profile.lockReasons.maxDailyWorkload',
   maxWeeklyWorkload: 'profile.lockReasons.maxWeeklyWorkload',
   panNumber: 'profile.lockReasons.panNumber',
   bankAccountNumber: 'profile.lockReasons.bankAccountNumber',
@@ -156,7 +155,6 @@ export interface ProfileDataState {
   ifscCode: string;
   /** HR-maintained, read-only here. Present so the completeness banner can count it. */
   joiningDate: string;
-  maxDailyWorkload: number;
   maxWeeklyWorkload: number;
   employmentType: string;
   performanceRating: number | string;
@@ -195,6 +193,8 @@ interface ProfileScreenProps {
   onOpenFeedback?: () => void;
   /** Opens the self-service time-off calendar. */
   onOpenAvailability?: () => void;
+  /** Opens the digital ID card — the only form the card takes (2026-09-23). */
+  onOpenIdCard?: () => void;
 }
 
 /**
@@ -212,6 +212,7 @@ const CATEGORY_KEYS: Record<string, { label: TranslationKey; hint: TranslationKe
   WORKFORCE: { label: 'profile.notifications.categories.WORKFORCE', hint: 'profile.notifications.categoryHints.WORKFORCE' },
   BILLING: { label: 'profile.notifications.categories.BILLING', hint: 'profile.notifications.categoryHints.BILLING' },
   SYSTEM: { label: 'profile.notifications.categories.SYSTEM', hint: 'profile.notifications.categoryHints.SYSTEM' },
+  FEEDBACK: { label: 'profile.notifications.categories.FEEDBACK', hint: 'profile.notifications.categoryHints.FEEDBACK' },
 };
 
 // ─────────────────────────────────────────────────────────── Row building blocks
@@ -508,6 +509,7 @@ const EmergencyRelationPicker: React.FC<{ value: string; onChange: (v: string) =
   const choose = (choice: string) => {
     onChange(composeEmergencyRelation(choice, choice === EMERGENCY_RELATION_OTHER ? selection.otherText : ''));
   };
+  // Untrimmed while typing - trimming here ate every space as it was typed. It is trimmed on save.
   const changeOtherText = (text: string) => onChange(composeEmergencyRelation(EMERGENCY_RELATION_OTHER, text));
 
   return (
@@ -875,6 +877,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onLogout,
   onOpenFeedback,
   onOpenAvailability,
+  onOpenIdCard,
   assayerId,
   onCapturePhoto,
 }) => {
@@ -1231,6 +1234,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       <GroupedSection title={tr('profile.sections.work')}>
         {/* Self-service time off opens straight into the calendar overlay — there's nothing
             else to show behind this row, so it stays a direct action rather than a push. */}
+        {/* The digital ID card first: it is what the assayer reaches for at a branch counter. */}
+        {onOpenIdCard && (
+          <GroupedRow
+            icon="id-card-outline" tone="accent" label={tr('idCard.open')}
+            hint={tr('idCard.openHint')}
+            onPress={onOpenIdCard} accessibilityLabel={tr('idCard.open')} chevron
+          />
+        )}
         <GroupedRow
           icon="calendar-outline" tone="primary" label={tr('profile.rows.availability')}
           hint={tr('profile.rows.availabilityHint')}
@@ -1467,10 +1478,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
+            {/* "Max per day" was removed (owner decision 2026-09-25): an assayer may take several
+                branches in a day with no cap, so there is no daily figure to show. */}
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
-              <View style={{ flex: 1 }}>
-                <Input label={tr('profile.fields.maxPerDay')} value={String(profile.maxDailyWorkload ?? '')} onChangeText={() => {}} lockedReason={lockedReasonText('maxDailyWorkload')} />
-              </View>
               <View style={{ flex: 1 }}>
                 <Input label={tr('profile.fields.maxPerWeek')} value={String(profile.maxWeeklyWorkload ?? '')} onChangeText={() => {}} lockedReason={lockedReasonText('maxWeeklyWorkload')} />
               </View>

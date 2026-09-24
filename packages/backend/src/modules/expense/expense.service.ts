@@ -1,17 +1,33 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 
 import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssignmentStatus } from '@fapoms/shared';
+import {
+  ASSIGNMENT_ERROR_CODES,
+  DEAD_PAYABLE_STATUSES,
+  EXPENSE_APPROVAL_OVERRIDE_MIN_REASON,
+  EventCategory,
+  OTHER_CONFLICT_ERROR_CODES,
+} from '@fapoms/shared';
+import {
+  evaluateExpenseApproval,
+  evaluateExpenseClaim,
+  liveFeeBillId,
+  type ExpenseApprovalDecision,
+} from '../assignment/assignment-capabilities';
+import { AssayerInvoiceEntity } from '../billing-engine/assayer-invoice.entity';
+import { AssayerPayableEntity } from '../billing-engine/payable.entity';
+import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 export interface CreateExpenseDto {
   category: ExpenseCategory;
@@ -20,6 +36,16 @@ export interface CreateExpenseDto {
   receiptUrl?: string;
   /** Mobile's idempotency key: a retried submission of the same claim carries the same id. */
   clientRequestId?: string;
+}
+
+/**
+ * What a reviewer brought to an approval besides yes/no: a written reason to approve over the
+ * approval rules' refusal, and whether they are a senior who may (decided by the route from the
+ * caller's own roles — `EXPENSE_APPROVAL_OVERRIDE_ROLES` — never by anything in the body).
+ */
+export interface ExpenseApprovalOverrideRequest {
+  reason?: string | null;
+  mayOverride: boolean;
 }
 
 /** An assayer cannot claim an unbounded amount against a single visit without review. */
@@ -34,12 +60,16 @@ export class ExpenseService {
     private readonly expenseRepository: Repository<ExpenseEntity>,
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
+    @InjectRepository(AssayerInvoiceEntity)
+    private readonly assayerInvoiceRepository: Repository<AssayerInvoiceEntity>,
     private readonly auditService: AuditService,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly settings: PlatformSettingsService,
     private readonly billing: BillingEngineService,
     private readonly uow: UnitOfWork,
     private readonly regionGuard: RegionGuardService,
+    /** Live update for the claimant's phone and the desk; optional so older specs construct as before. */
+    @Optional() private readonly events?: DomainEventPublisher,
   ) {}
 
   /**
@@ -111,17 +141,42 @@ export class ExpenseService {
       throw new BadRequestException(`Unknown expense category: ${dto.category}`);
     }
 
-    // Claiming against work that was never carried out has no basis. Offered and rejected
-    // assignments have involved no travel yet; cancelled ones no longer will.
-    const claimable: AssignmentStatus[] = [
-      AssignmentStatus.CHECKED_IN,
-      AssignmentStatus.IN_PROGRESS,
-      AssignmentStatus.COMPLETED,
-    ];
-    if (!claimable.includes(assignment.status)) {
-      throw new BadRequestException(
-        `Expenses can only be claimed once the visit is under way — this assignment is ${assignment.status}.`,
-      );
+    /**
+     * The claim rule — `evaluateExpenseClaim` (assignment-capabilities.ts), the same function the
+     * field app's CLAIM_EXPENSE capability is built from, so the app offers a claim only when this
+     * would accept it. Two halves:
+     *
+     * Claiming against work that was never carried out has no basis. Offered and rejected
+     * assignments have involved no travel yet; cancelled ones no longer will.
+     *
+     * No new claim once the job's pay is on a bill — owner decision 2026-09-24: "Refuse once on a
+     * bill." Claims are made before billing.
+     *
+     * "The job's pay" is its LIVE fee payable (`isLivePayable` / `DEAD_PAYABLE_STATUSES`): a voided
+     * payable from an earlier, reopened completion is history and never blocks a claim on the redo.
+     *
+     * "On a bill" is the payable→assayer-invoice link (`assayerInvoiceId`), in ANY bill state —
+     * including a bill still waiting for the assayer to confirm. The link is the whole question
+     * because every path that takes a payable off a bill clears it: cancelling a bill releases its
+     * lines (`AssayerInvoiceService.cancel`), a revision detaches the lines it does not carry, and
+     * `releaseFromAssayerInvoice` does the same for a voided or held line.
+     *
+     * A payable approved or paid WITHOUT a bill — the desk's recorded direct-approval exception —
+     * has had its money settled just the same, so the APPROVED/PAID stages ("Ready to pay", "Paid")
+     * also refuse, with their own code.
+     *
+     * Applies to every caller, staff raising a claim on an assayer's behalf included: the rule is
+     * about the state of the money, not about who is typing. The visit-state half is read first and
+     * answers 400 as it always has; the money half answers 409, as it always has.
+     */
+    const visit = evaluateExpenseClaim(assignment, null);
+    if (!visit.allowed) {
+      throw withCode(new BadRequestException(visit.reason), visit.code as any);
+    }
+    const feePayable = await this.billing.liveFeePayable(assignmentId);
+    const money = evaluateExpenseClaim(assignment, feePayable);
+    if (!money.allowed) {
+      throw withCode(new ConflictException(money.reason), money.code as any);
     }
 
     const expense = this.expenseRepository.create({
@@ -226,7 +281,9 @@ export class ExpenseService {
     const baseQuery = () =>
       this.expenseRepository.find({
         where: { assayerId, isActive: true, ...(status ? { status } : {}) },
-        relations: ['assignment'],
+        // The branch rides along so the phone can name where each claim was for (it showed
+        // "Unknown branch" on every claim: only the bare assignment row was loaded).
+        relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch'],
         order: { createdAt: 'DESC' },
       });
 
@@ -356,6 +413,7 @@ export class ExpenseService {
     userId: string,
     notes?: string,
     scope?: Partial<GlobalScope>,
+    overrideRequest?: ExpenseApprovalOverrideRequest,
   ): Promise<ExpenseEntity> {
     const expense = await this.expenseRepository.findOne({ where: { id: expenseId } });
     if (!expense) {
@@ -402,6 +460,16 @@ export class ExpenseService {
     }
 
     /**
+     * The approval rules (owner decision 2026-09-24) — `evaluateExpenseApproval`: refused when the
+     * assignment was cancelled, when the claim's assayer no longer holds it, or when the job's pay
+     * is on a bill that has been sent. A senior may approve anyway by writing a reason; the reason
+     * and the refusals it set aside are kept on the claim and in the audit event. A reason sent
+     * with an approval the rules allow is not an override and is not recorded as one. Rejecting is
+     * never refused.
+     */
+    const override = approve ? await this.resolveApprovalRules(expense, overrideRequest) : null;
+
+    /**
      * The approval and the money are one act — AND the PENDING→APPROVED/REJECTED transition is a
      * compare-and-swap under a row lock, not a check-then-write around the read above.
      *
@@ -436,6 +504,16 @@ export class ExpenseService {
       locked.updatedBy = userId;
 
       if (approve) {
+        // The rules were checked above for a fast, lock-free answer; check them again here under
+        // lock so a cancel, reassign or bill sent in between is not missed. An override covers
+        // only the refusals the senior saw and wrote a reason against — a new one refuses.
+        const current = await this.approvalDecision(locked, m);
+        const newBlocks = current.allowed ? [] : current.blocks.filter((b) => !override?.codes.includes(b.code));
+        if (newBlocks.length > 0) {
+          throw withCode(new ConflictException(newBlocks.map((b) => b.reason).join(' ')), newBlocks[0].code as any);
+        }
+        locked.approvalOverrideReason = override?.reason ?? null;
+        locked.approvalOverrideCodes = override?.codes ?? null;
         const payable = await this.billing.createReimbursementPayable(locked, m, userId);
         locked.reimbursementPayableId = payable.id;
       }
@@ -450,7 +528,11 @@ export class ExpenseService {
       previousState: ExpenseStatus.PENDING,
       newState: saved.status,
       userId,
-      remarks: notes?.trim() || `Expense ${saved.status.toLowerCase()}`,
+      remarks: override
+        ? `Approved by a senior over ${override.codes.join(', ')}. Reason: ${override.reason}`
+          + (notes?.trim() ? ` Notes: ${notes.trim()}` : '')
+        : notes?.trim() || `Expense ${saved.status.toLowerCase()}`,
+      ...(override ? { metadata: { approvalOverride: { reason: override.reason, codes: override.codes } } } : {}),
     });
 
     this.notificationDispatch.emitSafe({
@@ -468,6 +550,93 @@ export class ExpenseService {
       },
     });
 
+    /*
+      After the commit, so no screen refetches before the decision is readable. Ids and the verdict
+      only — the claimant's app re-reads its own (gated) claim list; the gateway sends this to
+      `user:<assayerId>` and the desk's operational rooms.
+    */
+    try {
+      this.events?.publish('expense:decided', {
+        eventType: 'expense:decided',
+        expenseId: saved.id,
+        assignmentId: saved.assignmentId,
+        assayerId: saved.assayerId,
+        status: saved.status,
+        userId,
+      });
+    } catch (err) {
+      this.logger.warn(`Could not publish expense:decided for ${saved.id}: ${(err as Error).message}`);
+    }
+
     return saved;
+  }
+
+  /**
+   * The approval rules' answer for this claim, from the facts as they stand: the assignment's
+   * status and holder, the job's live fee payable, and the status of the bill that payable is on.
+   */
+  async approvalDecision(
+    expense: Pick<ExpenseEntity, 'assignmentId' | 'assayerId'>,
+    m?: EntityManager,
+  ): Promise<ExpenseApprovalDecision> {
+    // With a transaction manager, the assignment and the bill are read under a SHARE lock: a
+    // concurrent cancel, reassign or bill send (each writes one of those rows) waits for this
+    // approval to commit, or this read waits for it — either way the rules see the final facts.
+    const lock = m ? { lock: { mode: 'pessimistic_read' as const } } : {};
+    const assignment = m
+      ? await m.findOne(AssignmentEntity, { where: { id: expense.assignmentId }, ...lock })
+      : await this.assignmentRepository.findOne({
+          where: { id: expense.assignmentId },
+          select: ['id', 'assignmentNumber', 'status', 'assayerId'],
+        });
+    if (!assignment) throw new NotFoundException(`Assignment ${expense.assignmentId} not found.`);
+    const feePayable = m
+      ? await m.findOne(AssayerPayableEntity, {
+          where: { assignmentId: expense.assignmentId, expenseId: IsNull(), status: Not(In([...DEAD_PAYABLE_STATUSES])) },
+        })
+      : await this.billing.liveFeePayable(expense.assignmentId);
+    const billId = liveFeeBillId(feePayable);
+    const bill = billId
+      ? m
+        ? await m.findOne(AssayerInvoiceEntity, { where: { id: billId }, ...lock })
+        : await this.assayerInvoiceRepository.findOne({ where: { id: billId }, select: ['id', 'status'] })
+      : null;
+    return evaluateExpenseApproval(assignment, expense, feePayable, bill?.status ?? null);
+  }
+
+  /**
+   * Allowed → null. Refused → an override if a senior wrote a real reason, else the refusal:
+   *   no reason          409, the rule's own code (`EXPENSE_APPROVAL_*`), naming which applies
+   *   not a senior       403 EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED
+   *   reason too short   400 OVERRIDE_REASON_REQUIRED
+   */
+  private async resolveApprovalRules(
+    expense: Pick<ExpenseEntity, 'assignmentId' | 'assayerId'>,
+    request: ExpenseApprovalOverrideRequest | undefined,
+  ): Promise<{ reason: string; codes: string[] } | null> {
+    const decision = await this.approvalDecision(expense);
+    if (decision.allowed) return null;
+
+    const reason = (request?.reason ?? '').trim();
+    if (!reason) {
+      throw withCode(new ConflictException(decision.reason), decision.code as any);
+    }
+    if (!request?.mayOverride) {
+      throw withCode(
+        new ForbiddenException(
+          `Only a senior can approve this claim anyway. ${decision.blocks.map((b) => b.reason).join(' ')}`,
+        ),
+        OTHER_CONFLICT_ERROR_CODES.EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED,
+      );
+    }
+    if (reason.length < EXPENSE_APPROVAL_OVERRIDE_MIN_REASON) {
+      throw withCode(
+        new BadRequestException(
+          `Approving this claim anyway needs a reason of at least ${EXPENSE_APPROVAL_OVERRIDE_MIN_REASON} characters saying why.`,
+        ),
+        ASSIGNMENT_ERROR_CODES.OVERRIDE_REASON_REQUIRED,
+      );
+    }
+    return { reason, codes: decision.blocks.map((b) => b.code) };
   }
 }

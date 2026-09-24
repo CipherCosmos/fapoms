@@ -11,6 +11,7 @@ import {
   DOCUMENT_STAGE_ORDER as STAGE_ORDER, stageWords,
   DOCUMENT_TYPE, DOCUMENT_TYPE_ORDER as TYPE_ORDER, UPLOADABLE_TYPES, documentTypeLabel,
 } from './vocabulary';
+import { ALL_DOCUMENT_ACTIONS, type DocumentActions } from './document-actions';
 
 const fmtDate = (d?: string | null) => (d ? new Date(d).toLocaleDateString() : null);
 const fmtDateTime = (d?: string | null) => (d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : null);
@@ -48,10 +49,13 @@ export const BranchDocumentPanel: React.FC<{
   onSendToOcr: (docId: string) => Promise<void>;
   onUploadExcel: (assessmentId: string, file: File) => Promise<void>;
   busy?: boolean;
+  /** Which actions the caller's role is served — see document-actions.ts. Omitted: all offered. */
+  actions?: DocumentActions;
 }> = ({
   branches, neverPrepared, total, neverPreparedTotal, page, pageSize, onPageChange,
   search, onSearchChange, stage: stageFilter, onStageChange, loading,
   pipeline, onDispatch, onDownload, onUpload, onMarkReceived, onSendToOcr, onUploadExcel, busy,
+  actions: allow = ALL_DOCUMENT_ACTIONS,
 }) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Tracks which specific document/branch is mid-action, so only that row shows
@@ -129,6 +133,7 @@ export const BranchDocumentPanel: React.FC<{
           <input
             value={search} onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search by branch, client or project…"
+            title="Type to filter branches by name, client or project"
             style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
           />
         </div>
@@ -156,6 +161,7 @@ export const BranchDocumentPanel: React.FC<{
             }}>
               <button
                 onClick={() => toggle(b.projectBranchId)}
+                title={isOpen ? `Hide paperwork for ${b.branchName}` : `Show paperwork for ${b.branchName}`}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', color: 'var(--text-primary)' }}
               >
                 {isOpen ? <ChevronDown size={15} color="var(--text-muted)" /> : <ChevronRight size={15} color="var(--text-muted)" />}
@@ -176,9 +182,9 @@ export const BranchDocumentPanel: React.FC<{
                     const meta = DOCUMENT_TYPE[t];
                     const typeName = documentTypeLabel(t);
                     if (!docs?.length) {
-                      if (!UPLOADABLE_TYPES.has(t)) {
+                      if (!UPLOADABLE_TYPES.has(t) || !allow.upload) {
                         return (
-                          <span key={t} title={`${typeName}: not applicable yet`} style={{
+                          <span key={t} title={UPLOADABLE_TYPES.has(t) ? `${typeName}: not uploaded yet` : `${typeName}: not applicable yet`} style={{
                             fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: 'var(--radius-sm)',
                             background: 'transparent', border: '1px dashed var(--border-color)', color: 'var(--text-muted)',
                           }}>{meta.short}</span>
@@ -217,9 +223,9 @@ export const BranchDocumentPanel: React.FC<{
                       {b.documentsByType[t].map((d) => {
                         const stage = stageWords(d.status) ?? { label: d.status, meaning: '', color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
                         const isReturn = d.type === 'AUDITED_RETURN_PDF';
-                        const canMarkReceived = isReturn && d.status === 'UPLOADED';
-                        const canSendToOcr = isReturn && (d.status === 'RECEIVED' || d.status === 'SENT_TO_DATA_ENTRY');
-                        const canUploadExcel = isReturn && d.status === 'SENT_TO_EXTERNAL_OCR';
+                        const canMarkReceived = allow.markReceived && isReturn && d.status === 'UPLOADED';
+                        const canSendToOcr = allow.sendToOcr && isReturn && (d.status === 'RECEIVED' || d.status === 'SENT_TO_DATA_ENTRY');
+                        const canUploadExcel = allow.uploadExcel && isReturn && d.status === 'SENT_TO_EXTERNAL_OCR';
                         const rowBusy = acting.has(d.id);
                         return (
                           <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 0', flexWrap: 'wrap' }}>
@@ -233,18 +239,18 @@ export const BranchDocumentPanel: React.FC<{
                                 <CheckCircle2 size={12} color="var(--success)" />
                               </span>
                             )}
-                            {d.status === 'UPLOADED' && !isReturn && (
-                              <button onClick={() => withActing(d.id, () => onDispatch([d.id]))} disabled={busy || rowBusy} className="btn btn-primary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            {allow.dispatch && d.status === 'UPLOADED' && !isReturn && (
+                              <button onClick={() => withActing(d.id, () => onDispatch([d.id]))} disabled={busy || rowBusy} title={`Send ${d.fileName} to the assayer`} className="btn btn-primary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <Send size={10} /> {rowBusy ? '…' : 'Send'}
                               </button>
                             )}
                             {canMarkReceived && (
-                              <button onClick={() => withActing(d.id, () => onMarkReceived(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--success)', borderColor: 'var(--status-completed-bg)' }}>
+                              <button onClick={() => withActing(d.id, () => onMarkReceived(d.id))} disabled={rowBusy} title={`Mark ${d.fileName} as received back from assayer`} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--success)', borderColor: 'var(--status-completed-bg)' }}>
                                 <Inbox size={11} /> {rowBusy ? '…' : 'Mark Received'}
                               </button>
                             )}
                             {canSendToOcr && (
-                              <button onClick={() => withActing(d.id, () => onSendToOcr(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
+                              <button onClick={() => withActing(d.id, () => onSendToOcr(d.id))} disabled={rowBusy} title={`Send ${d.fileName} for text scanning`} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
                                 <ArrowRightCircle size={11} /> {rowBusy ? '…' : 'Send for scanning'}
                               </button>
                             )}
@@ -257,9 +263,11 @@ export const BranchDocumentPanel: React.FC<{
                                 onFile={(file) => withActing(d.id, () => onUploadExcel(d.assessmentId!, file))}
                               />
                             )}
-                            <button onClick={() => onDownload(d.id)} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)' }}>
-                              Download
-                            </button>
+                            {allow.download && (
+                              <button onClick={() => onDownload(d.id)} title={`Download ${d.fileName} to your computer`} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)' }}>
+                                Download
+                              </button>
+                            )}
                           </div>
                         );
                       })}
@@ -292,7 +300,7 @@ export const BranchDocumentPanel: React.FC<{
 };
 
 const StageChip: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string; bg: string }> = ({ active, onClick, label, count, color, bg }) => (
-  <button onClick={onClick} style={{
+  <button onClick={onClick} title={active ? `Showing ${label} branches, click to show all` : `Show only branches with paperwork at ${label}`} style={{
     padding: '6px 11px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-2xs)', fontWeight: 600,
     background: active ? bg : 'transparent', color: active ? color : 'var(--text-secondary)',
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 6,

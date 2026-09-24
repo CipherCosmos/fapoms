@@ -7,6 +7,7 @@ import type { ClientContract } from '@fapoms/shared';
 import { ContractStatus } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { SkeletonList } from '../../components/ui/Loading';
+import { canDeleteClients, canManageClients, useCurrentRoles } from '../../hooks/useCurrentRoles';
 
 const CONTRACT_STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   [ContractStatus.DRAFT]: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -23,6 +24,11 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
   const { toast } = useToast();
   const { confirm, confirmDialog } = useConfirm();
   const [showForm, setShowForm] = useState(false);
+  // Mirrors client.controller.ts: adding a contract is ADMIN/OPERATIONS, removing one ADMIN alone,
+  // neither with a permission fallback — so each control shows only where its request is served.
+  const roles = useCurrentRoles();
+  const canAdd = canManageClients(roles);
+  const canRemove = canDeleteClients(roles);
   /**
    * `effectiveFrom` starts at today. A contract is registered when it is signed far more often
    * than it is backdated, and an empty required date field is one more thing to fill in before
@@ -79,9 +85,11 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
       {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Contracts ({contracts.length})</span>
-        <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Plus size={12} /> Add
-        </button>
+        {canAdd && (
+          <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Plus size={12} /> Add
+          </button>
+        )}
       </div>
 
       {isLoading ? (
@@ -104,13 +112,15 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
                   {c.contractNumber} • {c.value ? `₹${c.value.toLocaleString()}` : 'N/A'} • {new Date(c.effectiveFrom).toLocaleDateString()} — {c.effectiveTo ? new Date(c.effectiveTo).toLocaleDateString() : 'Open'}
                 </div>
               </div>
-              <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 4 }} aria-label="Remove contract"><X size={14} /></button>
+              {canRemove && (
+                <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 4 }} aria-label="Remove contract"><X size={14} /></button>
+              )}
             </div>
           );
         })
       )}
 
-      {showForm && (
+      {showForm && canAdd && (
         <Modal open onClose={() => setShowForm(false)} title="Add Contract" width="480px" asForm onSubmit={handleSubmit} footer={
           <>
             <button type="button" onClick={() => setShowForm(false)} className="btn btn-secondary">Cancel</button>

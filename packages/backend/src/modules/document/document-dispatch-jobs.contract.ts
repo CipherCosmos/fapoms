@@ -56,9 +56,14 @@ const COMPLETED_RETENTION: KeepJobsOptions = { age: 6 * 60 * 60, count: 50 };
  */
 export const DISPATCH_BATCH_JOB_OPTIONS: JobOptions = {
   attempts: 1,
-  // A hundred documents at a few seconds of SMTP each is minutes; this only stops a hang holding the
-  // queue's one slot, which the hourly auto-dispatch also needs.
-  timeout: 60 * 60_000,
+  /*
+    No `timeout`, deliberately. Bull's timeout fails the job but does NOT stop the handler: the
+    write carried on while the queue's loop started the next run beside it, and the Jobs tray read
+    "failed" for work that was still happening. Overlap is prevented by the Postgres advisory lock
+    `BackgroundJobTracker` holds per queue for the whole run (released by Postgres if the worker
+    dies); a genuinely wedged run is a stalled job, which `maxStalledCount` and the recovery sweep
+    handle.
+  */
   removeOnComplete: COMPLETED_RETENTION,
   removeOnFail: FAILED_JOB_RETENTION,
 };

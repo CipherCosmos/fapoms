@@ -2,7 +2,7 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { APPROVE_WITHOUT_BILL_REASONS, InviteOutcomeSummary, isInviteEligible, PayoutsTab } from './PayoutsTab';
+import { APPROVE_WITHOUT_BILL_REASONS, InviteOutcomeSummary, isInviteEligible, isReadyToPay, PayoutsTab } from './PayoutsTab';
 import { ToastProvider } from '../../components/ui';
 import { api } from '../../services/api';
 import { billingApi } from '../../services/billing';
@@ -28,6 +28,11 @@ jest.mock('../../services/billing', () => {
     billingApi: { ...actual.billingApi, listPayouts: jest.fn(), approvePayouts: jest.fn(), payPayouts: jest.fn() },
   };
 });
+// The tab also asks the Jobs tray for approve/pay runs it did not start (`useBackgroundJob`); no socket here.
+jest.mock('../../services/socket', () => ({
+  connectSocket: () => null,
+  subscribeToConnection: (cb: (live: boolean) => void) => { cb(true); return () => undefined; },
+}));
 // The real poller, with a short interval so a test is not waiting 1.5 s per read.
 jest.mock('../../services/queued-job', () => {
   const actual = jest.requireActual('../../services/queued-job');
@@ -113,6 +118,14 @@ describe('isInviteEligible', () => {
     expect(isInviteEligible(row({ status: AssayerPayableStatus.APPROVED }))).toBe(true);
   });
 
+  it('ready to pay needs the HOD’s final approval as well as the office’s (2026-09-24)', () => {
+    const owed = { totalAmount: 1800, paidAmount: 0 };
+    expect(isReadyToPay(row({ ...owed, status: AssayerPayableStatus.APPROVED }))).toBe(false);
+    expect(isReadyToPay(row({ ...owed, status: AssayerPayableStatus.APPROVED, hodApprovedAt: '2026-09-02T10:00:00.000Z' }))).toBe(true);
+    expect(isReadyToPay(row({ ...owed, status: AssayerPayableStatus.APPROVED, hodApprovedAt: '2026-09-02T10:00:00.000Z', onHold: true }))).toBe(false);
+    expect(isReadyToPay(row({ ...owed, status: AssayerPayableStatus.PENDING, hodApprovedAt: '2026-09-02T10:00:00.000Z' }))).toBe(false);
+  });
+
   it('refuses held, invoiced, settled and pre-invoicing rows', () => {
     expect(isInviteEligible(row({ onHold: true }))).toBe(false);
     expect(isInviteEligible(row({ assayerInvoiceId: 'i-1' }))).toBe(false);
@@ -149,6 +162,7 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
   const serveRun = (jobId: string, stage: string, result: unknown) => {
     const run = { finished: false };
     mockRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith('/jobs?')) return { active: [], recent: [] };
       if (path !== `/billing-engine/bulk-jobs/${jobId}`) throw new Error(`unexpected request ${path}`);
       return run.finished
         ? { jobId, state: 'done', progress: { percent: 100, stage: 'Complete' }, result }
@@ -162,7 +176,7 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
    * is about: 'NOT_BILLED' is the only place a payout can be approved without the assayer having
    * confirmed a bill, and 'TO_PAY' is the only place one can be paid.
    */
-  const renderTab = async (row: PayoutRow, stage: 'NOT_BILLED' | 'TO_PAY' = 'NOT_BILLED') => {
+  const renderTab = async (row: PayoutRow, stage: 'NOT_BILLED' | 'TO_PAY' | 'AWAITING_HOD' = 'NOT_BILLED') => {
     mockList.mockResolvedValue({ items: [row], total: 1, page: 1, limit: 20 });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     render(
@@ -196,8 +210,8 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
 
   beforeEach(() => {
     mockList.mockReset();
-    mockApprove.mockReset().mockResolvedValue({ jobId: '8', deduplicated: false });
-    mockPay.mockReset().mockResolvedValue({ jobId: '9', deduplicated: false });
+    mockApprove.mockReset().mockResolvedValue({ jobId: '8', deduplicated: false, backgroundJobId: 'row-8' });
+    mockPay.mockReset().mockResolvedValue({ jobId: '9', deduplicated: false, backgroundJobId: 'row-9' });
     mockRequest.mockReset();
   });
 
@@ -222,7 +236,7 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
 
   it('pays through a queued run and reports what it paid', async () => {
     const run = serveRun('9', 'Paying payouts (1/2)', { done: [{ payableId: 'p-1', paymentId: 'pay-1' }], refused: [] });
-    await renderTab(payout({ status: AssayerPayableStatus.APPROVED }), 'TO_PAY');
+    await renderTab(payout({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: '2026-09-02T10:00:00.000Z', hodApprovedBy: 'hod-1' }), 'TO_PAY');
 
     fireEvent.click(screen.getByRole('button', { name: /^Record payment \(1/ }));
     fireEvent.change(await screen.findByPlaceholderText('Bank / UTR reference *'), { target: { value: 'UTR-1' } });
@@ -235,13 +249,108 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
     expect(await screen.findByText('1 payout paid')).toBeInTheDocument();
   });
 
+  /**
+   * A payment pressed, then the page reloaded: the run is still going on the server. The tab must
+   * say so and hold the Pay button — a second press under a new reference is how a batch gets
+   * recorded as paid twice — and read the list again when the run finishes.
+   */
+  it('after a refresh, shows a pay run still going on the server and holds the Pay button', async () => {
+    const running = {
+      id: 'row-7', kind: 'BILLING_PAY_PAYOUTS', status: 'RUNNING', title: 'Pay 12 payouts (ref UTR-7)',
+      progress: { processed: 3, total: 12, percent: 25, stage: 'Paying payouts (3/12)', message: null },
+    };
+    const server = { done: false };
+    mockRequest.mockImplementation(async (path: string) => {
+      if (path.includes('kind=BILLING_PAY_PAYOUTS') && !server.done) return { active: [running], recent: [] };
+      if (path.startsWith('/jobs?')) return { active: [], recent: [] };
+      throw new Error(`unexpected request ${path}`);
+    });
+    await renderTab(payout({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: '2026-09-02T10:00:00.000Z', hodApprovedBy: 'hod-1' }), 'TO_PAY');
+
+    expect(await screen.findByText(/Pay 12 payouts \(ref UTR-7\) is still running on the server \(Paying payouts \(3\/12\)\)/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Record payment \(1/ })).toBeDisabled();
+    expect(mockPay).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE HOD'S FINAL APPROVAL (2026-09-24). Approved by the office is not payable: the payouts wait
+   * for the HOD on their own stage, where Pay and the bank file are shown disabled with the reason —
+   * not hidden, so nobody wonders where they went — and the row says what it is waiting for.
+   */
+  it('a payout waiting for the HOD cannot be paid: the buttons are disabled and say why', async () => {
+    mockRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith('/jobs?')) return { active: [], recent: [] };
+      throw new Error(`unexpected request ${path}`);
+    });
+    await renderTab(payout({ status: AssayerPayableStatus.APPROVED, approvedBy: 'office-1', hodApprovedAt: null }), 'AWAITING_HOD');
+
+    expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ status: AssayerPayableStatus.APPROVED, hodApproved: false }));
+    const pay = screen.getByRole('button', { name: 'Record payment' });
+    expect(pay).toBeDisabled();
+    expect(pay).toHaveAttribute('title', expect.stringMatching(/^Waiting for HOD approval/));
+    expect(screen.getByRole('button', { name: 'Download bank file' })).toBeDisabled();
+    expect(screen.getAllByText('Waiting for HOD approval').length).toBeGreaterThan(0);
+    fireEvent.click(pay);
+    expect(mockPay).not.toHaveBeenCalled();
+  });
+
+  it('"Ready to pay" asks the server for HOD-approved payouts only', async () => {
+    mockRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith('/jobs?')) return { active: [], recent: [] };
+      throw new Error(`unexpected request ${path}`);
+    });
+    await renderTab(payout({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: '2026-09-02T10:00:00.000Z' }), 'TO_PAY');
+    expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ status: AssayerPayableStatus.APPROVED, hodApproved: true }));
+    expect(screen.getByRole('button', { name: /^Record payment \(1/ })).not.toBeDisabled();
+  });
+
   it('says a run that failed on the server failed, with the server’s reason', async () => {
-    mockRequest.mockResolvedValue({ jobId: '8', state: 'failed', progress: { percent: 0, stage: 'Failed' }, error: 'The database was unavailable.' });
+    mockRequest.mockImplementation(async (path: string) => (path.startsWith('/jobs?')
+      ? { active: [], recent: [] }
+      : { jobId: '8', state: 'failed', progress: { percent: 0, stage: 'Failed' }, error: 'The database was unavailable.' }));
     await renderTab(payout());
 
     await approveWithoutBill();
 
     expect(await screen.findByText('Approval failed')).toBeInTheDocument();
     expect(screen.getByText(/The database was unavailable/)).toBeInTheDocument();
+  });
+
+  /** Audit F3/F6 (2026-09-24): the exception dialog says where the money goes, and wants a real reason. */
+  describe('the approve-without-a-bill dialog', () => {
+    const shared = "This bank account (the same account number and IFSC) is on another assayer's record. Payment to it is refused until one of the two records is corrected.";
+    const serveChecks = () => mockRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith('/jobs?')) return { active: [], recent: [] };
+      if (path === '/billing-engine/payouts/destination-check') {
+        return [{
+          payableId: 'p-1', payableNumber: 'PAY-1', assayerId: 'as-1', assayerName: 'Asha Menon', assayerCode: 'AS-01',
+          verified: false, sharedWithAnotherRecord: true, snapshotDiffersFromRecord: false, snapshotAccountTail: null,
+          recordAccountTail: '******3210', warnings: [shared, 'Bank details are not verified.'], blocking: shared,
+        }];
+      }
+      throw new Error(`unexpected request ${path}`);
+    });
+
+    it('shows the bank-account refusal and warning before anything is pressed', async () => {
+      serveChecks();
+      await renderTab(payout());
+      fireEvent.click(screen.getByRole('button', { name: /^Approve without a bill \(1/ }));
+      expect(await screen.findByText(/on another assayer's record/)).toBeInTheDocument();
+      expect(screen.getByText(/Bank details are not verified/)).toBeInTheDocument();
+    });
+
+    it('will not approve on a one-word "Other" reason', async () => {
+      serveChecks();
+      await renderTab(payout());
+      fireEvent.click(screen.getByRole('button', { name: /^Approve without a bill \(1/ }));
+      fireEvent.click(await screen.findByRole('combobox'));
+      fireEvent.click(await screen.findByRole('option', { name: 'Other…' }));
+      fireEvent.change(screen.getByPlaceholderText('Why can this assayer not confirm? *'), { target: { value: 'ok' } });
+      fireEvent.change(screen.getByPlaceholderText('1800'), { target: { value: '1800' } });
+      expect(screen.getByText(/at least 10 characters/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Approve ₹1,800' })).toBeDisabled();
+      fireEvent.change(screen.getByPlaceholderText('Why can this assayer not confirm? *'), { target: { value: 'Confirmed on the phone today' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Approve ₹1,800' })).not.toBeDisabled());
+    });
   });
 });

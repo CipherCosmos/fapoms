@@ -1,4 +1,5 @@
 import {
+  AssignmentStatus,
   ClientLifecycleStatus,
   DocumentStatus,
   ProjectStatus,
@@ -7,6 +8,110 @@ import {
 } from './enums';
 
 export type TransitionMap<T extends string> = Partial<Record<T, T[]>>;
+
+/**
+ * How an assignment may move — THE table. `AssignmentStateMachine` (backend) reads it, and the
+ * capability evaluators that tell the field app what it may do next read it too, so the app is
+ * never offered a move the server's own machine would refuse.
+ *
+ * It lived as a private `VALID_PATHS` inside the backend's `AssignmentStateMachine` until the field
+ * app was rebuilt around server-issued capabilities (2026-09-24). Moved here, not copied: the
+ * backend class now points at this object, so there is one table. The notes on individual edges
+ * are the ones that sat beside them in the backend.
+ */
+export const ASSIGNMENT_TRANSITIONS: Record<AssignmentStatus, AssignmentStatus[]> = {
+  /**
+   * PENDING -> PENDING is a reassignment of an open offer: the offer moves to another assayer and
+   * stays an offer (`AssignmentStateMachine.reassign`, `POST /assignments/:id/reassign`). No other
+   * writer targets PENDING — the generic transition route has no PENDING branch.
+   */
+  [AssignmentStatus.PENDING]: [
+    AssignmentStatus.PENDING,
+    AssignmentStatus.ACCEPTED,
+    AssignmentStatus.REJECTED,
+    AssignmentStatus.CANCELLED,
+  ],
+  // COMPLETED is reachable from ACCEPTED, but only through `completeAudit`, which refuses it
+  // without a stated reason — see there. The desk cannot check in for somebody (the check-in
+  // is geofenced and lives in the field app), so without this a job whose assayer never
+  // opened the app could not be closed at all.
+  //
+  // ACCEPTED -> PENDING is a reassignment before check-in (owner decision 2026-09-24, E9): the
+  // job goes to another assayer as a fresh offer. Once somebody has checked in it cannot be
+  // reassigned — CHECKED_IN and IN_PROGRESS have no PENDING edge; the office cancels instead.
+  [AssignmentStatus.ACCEPTED]: [
+    AssignmentStatus.ACCEPTED,
+    AssignmentStatus.PENDING,
+    AssignmentStatus.CHECKED_IN,
+    AssignmentStatus.COMPLETED,
+    AssignmentStatus.CANCELLED,
+  ],
+  /**
+   * No `ACCEPTED` here, deliberately. It used to be listed, and nothing legitimate used it — the
+   * only writer of CHECKED_IN -> ACCEPTED would have been the accept route, so a checked-in job
+   * still advertised ACCEPT in the field app's capability list and a re-accept silently rolled the
+   * visit back to "not arrived" while `checkedInAt` stayed set. Reopening writes ACCEPTED directly
+   * from COMPLETED (`AssignmentStateMachine.reopen`) and never consults this table.
+   */
+  [AssignmentStatus.CHECKED_IN]: [AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
+  // CHECKED_IN is reachable from IN_PROGRESS because a field check-in is retried: a flaky
+  // mobile connection, a GPS refresh, or a second attempt at the geofence all re-issue it
+  // after work has already started. Refusing that would fail a legitimate retry, so it is
+  // allowed here rather than being a backwards move nobody intended.
+  [AssignmentStatus.IN_PROGRESS]: [AssignmentStatus.IN_PROGRESS, AssignmentStatus.CHECKED_IN, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
+  // COMPLETED is a terminal workflow state that cannot be exited through generic transition endpoints.
+  // Reopening is strictly a privileged back-office operational command via AssignmentStateMachine.reopen().
+  [AssignmentStatus.COMPLETED]: [],
+  // A declined offer goes back on the market: reassigning it to somebody else is the whole
+  // point, and it re-enters as a PENDING offer to that person (reassign, or a new offer through
+  // create, which reuses the declined row). Both go through `AssignmentStateMachine.reassign`, so
+  // this edge is the only way back to PENDING either takes (create stopped writing it directly
+  // 2026-09-24).
+  [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
+  /**
+   * Terminal. A cancellation is a decision that this work is not happening.
+   *
+   * This used to list PENDING, so the table declared that cancelled work could quietly become
+   * a live offer again. Nothing in the API could reach that edge — `POST :id/transition` has no
+   * PENDING branch at all — but `reassignAssignment` set the status directly, bypassing this
+   * table entirely, and so DID revive cancelled assignments: new owner, `cancel_reason` wiped,
+   * under an audit event that said only "reassigned". That path now refuses CANCELLED, and the
+   * table is corrected to match, so the declared machine and the enforced one agree.
+   *
+   * Reviving cancelled work needs its own command with its own permission, reason and audit —
+   * see `AssignmentStateMachine.reopen()` for the shape that takes. It is not an edge on this table.
+   */
+  [AssignmentStatus.CANCELLED]: [],
+};
+
+/**
+ * The statuses a job may be reassigned from — exactly those with a PENDING edge in the table above
+ * (PENDING, ACCEPTED, REJECTED). Derived, not listed, so the two cannot disagree.
+ */
+export const REASSIGNABLE_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = (
+  Object.keys(ASSIGNMENT_TRANSITIONS) as AssignmentStatus[]
+).filter((from) => ASSIGNMENT_TRANSITIONS[from].includes(AssignmentStatus.PENDING));
+
+/** Whether an assignment may move from one status to the other, per `ASSIGNMENT_TRANSITIONS`. */
+export function canTransitionAssignment(from: AssignmentStatus, to: AssignmentStatus): boolean {
+  return ASSIGNMENT_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
+ * The target statuses a field assayer may REQUEST on their own assignment through
+ * `POST /assignments/:id/transition` — a permission, not a predicate over rows. Whether the move is
+ * then legal from where the assignment stands is `ASSIGNMENT_TRANSITIONS`' question.
+ *
+ * `IN_PROGRESS` is included because the assayer is the only person who knows when the audit
+ * actually started. Cancelling and completing remain the desk's. `COUNTER_OFFER`/`NEGOTIATION`/
+ * `PENDING` were in this list while in-app negotiation existed; they left with it.
+ */
+export const ASSAYER_REQUESTABLE_ASSIGNMENT_TRANSITIONS: readonly AssignmentStatus[] = [
+  AssignmentStatus.ACCEPTED,
+  AssignmentStatus.REJECTED,
+  AssignmentStatus.CHECKED_IN,
+  AssignmentStatus.IN_PROGRESS,
+];
 
 /**
  * How a project may move. `registerWorkflow('project')` is built from this.
@@ -108,7 +213,12 @@ export const VALIDATION_TRANSITIONS: TransitionMap<ValidationStatus> = {
     ValidationStatus.CORRECTION_REQUIRED,
   ],
   [ValidationStatus.CORRECTION_REQUIRED]: [ValidationStatus.HUMAN_REVIEW],
-  [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED],
+  /**
+   * `APPROVED -> CORRECTION_REQUIRED` (2026-09-24): approval is internal — the report has not gone
+   * to the client until SUBMITTED — so reopening the job to redo its papers (E6) pulls an approved
+   * case back for review of the redone papers. SUBMITTED has no way back: the client holds it.
+   */
+  [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED, ValidationStatus.CORRECTION_REQUIRED],
 };
 
 /**

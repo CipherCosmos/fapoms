@@ -1,4 +1,4 @@
-import { AADHAAR_PATTERN, isValidAadhaar, isValidIfsc, isValidPan, normalisePhone } from './identity-validation';
+import { AADHAAR_PATTERN, isBankAccountNumber, isValidAadhaar, isValidIfsc, isValidPan, normalisePhone } from './identity-validation';
 import { looksMasked } from './assayer-qualification';
 
 /**
@@ -12,7 +12,7 @@ import { looksMasked } from './assayer-qualification';
  *
  * Advisory. The server is the authority, and a legitimate-but-unusual value must stay saveable.
  */
-export type IdentifierFormatIssue = 'pan' | 'ifsc' | 'aadhaarLength' | 'aadhaarChecksum' | 'pincode';
+export type IdentifierFormatIssue = 'pan' | 'ifsc' | 'aadhaarLength' | 'aadhaarChecksum' | 'pincode' | 'bankAccount';
 
 export function identifierFormatIssue(key: string, value: string): IdentifierFormatIssue | null {
   const v = (value || '').trim();
@@ -27,6 +27,7 @@ export function identifierFormatIssue(key: string, value: string): IdentifierFor
     if (!isValidAadhaar(digits)) return AADHAAR_PATTERN.test(digits) ? 'aadhaarChecksum' : 'aadhaarLength';
   }
   if (key === 'pincode' && !/^\d{6}$/.test(v)) return 'pincode';
+  if (key === 'bankAccountNumber' && !isBankAccountNumber(v)) return 'bankAccount';
   return null;
 }
 

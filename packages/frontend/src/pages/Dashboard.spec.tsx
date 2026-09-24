@@ -76,3 +76,40 @@ describe('Dashboard, when the snapshot comes back refused', () => {
     expect(await screen.findByText(/Could not load the operational snapshot/)).toBeInTheDocument();
   });
 });
+
+/**
+ * W2 (2026-09-24): a role that is not shown "Needs attention" gets `attention: null`. The block is
+ * then absent — never a "Nothing blocked" about work this person cannot see.
+ */
+describe('Dashboard, the attention section', () => {
+  const renderDashboard = () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <MemoryRouter>
+        <QueryClientProvider client={client}><Dashboard /></QueryClientProvider>
+      </MemoryRouter>,
+    );
+  };
+  const snapshot = (attention: unknown) => ({
+    generatedAt: new Date().toISOString(), roles: ['AUDITOR'], focus: 'Your view', sections: attention ? ['attention'] : [],
+    attention, funnel: null, due: null, documents: null, money: null, capacity: null, projects: null, validation: null, activity: null,
+  });
+  beforeEach(() => {
+    mockRequest.mockReset();
+    localStorage.setItem('fapoms_user_cache', JSON.stringify({ roles: [{ name: 'AUDITOR', permissions: [] }] }));
+  });
+  afterEach(() => localStorage.clear());
+
+  it('is not rendered when the role lacks it', async () => {
+    mockRequest.mockResolvedValue(snapshot(null));
+    renderDashboard();
+    expect(await screen.findByText('Your view')).toBeInTheDocument();
+    expect(screen.queryByText('Needs attention')).not.toBeInTheDocument();
+  });
+
+  it('is rendered when the role has it', async () => {
+    mockRequest.mockResolvedValue(snapshot([]));
+    renderDashboard();
+    expect(await screen.findByText('Needs attention')).toBeInTheDocument();
+  });
+});

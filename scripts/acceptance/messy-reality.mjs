@@ -956,7 +956,7 @@ const created = { assayers: [], branches: [], projectBranches: [], projects: [],
     // with nothing queued. Waited for all the same: if it were accepted, the run would approve the
     // payable and the burst below would be measuring no-ops.
     const probe = await billingRun(admin, '/billing-engine/payouts/approve',
-      { payableIds: [PAYABLE.id], expectedVersion: Number(PAYABLE.version) - 1 });
+      { payableIds: [PAYABLE.id], expectedVersion: Number(PAYABLE.version) - 1, reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
     const after = await one(`SELECT status, version FROM assayer_payables WHERE id=$1`, [PAYABLE.id]);
     const rejectedTheField = probe.status === 400 && /expectedVersion/i.test(JSON.stringify(probe.r.body ?? {}));
     check('B4-STALE', probe.throttled ? 'UNKNOWN' : rejectedTheField && after.status === 'PENDING',
@@ -972,8 +972,8 @@ const created = { assayers: [], branches: [], projectBranches: [], projects: [],
     // the burst started has FINISHED, and the late duplicate is pressed after they have, so it is a
     // genuine repeat with its own run rather than another join.
     const fired = await Promise.all([1, 2, 3].map(() =>
-      billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id] })));
-    const dup = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id] });
+      billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' })));
+    const dup = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
     const approvals = await one(
       `SELECT count(*)::int c FROM audit_events WHERE entity_id=$1 AND event_type='PAYABLE_APPROVED' AND outcome='SUCCESS'`,
       [PAYABLE.id]);
@@ -994,6 +994,10 @@ const created = { assayers: [], branches: [], projectBranches: [], projects: [],
 
   console.log('\nB5 — payable pay: twice, with a second reference, and three at once');
   {
+    // The HOD's final approval (2026-09-24) comes before any payment: admin2 is the HOD here, an
+    // ADMIN who did not approve it at the office. Without it every pay below is "Waiting for HOD
+    // approval", and this block would measure that instead of what it is about.
+    await call(admin2.token, 'POST', `/billing-engine/final-approval/payouts/${PAYABLE.id}/approve`, {});
     const ref = `${PREFIX}-PAYREF`;
     const probe = await billingRun(admin2, '/billing-engine/payouts/pay',
       { payableIds: [PAYABLE.id], paymentReference: ref, method: 'NEFT', expectedVersion: 1 });
@@ -1174,7 +1178,7 @@ const created = { assayers: [], branches: [], projectBranches: [], projects: [],
       const payables = await awaitPayable(gN.id);
       if (payables.length === 1) {
         // A missing-bank refusal is per row: it is in the finished run's `refused`, not an HTTP status.
-        const approve = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [payables[0].id] });
+        const approve = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [payables[0].id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
         const after = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [payables[0].id]);
         const reason = String(approve.result?.refused?.[0]?.reason ?? msg(approve.r));
         check('A1b', approve.throttled ? 'UNKNOWN'

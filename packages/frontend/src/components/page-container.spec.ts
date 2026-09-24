@@ -35,7 +35,8 @@ const routed = [...app.matchAll(
  * sign-in pages render against the bare viewport, and the two link-authorised pages are opened
  * from a phone's browser with no session and no chrome around them.
  */
-const OUTSIDE_THE_SHELL = ['Login', 'ForcePasswordChange', 'NotFound', 'PublicRegistration', 'ViewMark'];
+// VerifyIdCard: the public ID card check a bank branch opens — no sign-in, no shell (2026-09-23).
+const OUTSIDE_THE_SHELL = ['Login', 'ForcePasswordChange', 'NotFound', 'PublicRegistration', 'ViewMark', 'VerifyIdCard'];
 
 describe('page container', () => {
   const css = readFileSync(join(SRC, 'index.css'), 'utf8');

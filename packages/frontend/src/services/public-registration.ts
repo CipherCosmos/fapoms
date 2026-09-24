@@ -1,8 +1,10 @@
 import {
   ApplicationStatus, EmploymentCategory, OnboardingDocument, type ConsentNotice,
+  type ApplicationInfoRequestItem,
 } from '@fapoms/shared';
-import { AppError, fromNetwork, fromResponse } from './errors';
-import { fetchWithTimeout, DEFAULT_TIMEOUT_MS, LONG_TIMEOUT_MS } from './http';
+import { AppError, fromResponse } from './errors';
+import { fetchWithTimeout, LONG_TIMEOUT_MS } from './http';
+import { publicCall } from './public-fetch';
 
 /**
  * The candidate self-registration API — public, unauthenticated, token-in-the-URL-path only.
@@ -58,6 +60,13 @@ export interface RegistrationApplicationDocument {
   applicationId: string;
   requirement: OnboardingDocument;
   filePaths: string[];
+  /**
+   * HR's verdict on this requirement. `NEEDS_RESUBMIT` means this file was sent back — the
+   * form flags it with HR's instruction until a fresh scan lands.
+   */
+  reviewStatus?: string | null;
+  rejectionReason?: string | null;
+  rejectionNote?: string | null;
 }
 
 export interface RegistrationHydrateResult {
@@ -66,6 +75,11 @@ export interface RegistrationHydrateResult {
   documentsRequested: OnboardingDocument[];
   otpVerified?: boolean;
   /**
+   * Exactly what HR asked for, when the link reopened — one entry per document or field,
+   * each with its own instruction. Empty on a first fill.
+   */
+  infoRequests?: ApplicationInfoRequestItem[];
+  /**
    * What this candidate must be shown, and agree to, before the form collects anything.
    *
    * Served by the API rather than written into this page: the wording is versioned, the version is
@@ -73,6 +87,21 @@ export interface RegistrationHydrateResult {
    * copy hard-coded here would drift out of step with what the row claims was agreed.
    */
   consentNotice: ConsentNotice & { grievanceContact: string };
+  /**
+   * The link has expired, and this is only how the candidate is getting on (owner, 2026-09-24):
+   * `application` carries its id and status and nothing else, there is no consent notice and no
+   * documents, and nothing can be changed through it. See the backend's `statusOnlyView`.
+   */
+  statusOnly?: boolean;
+  /** This browser proved the contact with a code in this session, so saved answers came back. */
+  sessionVerified?: boolean;
+  /**
+   * Answers or scans are on file and were WITHHELD because this browser has not proven the contact
+   * with a code yet. The page asks for a code before it shows (or re-saves) the form.
+   */
+  sensitiveLocked?: boolean;
+  /** What is on file and being withheld — names of the identity fields, and how many scans. */
+  sensitiveOnFile?: { fields: string[]; scans: number };
 }
 
 export interface UpdateRegistrationDraftInput {
@@ -98,49 +127,48 @@ export interface UpdateRegistrationDraftInput {
   employmentCategory?: EmploymentCategory;
   /** Record-shaped answers. Filtered server-side against the one shared allow-list. */
   record?: Record<string, string | number>;
+  /** Who referred them — only while HR has not recorded it. `null` clears their own entry. */
+  sourceReferral?: { type: string; name: string; mobile: string; email: string } | null;
+  /**
+   * People who can vouch for the candidate — up to three. Normalized server-side; submit
+   * refuses an application with nobody ringable on it.
+   */
+  references?: Array<{ fullName?: string; phone?: string; relationship?: string; email?: string }>;
 }
 
 const basePath = (token: string) => `/api/v1/public/registration/${encodeURIComponent(token)}`;
 
-/**
- * `fetch`, a deadline, envelope-unwrapping and error translation — everything `ApiClient.send`
- * does, minus the auth header and the 401→refresh→redirect dance neither applies here.
- */
-async function call<T>(
-  path: string,
-  init?: RequestInit & { timeoutMs?: number },
-): Promise<T> {
-  const isForm = init?.body instanceof FormData;
-  const timeoutMs = init?.timeoutMs ?? (isForm ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
-  const headers: Record<string, string> = {
-    ...(isForm ? {} : { 'Content-Type': 'application/json' }),
-    ...((init?.headers as Record<string, string>) || {}),
-  };
+const call = publicCall;
 
-  let response: Response;
+/*
+  THE LINK OPENS THE FORM; THE CODE OPENS WHAT IS ALREADY IN IT.
+
+  A successful code answers with a session key. Sent back in this header, it is what lets the server
+  return the candidate's saved identity numbers and scans; without it the link alone shows progress.
+  Kept in sessionStorage — this tab only, gone when it closes — and keyed by the end of the token so
+  two links opened in one tab do not share one.
+*/
+export const REGISTRATION_SESSION_HEADER = 'x-registration-session';
+const sessionSlot = (token: string) => `fapoms.reg-session.${token.slice(-16)}`;
+
+export function readRegistrationSession(token: string): string | null {
+  try { return sessionStorage.getItem(sessionSlot(token)); } catch { return null; }
+}
+
+export function rememberRegistrationSession(token: string, key: string | null | undefined): void {
   try {
-    response = await fetchWithTimeout(path, { ...init, headers, timeoutMs });
-  } catch (err) {
-    throw fromNetwork(err);
-  }
+    if (key) sessionStorage.setItem(sessionSlot(token), key);
+    else sessionStorage.removeItem(sessionSlot(token));
+  } catch { /* storage blocked: the code is simply asked for again next load */ }
+}
 
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw fromResponse(response.status, body);
-  }
-
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return undefined as unknown as T;
-  }
-
-  const json = await response.json();
-  const enveloped = json !== null && typeof json === 'object' && !Array.isArray(json)
-    && 'success' in json && 'data' in json;
-  return (enveloped ? json.data : json) as T;
+function sessionHeaders(token: string): Record<string, string> {
+  const key = readRegistrationSession(token);
+  return key ? { [REGISTRATION_SESSION_HEADER]: key } : {};
 }
 
 export function hydrateRegistration(token: string): Promise<RegistrationHydrateResult> {
-  return call<RegistrationHydrateResult>(basePath(token));
+  return call<RegistrationHydrateResult>(basePath(token), { headers: sessionHeaders(token) });
 }
 
 /**
@@ -159,16 +187,19 @@ export interface RegistrationOtpSent {
 export function requestRegistrationOtp(token: string, phone: string): Promise<RegistrationOtpSent> {
   return call(`${basePath(token)}/otp/request`, {
     method: 'POST',
+    headers: sessionHeaders(token),
     body: JSON.stringify({ phone }),
   });
 }
 
 /**
- * Said before a code is requested. The page cannot know yet which channel the server will use, so it
- * names both rather than promise one that may not be the one that arrives.
+ * Said before a code is requested — one short line (owner, 2026-09-24: "keep things simple").
+ *
+ * Texting is how the code normally travels. When SMS is not available the server emails it
+ * instead, and the line shown AFTER sending (`otpSentWords`) says exactly which one happened and
+ * where, so nobody is left looking in the wrong place.
  */
-export const OTP_BEFORE_SEND_WORDS =
-  'We will send a 6-digit code to your mobile, or to your email if texts are not available.';
+export const OTP_BEFORE_SEND_WORDS = "We'll send you a 6-digit code.";
 
 /** Said once a code is on its way: exactly where the server says it went. */
 export function otpSentWords(delivery: Pick<RegistrationOtpSent, 'channel' | 'sentTo'>): string {
@@ -176,11 +207,22 @@ export function otpSentWords(delivery: Pick<RegistrationOtpSent, 'channel' | 'se
   return `A 6-digit code has been ${where} to ${delivery.sentTo}. It expires in 5 minutes.`;
 }
 
-export function verifyRegistrationOtp(token: string, phone: string, code: string): Promise<{ verified: boolean }> {
-  return call(`${basePath(token)}/otp/verify`, {
+export interface RegistrationOtpVerified {
+  verified: boolean;
+  /** What the code proved: a texted code proves the mobile, an emailed one only the mailbox. */
+  channel?: 'SMS' | 'EMAIL';
+  sessionKey?: string;
+  sessionExpiresInSeconds?: number;
+}
+
+/** Verifies the code and keeps the session key it mints, so this tab can read its saved answers. */
+export async function verifyRegistrationOtp(token: string, phone: string, code: string): Promise<RegistrationOtpVerified> {
+  const result = await call<RegistrationOtpVerified>(`${basePath(token)}/otp/verify`, {
     method: 'POST',
     body: JSON.stringify({ phone, code }),
   });
+  if (result?.sessionKey) rememberRegistrationSession(token, result.sessionKey);
+  return result;
 }
 
 export interface CheckPhoneConflictResult {
@@ -203,6 +245,7 @@ export function updateRegistrationDraft(
 ): Promise<RegistrationApplication> {
   return call<RegistrationApplication>(`${basePath(token)}/draft`, {
     method: 'PATCH',
+    headers: sessionHeaders(token),
     body: JSON.stringify(patch),
   });
 }
@@ -225,17 +268,50 @@ export function withdrawRegistrationConsent(token: string, reason?: string): Pro
   });
 }
 
+/**
+ * Attach a file to a document row.
+ *
+ * `replace: true` is what "Retake" means: the server swaps out every file already on that row for
+ * this one. Without it the file is added beside what is there — which is how a replacement used to
+ * be sent, so a "replaced" scan quietly left the old one on the application too.
+ *
+ * A file the server will not take (wrong content for its name, unreadable, flagged by the scan)
+ * comes back as a 400 with the code `UPLOAD_REJECTED` and a short sentence — see
+ * `isUploadRejected`.
+ */
 export function uploadRegistrationDocument(
   token: string,
   requirement: OnboardingDocument | string,
   file: File,
+  options: { replace?: boolean } = {},
 ): Promise<RegistrationApplicationDocument> {
   const body = new FormData();
   body.append('file', file);
+  const query = options.replace ? '?replace=true' : '';
   return call<RegistrationApplicationDocument>(
-    `${basePath(token)}/documents/${encodeURIComponent(requirement)}`,
+    `${basePath(token)}/documents/${encodeURIComponent(requirement)}${query}`,
     { method: 'POST', body },
   );
+}
+
+/**
+ * Take one file off a document row. Answers with the row as it now stands — `filePaths` may be
+ * empty, which means nothing is attached for that document any more.
+ */
+export function removeRegistrationDocumentFile(
+  token: string,
+  requirement: OnboardingDocument | string,
+  index: number,
+): Promise<RegistrationApplicationDocument> {
+  return call<RegistrationApplicationDocument>(
+    `${basePath(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`,
+    { method: 'DELETE' },
+  );
+}
+
+/** Was this the server refusing the file itself (as opposed to the network, or the link)? */
+export function isUploadRejected(err: unknown): boolean {
+  return err instanceof AppError && err.domainCode === 'UPLOAD_REJECTED';
 }
 
 export function submitRegistration(token: string): Promise<RegistrationApplication> {
@@ -293,7 +369,7 @@ export async function getRegistrationDocumentFileBlob(
   index = 0,
 ): Promise<Blob> {
   const path = `${basePath(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`;
-  const response = await fetchWithTimeout(path, { timeoutMs: LONG_TIMEOUT_MS });
+  const response = await fetchWithTimeout(path, { timeoutMs: LONG_TIMEOUT_MS, headers: sessionHeaders(token) });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw fromResponse(response.status, body);

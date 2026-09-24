@@ -117,6 +117,7 @@ export const ASSAYER_LIFECYCLE_BUCKETS: ReadonlyArray<{ key: string; label: stri
       AssayerLifecycleStatus.INVITED,
       AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
       AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+      AssayerLifecycleStatus.FINAL_APPROVAL,
       AssayerLifecycleStatus.TRAINING,
     ],
   },

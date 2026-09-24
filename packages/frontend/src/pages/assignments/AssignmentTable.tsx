@@ -194,8 +194,8 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                 textTransform: 'uppercase',
               }}
             >
-              <th scope="col" style={{ padding: '10px 14px' }}>Branch / Assignment</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Assayer</th>
+              <th scope="col" title="Branch and assignment this row is about" style={{ padding: '10px 14px' }}>Branch / Assignment</th>
+              <th scope="col" title="Assayer assigned to this audit" style={{ padding: '10px 14px' }}>Assayer</th>
               <th
                 scope="col"
                 aria-sort={dateSort === 'asc' ? 'ascending' : 'descending'}
@@ -210,11 +210,9 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
               >
                 Scheduled {dateSort === 'asc' ? '▲' : '▼'}
               </th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Fee</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Branch Workflow</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Assignment State</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Attention</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Actions</th>
+              <th scope="col" title="Agreed audit fee for this assignment" style={{ padding: '10px 14px' }}>Fee</th>
+              <th scope="col" title="Current status and progress of this assignment" style={{ padding: '10px 14px' }}>Status & Progress</th>
+              <th scope="col" title="Quick actions you can take on this assignment" style={{ padding: '10px 14px' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -245,60 +243,67 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                   <td style={{ padding: '10px 14px' }}>
                     <div style={{ fontWeight: 700 }}>
                       {asn.projectBranch?.branch?.name || asn.assignmentNumber}
+                      {asn.projectBranch?.branch?.city && (
+                        <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}> · {asn.projectBranch.branch.city}</span>
+                      )}
                     </div>
                     <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
                       {asn.assignmentNumber} · {asn.project?.name}
                     </span>
                   </td>
                   <td style={{ padding: '10px 14px' }}>
-                    {asn.assayerId ? (
-                      <Link
-                        to={`/hr/roster/${encodeURIComponent(asn.assayerId)}`}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          color: 'var(--text-primary)',
-                          textDecoration: 'none',
-                          fontWeight: 600,
-                        }}
-                        title="View Assayer 360 profile"
-                      >
-                        {asn.assayer?.displayName || '—'}
-                      </Link>
-                    ) : (
-                      asn.assayer?.displayName || '—'
-                    )}
-                    {/*
-                      The marker used to say only that somebody arrived, which made a visit with
-                      no departure look identical to a completed one on the queue. It now carries
-                      both ends and the time on site, and turns amber when the departure is
-                      missing — the state that is a finding, not a detail.
-                    */}
-                    {asn.checkedInAt && (() => {
-                      const read = readAttendance(asn);
-                      const missingDeparture = read.gap === 'NO_DEPARTURE';
-                      return (
-                        <span
-                          title={attendanceSummary(read)}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                      {asn.assayerId ? (
+                        <Link
+                          to={`/hr/roster/${encodeURIComponent(asn.assayerId)}`}
+                          onClick={(e) => e.stopPropagation()}
                           style={{
-                            marginLeft: '5px',
-                            color: missingDeparture ? 'var(--warning)' : 'var(--success)',
-                            fontWeight: 700,
+                            color: 'var(--text-primary)',
+                            textDecoration: 'none',
+                            fontWeight: 600,
                           }}
+                          title="View Assayer 360 profile"
                         >
-                          📍
-                          {read.durationLabel && (
-                            <span style={{ marginLeft: '3px', fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                              {read.durationLabel}
-                            </span>
-                          )}
-                          {missingDeparture && (
-                            <span style={{ marginLeft: '3px', fontSize: 'var(--text-3xs)', fontWeight: 700 }}>
-                              no check-out
-                            </span>
-                          )}
-                        </span>
-                      );
-                    })()}
+                          {asn.assayer?.displayName || '—'}
+                        </Link>
+                      ) : (
+                        asn.assayer?.displayName || '—'
+                      )}
+                      {/* Attendance checkin marker */}
+                      {asn.checkedInAt && (() => {
+                        const read = readAttendance(asn);
+                        const missingDeparture = read.gap === 'NO_DEPARTURE';
+                        return (
+                          <span
+                            title={attendanceSummary(read)}
+                            style={{
+                              marginLeft: '5px',
+                              color: missingDeparture ? 'var(--warning)' : 'var(--success)',
+                              fontWeight: 700,
+                            }}
+                          >
+                            📍
+                            {read.durationLabel && (
+                              <span style={{ marginLeft: '3px', fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                {read.durationLabel}
+                              </span>
+                            )}
+                            {missingDeparture && (
+                              <span style={{ marginLeft: '3px', fontSize: 'var(--text-3xs)', fontWeight: 700 }}>
+                                no check-out
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    {asn.assayer?.phone && (
+                      <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        <a href={`tel:${asn.assayer.phone}`} onClick={(e) => e.stopPropagation()} style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}>
+                          {asn.assayer.phone}
+                        </a>
+                      </div>
+                    )}
                   </td>
                   <td
                     style={{
@@ -321,52 +326,48 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                     {assignmentFee(asn)}
                   </td>
 
-                  {/* 1. Branch Workflow Status */}
+                  {/* Status & Progress (synthesized from assignment status, operational attention, and branch workflow) */}
                   <td style={{ padding: '10px 14px' }}>
-                    <StatusBadge
-                      domain="branch"
-                      status={asn.projectBranch?.status || 'SCHEDULED'}
-                      size="sm"
-                    />
-                  </td>
-
-                  {/* 2. Assignment Execution Status */}
-                  <td style={{ padding: '10px 14px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                      <StatusBadge
-                        domain="assignment"
-                        status={asn.status}
-                        size="sm"
-                      />
-                      {asn.status === 'REJECTED' && asn.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
                         <StatusBadge
-                          label="Auto-declined"
-                          category="pending"
-                          icon={<Hourglass size={11} />}
-                          variant="tag"
+                          domain="assignment"
+                          status={asn.status}
                           size="sm"
                         />
-                      )}
-                      {(asn.priority === 'CRITICAL' || asn.priority === 'HIGH') && (
-                        <StatusBadge
-                          label={asn.priority === 'CRITICAL' ? 'Escalated' : 'Urgent'}
-                          category={asn.priority === 'CRITICAL' ? 'danger' : 'pending'}
-                          icon={<Flame size={11} />}
-                          variant="tag"
-                          size="sm"
-                        />
+                        {attention && attention !== 'NORMAL' && (
+                          <StatusBadge
+                            domain="attention"
+                            status={attention}
+                            variant="tag"
+                            size="sm"
+                          />
+                        )}
+                        {(asn.priority === 'CRITICAL' || asn.priority === 'HIGH') && (
+                          <StatusBadge
+                            label={asn.priority === 'CRITICAL' ? 'Escalated' : 'Urgent'}
+                            category={asn.priority === 'CRITICAL' ? 'danger' : 'pending'}
+                            icon={<Flame size={11} />}
+                            variant="tag"
+                            size="sm"
+                          />
+                        )}
+                        {asn.status === 'REJECTED' && asn.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' && (
+                          <StatusBadge
+                            label="Auto-declined"
+                            category="pending"
+                            icon={<Hourglass size={11} />}
+                            variant="tag"
+                            size="sm"
+                          />
+                        )}
+                      </div>
+                      {asn.projectBranch?.status && asn.projectBranch.status !== 'SCHEDULED' && (
+                        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
+                          Branch: {asn.projectBranch.status.replace(/_/g, ' ')}
+                        </div>
                       )}
                     </div>
-                  </td>
-
-                  {/* 3. Derived Operational Attention State */}
-                  <td style={{ padding: '10px 14px' }}>
-                    <StatusBadge
-                      domain="attention"
-                      status={attention}
-                      variant="tag"
-                      size="sm"
-                    />
                   </td>
 
                   {/* Inline Actions */}
@@ -384,6 +385,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                           <button
                             onClick={() => onQuickAction(asn.id, 'ACCEPTED')}
                             disabled={rowBusy}
+                            title={`Accept ${asn.assignmentNumber} on behalf of the assayer`}
                             className="btn btn-primary"
                             style={{
                               padding: '3px 9px',
@@ -400,6 +402,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                           <button
                             onClick={() => onQuickAction(asn.id, 'COMPLETED', !!asn.checkedInAt, !!asn.checkedOutAt)}
                             disabled={rowBusy}
+                            title={`Mark ${asn.assignmentNumber} as complete`}
                             className="btn btn-primary"
                             style={{ padding: '3px 9px', minHeight: '32px', fontSize: 'var(--text-2xs)' }}
                           >
@@ -409,6 +412,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                         {!canAccept && !canComplete && (
                           <button
                             onClick={() => onSelectAssignment(asn.id)}
+                            title={`Open details for ${asn.assignmentNumber}`}
                             className="btn btn-secondary"
                             style={{ padding: '3px 9px', minHeight: '32px', fontSize: 'var(--text-2xs)' }}
                           >

@@ -1,3 +1,4 @@
+import { MapTilesController } from './map-tiles.controller';
 import { Logger, Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule, InjectQueue } from '@nestjs/bull';
@@ -24,7 +25,7 @@ import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable
     // The precision backfill's own queue — see geo-precision.constants.ts for why not a shared one.
     BullModule.registerQueue({ name: GEO_PRECISION_QUEUE }),
   ],
-  controllers: [GeoController],
+  controllers: [GeoController, MapTilesController],
   providers: [PostGISRoutingProvider, OSRMRoutingProvider, RoutingService, GeoSeedService, GeoPrecisionService, GeoPrecisionWorker, TileProxyService],
   exports: [RoutingService, GeoPrecisionService, TypeOrmModule],
 })

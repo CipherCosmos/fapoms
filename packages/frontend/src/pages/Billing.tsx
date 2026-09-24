@@ -5,8 +5,8 @@ import { FileSpreadsheet, RefreshCw, IndianRupee, Wrench } from 'lucide-react';
 import { SystemRole, AssayerInvoiceStatus, InvoiceStatus } from '@fapoms/shared';
 import { Modal, StyledInput, useToast, PageHeader } from '../components/ui';
 import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
-import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
-import { useReconcile, useReconcilePreview, useAssayerInvoices, useBillingInvoices, useBillingOverview } from '../hooks/useBilling';
+import { useCurrentRoles, useCurrentPermissions, hasAnyRole, canGiveFinalBillingApproval } from '../hooks/useCurrentRoles';
+import { useReconcile, useReconcilePreview, useAssayerInvoices, useBillingInvoices, useBillingOverview, useFinalApprovalQueue } from '../hooks/useBilling';
 import { queryKeys } from '../hooks/queryKeys';
 import { getPendingExpenses } from '../services/expenses';
 import { billingApi } from '../services/billing';
@@ -17,6 +17,7 @@ import { TodoTab } from './billing/TodoTab';
 import { PayoutsTab } from './billing/PayoutsTab';
 import { InvoicesTab, type InvoiceFilter } from './billing/InvoicesTab';
 import { AssayerInvoicesTab, type AssayerInvoiceFilter } from './billing/AssayerInvoicesTab';
+import { FinalApprovalTab } from './billing/FinalApprovalTab';
 import { ExpenseReview } from './ExpenseReview';
 import { Card } from './billing/shared';
 import { JOBS, jobFromParam, payoutStage, type BillingJob, type PayoutStage } from './billing/vocabulary';
@@ -56,8 +57,15 @@ export const Billing: React.FC = () => {
   const canPay = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS]);
   const canInvoice = canPay;
   const canReviewClaims = canInvoice;
+  /**
+   * The HOD (2026-09-24): whoever holds the final billing approval — Admin, or a role built in
+   * Users & Roles with it. Only they see the Final approval tab; nobody else has anything to do there.
+   */
+  const isHod = canGiveFinalBillingApproval(roles, useCurrentPermissions());
+  const jobs = JOBS.filter((j) => j.key !== 'final' || isHod);
 
-  const job = jobFromParam(params.get('tab'));
+  const requested = jobFromParam(params.get('tab'));
+  const job: BillingJob = requested === 'final' && !isHod ? 'todo' : requested;
   const stage = payoutStage(params.get('stage'));
   const invoiceFilter = (params.get('invoices') as InvoiceFilter) || 'ALL';
   const billFilter = (params.get('bills') as AssayerInvoiceFilter) || 'ALL';
@@ -89,13 +97,23 @@ export const Billing: React.FC = () => {
   const claims = useQuery({ queryKey: queryKeys.billing.pendingExpenses(), queryFn: getPendingExpenses, staleTime: 30_000, enabled: canReviewClaims });
   const billsToApprove = useAssayerInvoices({ status: AssayerInvoiceStatus.SUBMITTED, page: 1, limit: 1 });
   const draftInvoices = useBillingInvoices({ status: InvoiceStatus.DRAFT, page: 1, limit: 1 });
+  // Approved by the HOD and not yet marked sent — the office's next move on a client invoice.
+  const readyToSend = useBillingInvoices({ status: InvoiceStatus.HOD_APPROVED, page: 1, limit: 1 });
+  // Mounted for the HOD only: nobody else can read it, and nobody else acts on it.
+  const finalQueue = useFinalApprovalQueue({ enabled: isHod });
   // Shares the To-do tab's cache entry, so opening the page costs one overview read, not two.
   const overview = useBillingOverview();
   const waiting: Partial<Record<BillingJob, number | undefined>> = {
     expenses: loadFailed(claims) ? undefined : claims.data?.length,
     bills: loadFailed(billsToApprove) ? undefined : billsToApprove.data?.total,
-    pay: loadFailed(overview) ? undefined : overview.data?.payouts.approvedCount,
-    invoices: loadFailed(draftInvoices) ? undefined : draftInvoices.data?.total,
+    // Ready to pay: approved by the office AND the HOD. Waiting for the HOD is not this desk's move.
+    pay: loadFailed(overview) || !overview.data
+      ? undefined
+      : overview.data.payouts.approvedCount - (overview.data.payouts.awaitingHodCount ?? 0),
+    invoices: loadFailed(draftInvoices) || loadFailed(readyToSend)
+      ? undefined
+      : (draftInvoices.data?.total ?? 0) + (readyToSend.data?.total ?? 0),
+    final: isHod && !loadFailed(finalQueue) ? finalQueue.data?.total : undefined,
   };
 
   const { download: downloadExcel, busy: exporting } = useQueuedExcelExport();
@@ -133,7 +151,7 @@ export const Billing: React.FC = () => {
         display: 'flex', gap: 4, marginBottom: 16, padding: 4, background: 'var(--bg-tertiary)',
         borderRadius: 'var(--radius-md)', overflowX: 'auto',
       }}>
-        {JOBS.map((t) => {
+        {jobs.map((t) => {
           const active = job === t.key;
           const n = waiting[t.key];
           return (
@@ -179,6 +197,7 @@ export const Billing: React.FC = () => {
       {job === 'bills' && <AssayerInvoicesTab filter={billFilter} onFilter={(f) => go('bills', { bills: f === 'ALL' ? undefined : f })} canAct={canPay} />}
       {job === 'pay' && <PayoutsTab stage={stage} onStage={(s) => go('pay', { stage: s })} canAct={canPay} />}
       {job === 'invoices' && <InvoicesTab filter={invoiceFilter} onFilter={(f) => go('invoices', { invoices: f === 'ALL' ? undefined : f })} canAct={canInvoice} />}
+      {job === 'final' && isHod && <FinalApprovalTab />}
 
       {reconcileOpen && <ReconcileModal onClose={() => setReconcileOpen(false)} onDone={(msg) => { toast('success', msg); setReconcileOpen(false); }} />}
     </Page>
@@ -230,10 +249,10 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
 
   const count = preview.data?.count;
   return (
-    <Modal open onClose={onClose} title={<><RefreshCw size={18} /> Repair missing money records</>} width="520px" footer={
+      <Modal open onClose={onClose} title={<><RefreshCw size={18} /> Repair missing money records</>} width="520px" footer={
       <>
-        <button type="button" onClick={onClose} className="btn btn-secondary">Close</button>
-        <button type="button" onClick={run} disabled={!!jobId || reconcile.isPending || !count} className="btn btn-primary">
+        <button type="button" onClick={onClose} title="Close without booking anything" className="btn btn-secondary">Close</button>
+        <button type="button" onClick={run} disabled={!!jobId || reconcile.isPending || !count} title={count ? `Book ${count} missing money records now` : 'Nothing missing, nothing to book'} className="btn btn-primary">
           {jobId ? 'Running…' : count ? `Book ${count} assignment${count === 1 ? '' : 's'}` : 'Nothing to book'}
         </button>
       </>
@@ -243,7 +262,7 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
       </div>
       <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
         Only assignments completed on or after <span style={{ fontWeight: 400 }}>(blank = the whole book)</span>
-        <StyledInput type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 200 }} />
+        <StyledInput type="date" value={since} onChange={(e) => setSince(e.target.value)} title="Only check assignments completed on or after this date" style={{ width: 200 }} />
       </label>
       {/*
         "Could not count." was the whole of what this said when the preview failed — no reason, no

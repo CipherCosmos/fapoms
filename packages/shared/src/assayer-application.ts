@@ -43,6 +43,115 @@ export function applicationIsEditableByCandidate(status: ApplicationStatus): boo
 }
 
 /**
+ * HR's verdict on one document requirement inside a hiring application.
+ *
+ * Lives apart from the roster's `DocumentVerification` on purpose: a roster document carries
+ * scans, versions and holder-name matching, while an application document is just
+ * `{requirement, filePaths}`. Reusing that enum would promise machinery this row cannot hold.
+ */
+export enum ApplicationDocumentReviewStatus {
+  /** Nobody has judged this requirement yet. */
+  PENDING = 'PENDING',
+  /** HR looked at the attached scans and accepted them. */
+  APPROVED = 'APPROVED',
+  /** HR sent this requirement back; the candidate must re-upload it on the same link. */
+  NEEDS_RESUBMIT = 'NEEDS_RESUBMIT',
+}
+
+/**
+ * One targeted ask inside a request for more information: either a document requirement to
+ * re-upload or a form field to correct, each with its own instruction for the candidate.
+ *
+ * Stored as an array on the application (`infoRequests`, jsonb) so the candidate's link can
+ * render a to-do list instead of one free-text banner nobody can act on without guessing.
+ */
+export interface ApplicationInfoRequestItem {
+  kind: 'document' | 'field';
+  /** An `OnboardingDocument` value for documents, a form/record field key for fields. */
+  key: string;
+  /** Human words for the item, resolved server-side so the candidate never sees a raw key. */
+  label: string;
+  /** What HR needs for this item — shown beside it on the candidate's link. */
+  message: string;
+  /** Structured send-back reason for documents (a `DocumentRejectionReason` value, if any). */
+  reason?: string | null;
+}
+
+/**
+ * The form fields HR may tick when asking for corrections, with the words both screens use.
+ *
+ * Keys match the candidate form's field names (application columns) or the record field names
+ * under `extendedProfile.fields` — the same names the draft PATCH already accepts, so a ticked
+ * field is always something the candidate can actually fix on their link.
+ */
+export const APPLICATION_INFO_REQUESTABLE_FIELDS: ReadonlyArray<{ key: string; label: string; step: number }> = [
+  { key: 'fullName', label: 'Full name', step: 1 },
+  { key: 'dateOfBirth', label: 'Date of birth', step: 1 },
+  { key: 'gender', label: 'Gender', step: 1 },
+  { key: 'address', label: 'Address', step: 2 },
+  { key: 'city', label: 'City', step: 2 },
+  { key: 'state', label: 'State', step: 2 },
+  { key: 'pincode', label: 'Pincode', step: 2 },
+  { key: 'email', label: 'Email', step: 1 },
+  { key: 'mobile', label: 'Mobile number', step: 1 },
+  { key: 'employmentCategory', label: 'Employment category', step: 3 },
+  { key: 'experienceYears', label: 'Experience', step: 2 },
+  { key: 'currentEmployer', label: 'Current employer', step: 2 },
+  { key: 'expertise', label: 'Expertise', step: 2 },
+  { key: 'availability', label: 'Availability', step: 2 },
+  { key: 'panNumber', label: 'PAN number', step: 3 },
+  { key: 'aadhaarNumber', label: 'Aadhaar number', step: 3 },
+  { key: 'bankAccountNumber', label: 'Bank account number', step: 3 },
+  { key: 'ifscCode', label: 'IFSC code', step: 3 },
+  { key: 'bankName', label: 'Bank name', step: 3 },
+  { key: 'qualification', label: 'Qualification', step: 3 },
+  { key: 'emergencyContactName', label: 'Emergency contact name', step: 3 },
+  { key: 'emergencyContactPhone', label: 'Emergency contact phone', step: 3 },
+];
+
+/**
+ * Which form step a correctable field is on — where a "Fix" beside HR's ask should take the
+ * candidate. The same four steps on the web link and the phone app.
+ *
+ * Carried on the list above rather than kept by each screen, because the web form kept its own
+ * copy and it had already drifted: it sent a fix to the employment category to step 2, while both
+ * forms ask for it on step 3. A field this does not know goes to step 1 — the top of the form —
+ * rather than nowhere.
+ */
+export function applicationFieldStep(key: string): number {
+  return APPLICATION_INFO_REQUESTABLE_FIELDS.find((f) => f.key === key)?.step ?? 1;
+}
+
+
+/**
+ * Read the structured asks back out of untyped jsonb.
+ *
+ * Shape-checked rather than cast: `infoRequests` is a column anything can have been written
+ * into, including by an older build that only knew free-text `reviewNotes`. Unknown shapes
+ * become no items rather than a banner that says "undefined".
+ */
+export function readApplicationInfoRequests(raw: unknown): ApplicationInfoRequestItem[] {
+  if (!Array.isArray(raw)) return [];
+  const items: ApplicationInfoRequestItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const row = entry as Partial<ApplicationInfoRequestItem>;
+    if (row.kind !== 'document' && row.kind !== 'field') continue;
+    if (typeof row.key !== 'string' || !row.key) continue;
+    if (typeof row.label !== 'string' || !row.label) continue;
+    if (typeof row.message !== 'string' || !row.message.trim()) continue;
+    items.push({
+      kind: row.kind,
+      key: row.key,
+      label: row.label,
+      message: row.message.trim(),
+      reason: typeof row.reason === 'string' && row.reason ? row.reason : null,
+    });
+  }
+  return items;
+}
+
+/**
  * Who authored the substance of an application — the rule maker–checker keys on.
  *
  * SELF_SERVICE: the candidate filled it in through their invite link (web or mobile). The HR

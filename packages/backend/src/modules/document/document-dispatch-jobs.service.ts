@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import type { Job, Queue } from 'bull';
+import type { Queue } from 'bull';
 import {
   DOCUMENT_DISPATCH_JOB,
   DOCUMENT_DISPATCH_QUEUE,
@@ -9,27 +9,38 @@ import {
   DispatchBatchResult,
 } from './document-dispatch-jobs.contract';
 import {
-  IN_FLIGHT_SCAN_LIMIT,
-  QueuedJobEnvelope,
   QueuedJobStatus,
   assertJobVisibleTo,
   dedupeKeyFor,
   describeJob,
 } from '../../infrastructure/queue/queued-job';
 import type { JobActor } from '../../infrastructure/queue/job-actor';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+
+export const DOCUMENT_DISPATCH_KIND = 'DOCUMENT_DISPATCH' as const;
 
 export interface EnqueuedDispatchBatch {
   jobId: string;
   /** True when an identical batch by the same person was already queued or running. */
   deduplicated: boolean;
+  /** The `background_jobs` row that tracks it (the Jobs tray), or null when untracked. */
+  backgroundJobId: string | null;
 }
 
-/** Accepts a desk's batch dispatch for the worker and answers where it has got to. */
+/**
+ * Accepts a desk's batch dispatch for the worker and answers where it has got to.
+ *
+ * The batch stays on its own `document-dispatch` queue — its one loop is what makes "one dispatch
+ * at a time" true (see `DocumentDispatchWorker`) — and is TRACKED on a `background_jobs` row
+ * (`enqueueTracked`), so the Jobs tray shows it after a refresh. The Bull id is still the answer,
+ * so `GET /documents/dispatch-batch/:jobId` and the page's poll keep working unchanged.
+ */
 @Injectable()
 export class DocumentDispatchJobsService {
-  private readonly logger = new Logger(DocumentDispatchJobsService.name);
-
-  constructor(@InjectQueue(DOCUMENT_DISPATCH_QUEUE) private readonly queue: Queue) {}
+  constructor(
+    @InjectQueue(DOCUMENT_DISPATCH_QUEUE) private readonly queue: Queue,
+    private readonly backgroundJobs: BackgroundJobsService,
+  ) {}
 
   /**
    * The ids are sorted into the fingerprint and the address is part of it, so pressing Send twice —
@@ -43,6 +54,7 @@ export class DocumentDispatchJobsService {
   async enqueueBatch(
     input: { documentIds: string[]; branchEmail?: string | null },
     actor: JobActor,
+    regions: string[] | null = null,
   ): Promise<EnqueuedDispatchBatch> {
     const documentIds = [...new Set(input.documentIds)].sort();
     const branchEmail = (input.branchEmail ?? '').trim() || null;
@@ -54,14 +66,20 @@ export class DocumentDispatchJobsService {
       dedupeKey: dedupeKeyFor(DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH, actor.userId, params),
     };
 
-    const inFlight = await this.findInFlight(data.dedupeKey);
-    if (inFlight) {
-      this.logger.log(`Joining in-flight dispatch batch ${inFlight.id} rather than sending it twice.`);
-      return { jobId: String(inFlight.id), deduplicated: true };
-    }
-    const job = await this.queue.add(DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH, data, DISPATCH_BATCH_JOB_OPTIONS);
-    this.logger.log(`Queued dispatch batch ${job.id}: ${documentIds.length} document(s).`);
-    return { jobId: String(job.id), deduplicated: false };
+    const count = documentIds.length;
+    return this.backgroundJobs.enqueueTracked({
+      kind: DOCUMENT_DISPATCH_KIND,
+      actor,
+      regions,
+      title: `Send ${count} document${count === 1 ? '' : 's'}${branchEmail ? ` to ${branchEmail}` : ' to their assayers'}`,
+      // Displayable facts only — never the id list.
+      params: { documentCount: count, branchEmail },
+      total: count,
+      queue: this.queue,
+      jobName: DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH,
+      data,
+      options: DISPATCH_BATCH_JOB_OPTIONS,
+    });
   }
 
   /**
@@ -74,19 +92,5 @@ export class DocumentDispatchJobsService {
     if (job.name !== DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH) assertJobVisibleTo(null, userId);
     // The per-document outcome is the deliverable: ids and reasons, never file contents.
     return describeJob<DispatchBatchResult>(job, { includeResult: true });
-  }
-
-  private async findInFlight(dedupeKey: string): Promise<Job | null> {
-    try {
-      const jobs = await this.queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
-      return jobs.find(
-        (j) =>
-          j?.name === DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH &&
-          (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
-      ) ?? null;
-    } catch (err) {
-      this.logger.warn(`Could not scan for an in-flight dispatch batch (${(err as Error).message}); queuing anyway.`);
-      return null;
-    }
   }
 }

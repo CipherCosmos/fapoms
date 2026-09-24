@@ -57,6 +57,9 @@ export const TdsReportModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
       footer={<>
         <span style={{ marginRight: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           Section {report?.section ?? '194J'} · TDS deducted from field workers. Amounts are what was already withheld — nothing is recomputed here.
+          {!!report?.thresholdRupees && (
+            <> No TDS is withheld until an assayer&rsquo;s fees in the financial year pass {formatRupees(report.thresholdRupees)}; the payment that crosses it carries the whole year&rsquo;s TDS, so an assayer below it has no row.</>
+          )}
         </span>
         <button type="button" onClick={onClose} className="btn btn-secondary">Close</button>
         <button type="button" onClick={exportCsv} disabled={!report || report.rows.length === 0} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>

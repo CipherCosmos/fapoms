@@ -21,6 +21,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { Region } from '@fapoms/shared';
 import { EmailService } from '../../modules/notifications/email.service';
+import { rbacPrincipalCacheKey } from './auth.service';
 
 describe('Privilege Escalation & Scope Protection (Invariants 4 & 7)', () => {
   let service: UserService;
@@ -112,7 +113,7 @@ describe('Privilege Escalation & Scope Protection (Invariants 4 & 7)', () => {
       );
 
       expect(updated.roles.length).toBe(2);
-      expect(mockCache.del).toHaveBeenCalledWith('rbac:principal:user-target-1');
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('user-target-1'));
     });
   });
 
@@ -169,7 +170,7 @@ describe('Privilege Escalation & Scope Protection (Invariants 4 & 7)', () => {
         'admin-actor-1',
       );
 
-      expect(mockCache.del).toHaveBeenCalledWith('rbac:principal:user-target-1');
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('user-target-1'));
     });
   });
 

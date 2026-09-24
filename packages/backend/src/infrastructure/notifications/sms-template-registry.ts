@@ -12,6 +12,7 @@ export type SmsTemplateKey =
   | 'mfa-code'
   | 'registration-otp'
   | 'app-credentials'
+  | 'reference-notice'
   | 'notification'
   | 'transport-test';
 
@@ -80,6 +81,21 @@ export const SMS_TEMPLATE_REGISTRY: Record<SmsTemplateKey, SmsTemplateDefinition
       + 'and temporary password {{temporaryPassword}}, valid for {{validDays}} days. Do not share it.',
     requiredTokens: ['username', 'temporaryPassword', 'validDays'],
     sampleData: { username: 'AS0323', temporaryPassword: 'tiger-mango-9', validDays: '7' },
+  },
+  'reference-notice': {
+    key: 'reference-notice',
+    name: 'Reference heads-up',
+    description: 'Tells somebody a candidate named as a reference that HR may ring them. Sent when the candidate is approved, to referees with a mobile number.',
+    /*
+      Written to be registered on DLT as it stands: the company is spelled out rather than a token,
+      and the one variable is the candidate's name. It carries no template id until the operations
+      team registers it — until then `SmsService.queue` refuses it on the spot, and the reference
+      shows "not texted" on the record instead of pretending it went.
+    */
+    defaultText: 'Greetings from Sumeru Global Support Solutions Pvt. Ltd.! {{candidateName}} has named you '
+      + 'as a professional reference. Our HR team may call you shortly to confirm.',
+    requiredTokens: ['candidateName'],
+    sampleData: { candidateName: 'Ramesh Kulkarni' },
   },
   notification: {
     key: 'notification',

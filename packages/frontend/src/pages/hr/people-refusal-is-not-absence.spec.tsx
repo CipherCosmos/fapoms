@@ -52,7 +52,11 @@ function draw(ui: React.ReactElement) {
   );
 }
 
-beforeEach(() => { request.mockReset(); });
+beforeEach(() => {
+  request.mockReset();
+  // The audit feed is asked for only on behalf of ADMIN/AUDITOR (its server gate), so sign in as one.
+  localStorage.setItem('fapoms_user_cache', JSON.stringify({ id: 'me', roles: ['ADMIN'] }));
+});
 
 describe('Audit trail — a refused log is not a clean sheet', () => {
   it('one person: says it was refused rather than "Nothing recorded for this person yet"', async () => {

@@ -462,6 +462,7 @@ export const NotificationDropdown: React.FC = () => {
               {unreadCount > 0 && (
                 <button
                   onClick={handleMarkAllRead}
+                  title="Mark every notification as read"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -586,12 +587,14 @@ export const NotificationDropdown: React.FC = () => {
             <div style={{ borderTop: '1px solid var(--border-color)', padding: '9px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
               <button
                 onClick={() => { setOpen(false); void navigate('/notifications'); }}
+                title="Open the full notifications list"
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--accent)' }}
               >
                 View all
               </button>
               <button
                 onClick={() => { setOpen(false); void navigate('/notifications?tab=preferences'); }}
+                title="Choose which notifications reach you"
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}
               >
                 Choose what reaches me

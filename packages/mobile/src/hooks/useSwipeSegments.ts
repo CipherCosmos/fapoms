@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { PanResponder } from 'react-native';
 import * as haptics from '../lib/haptics';
+import { nextSegment, shouldClaimSwipe } from './swipe-segments';
 
 /**
  * Swipe left/right to move between a screen's own `Segmented` options — e.g. ScheduleScreen's
@@ -14,21 +15,32 @@ import * as haptics from '../lib/haptics';
  * that happens over this screen, and the app-level tab swipe only ever sees a gesture this one
  * chose not to claim. Without that ordering, a swipe on either of these screens jumped the whole
  * app to a different bottom-dock tab instead of switching the segment under the user's finger.
+ *
+ * The responder is built once (PanResponder handlers are not re-bound on render), so it reads the
+ * options, the current segment and the callback through refs updated on every render. It used to
+ * close over the values from the first render: `current` stayed the first segment for ever, so a
+ * swipe reached the second segment and could never come back, and every swipe was claimed — which
+ * also kept the app-level tab swipe from ever seeing one on these screens.
  */
 export function useSwipeSegments<T extends string>(order: readonly T[], current: T, onChange: (next: T) => void) {
+  const orderRef = useRef(order);
+  const currentRef = useRef(current);
+  const onChangeRef = useRef(onChange);
+  orderRef.current = order;
+  currentRef.current = current;
+  onChangeRef.current = onChange;
+
   return useRef(
     PanResponder.create({
+      // Claimed only when there is a segment to move to; past either end the swipe is left for the
+      // app-level tab swipe.
       onMoveShouldSetPanResponder: (_, gesture) =>
-        Math.abs(gesture.dx) > 24 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+        shouldClaimSwipe(orderRef.current, currentRef.current, gesture.dx, gesture.dy),
       onPanResponderRelease: (_, gesture) => {
-        const i = order.indexOf(current);
-        if (i === -1) return;
-        // Content-follows-finger: swipe LEFT (negative dx) advances to the next option, matching
-        // the app-level tab swipe's own direction convention.
-        const next = gesture.dx < 0 ? order[i + 1] : order[i - 1];
-        if (!next) return; // Already at the first/last option.
+        const next = nextSegment(orderRef.current, currentRef.current, gesture.dx);
+        if (!next) return;
         haptics.select();
-        onChange(next);
+        onChangeRef.current(next);
       },
     })
   ).current;

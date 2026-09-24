@@ -1,24 +1,28 @@
 import {
   Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe,
-  ForbiddenException, HttpCode, HttpStatus,
+  ForbiddenException, BadRequestException, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsString, IsNotEmpty, IsOptional, IsNumber, IsEnum, IsArray, IsUUID, IsBoolean, IsBooleanString,
-  ArrayNotEmpty, ArrayMaxSize, Min, MaxLength,
+  ArrayNotEmpty, ArrayMaxSize, Min, MaxLength, IsIn, ValidateNested,
 } from 'class-validator';
 import { BillingEngineService } from './billing-engine.service';
-import { AssayerInvoiceService } from './assayer-invoice.service';
+import { AssayerInvoiceService, SUBMIT_ON_BEHALF_REASON_MIN } from './assayer-invoice.service';
 import { BillingJobsService } from './billing-jobs.service';
 import { BillingBulkJobsService } from './billing-bulk-jobs.service';
+import { FinalApprovalService } from './final-approval.service';
 import { BILLING_BULK_MAX_PAYOUTS } from './billing-bulk-jobs.contract';
 import { jobActorFrom } from '../../infrastructure/queue/job-actor';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback, hasAnyRole } from '../auth/guards';
 import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from './billing-roles';
-import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus, AssayerInvoiceStatus } from '@fapoms/shared';
+import {
+  SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus, AssayerInvoiceStatus,
+  FINAL_APPROVAL_KINDS, HOD_REJECT_REASON_MAX, type FinalApprovalKind,
+} from '@fapoms/shared';
 
 // ---- DTOs ---------------------------------------------------------------
 
@@ -86,6 +90,24 @@ class ReasonDto {
   @IsString() @IsNotEmpty() reason: string;
 }
 
+/** The HOD's reason for sending something back — checked in full by `hodRejectReasonProblem`. */
+class HodRejectDto {
+  @IsString() @IsNotEmpty() @MaxLength(HOD_REJECT_REASON_MAX) reason: string;
+}
+
+class FinalApprovalRefDto {
+  @IsIn(FINAL_APPROVAL_KINDS as unknown as string[]) kind: FinalApprovalKind;
+  @IsUUID('4') id: string;
+}
+
+/** The HOD's bulk approve: the ticked items, each named by kind. Same ceiling as a payout batch. */
+class FinalApproveManyDto {
+  @IsArray() @ArrayNotEmpty()
+  @ArrayMaxSize(BILLING_BULK_MAX_PAYOUTS, { message: `Approve at most ${BILLING_BULK_MAX_PAYOUTS} items at a time.` })
+  @ValidateNested({ each: true }) @Type(() => FinalApprovalRefDto)
+  items: FinalApprovalRefDto[];
+}
+
 class ReconcileDto {
   /** Only assignments completed on or after this date (YYYY-MM-DD). Omit for the whole book. */
   @IsOptional() @IsString() since?: string;
@@ -117,6 +139,11 @@ class PayoutsQuery {
    * approve button on exactly the rows the server will accept it for.
    */
   @IsOptional() @IsBooleanString() onBill?: string;
+  /**
+   * `?hodApproved=true` narrows to payouts with the HOD's final approval (ready to pay), `false`
+   * to approved ones still waiting for it (2026-09-24); omit for both.
+   */
+  @IsOptional() @IsBooleanString() hodApproved?: string;
   @IsOptional() @Type(() => Number) @IsNumber() page?: number;
   @IsOptional() @Type(() => Number) @IsNumber() limit?: number;
 }
@@ -171,6 +198,12 @@ class SubmitInvoiceInvitationDto {
    * returns the original submission instead of conflicting (see `submittedRequestId`).
    */
   @IsUUID() clientRequestId: string;
+  /**
+   * Required when billing STAFF confirm the bill for the assayer (e.g. confirmed by phone), and
+   * written to the bill's history with the staff member as the actor (audit F5). Ignored when the
+   * assayer submits their own.
+   */
+  @IsOptional() @IsString() @MaxLength(500) onBehalfReason?: string;
 }
 
 // ---- Controller ---------------------------------------------------------
@@ -206,6 +239,7 @@ export class BillingEngineController {
     private readonly jobs: BillingJobsService,
     private readonly regionGuard: RegionGuardService,
     private readonly bulkJobs: BillingBulkJobsService,
+    private readonly finalApproval: FinalApprovalService,
   ) {}
 
   private userId(req: any): string {
@@ -245,6 +279,7 @@ export class BillingEngineController {
       status: q.status,
       onHold: q.onHold === undefined ? undefined : q.onHold === 'true',
       onBill: q.onBill === undefined ? undefined : q.onBill === 'true',
+      hodApproved: q.hodApproved === undefined ? undefined : q.hodApproved === 'true',
       page: q.page,
       limit: q.limit,
     }, scope);
@@ -286,7 +321,7 @@ export class BillingEngineController {
       validation and the region ceiling above still run in the request, so a batch with one
       out-of-region payable is still refused whole, with nothing queued.
     */
-    return await this.bulkJobs.enqueueApprovePayouts(dto.payableIds, jobActorFrom(req), dto.reason);
+    return await this.bulkJobs.enqueueApprovePayouts(dto.payableIds, jobActorFrom(req), dto.reason, assignedRegions(req.user));
   }
 
   @Post('payouts/pay')
@@ -298,7 +333,7 @@ export class BillingEngineController {
     const { payableIds, ...payment } = dto;
     await this.regionGuard.assertPayablesInScope(payableIds, scope);
     // Accepted, not performed — same reason as `approvePayouts` above, and the same ceiling first.
-    return await this.bulkJobs.enqueuePayPayouts(payableIds, payment, jobActorFrom(req));
+    return await this.bulkJobs.enqueuePayPayouts(payableIds, payment, jobActorFrom(req), assignedRegions(req.user));
   }
 
   /**
@@ -313,6 +348,9 @@ export class BillingEngineController {
   @Get('bulk-jobs/:jobId')
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:view:organization')
+  // An HOD in a custom role starts final-approval runs and must be able to follow them. Harmless
+  // to widen: a run is readable only by whoever started it (`assertJobVisibleTo`).
+  @AllowPermissionFallback()
   @ApiOperation({ summary: 'State, progress and result of a billing bulk run (approve, pay, invite-all)' })
   async bulkJobStatus(@Param('jobId') jobId: string, @Req() req: any) {
     return await this.bulkJobs.status(jobId, req.user?.id);
@@ -405,7 +443,7 @@ export class BillingEngineController {
     // The audience fork is decided HERE, off the authenticated principal — never off anything
     // the client sends. Staff keep the full book; an assayer principal gets the earnings-gated
     // shape (only invoice-approved and grandfathered rows) once assayer invoicing is enabled.
-    return await this.service.assayerStatement(assayerId, scope, isBillingStaff ? 'staff' : 'assayer');
+    return await this.service.assayerStatement(assayerId, scope, isBillingStaff ? 'staff' : 'assayer', roles);
   }
 
   // ── Assayer invoices (the consent wrapper over payables) ─────────────────
@@ -449,7 +487,7 @@ export class BillingEngineController {
   @ApiOperation({ summary: 'Start inviting every assayer with eligible work to submit an invoice; poll bulk-jobs/:jobId' })
   async inviteAllAssayerInvoices(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.assayerInvoices.assertEnabled();
-    return await this.bulkJobs.enqueueInviteAllAssayerInvoices(scope, jobActorFrom(req));
+    return await this.bulkJobs.enqueueInviteAllAssayerInvoices(scope, jobActorFrom(req), assignedRegions(req.user));
   }
 
   @Get('assayer-invoices')
@@ -457,8 +495,9 @@ export class BillingEngineController {
   @RequirePermissions('billing:view:organization')
   @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'Assayer invoices with labels, paged' })
-  async listAssayerInvoices(@Query() q: AssayerInvoicesQuery) {
-    return await this.assayerInvoices.list(q);
+  async listAssayerInvoices(@Query() q: AssayerInvoicesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
+    // Narrowed to the caller's regions on the assayer's home region, as opening one is (audit F12).
+    return await this.assayerInvoices.list(q, scope);
   }
 
   @Get('assayer-invoices/:id')
@@ -541,14 +580,140 @@ export class BillingEngineController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.assayerInvoices.assertEnabled();
-    // An assayer may submit only their own invitation; the path id is attacker-controlled.
+    /**
+     * Who is confirming decides what the trail says (audit F5, 2026-09-24).
+     *
+     *  - The assayer, for their own bill: their consent, recorded as theirs. The path id is
+     *    attacker-controlled, so it must be the caller's own id.
+     *  - Billing staff, for the assayer (the desk-side road — an assayer who confirmed on the phone,
+     *    as the acceptance probe exercises): allowed, but only with a written reason, and recorded as
+     *    the STAFF member's act. It used to be recorded with the assayer's id as the actor, so a desk
+     *    submission was indistinguishable from the assayer's own consent.
+     */
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
     const isBillingStaff = hasAnyRole(roles, BILLING_ROLES);
     if (!isBillingStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only submit your own invoice invitation.');
     }
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
-    return await this.assayerInvoices.submit(assayerId, dto.clientRequestId);
+    if (req.user?.id === assayerId) return await this.assayerInvoices.submit(assayerId, dto.clientRequestId);
+    const reason = dto.onBehalfReason?.trim() ?? '';
+    if (reason.length < SUBMIT_ON_BEHALF_REASON_MIN) {
+      throw new BadRequestException(
+        `Only the assayer confirms their own bill. To record it for them, say why (at least ${SUBMIT_ON_BEHALF_REASON_MIN} characters) — it is written to the bill's history under your name.`,
+      );
+    }
+    return await this.assayerInvoices.submit(assayerId, dto.clientRequestId, { staffId: this.userId(req), reason });
+  }
+
+  /**
+   * What the approve and pay screens should say about each payout's bank account (audit F2/F3):
+   * not verified, on another assayer's record (approval refused), or changed since approval. Masked
+   * to the last four. The same ceiling as approving the payouts themselves.
+   */
+  @Post('payouts/destination-check')
+  @Roles(...DISBURSEMENT_ROLES)
+  @RequirePermissions('billing:approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Bank-account warnings for the selected payouts: unverified, shared with another assayer, changed since approval' })
+  async payoutDestinationCheck(@Body() dto: PayoutIdsDto, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertPayablesInScope(dto.payableIds, scope);
+    return await this.service.payoutDestinationChecks(dto.payableIds);
+  }
+
+  // ── The HOD's final approval (owner, 2026-09-24) ─────────────────────────
+  //
+  // After the office approves, a holder of `billing:final_approve` — Admin by name, or any role
+  // built in Users & Roles that is given it (`@AllowPermissionFallback`) — approves once more
+  // before money moves. Every route asserts the caller's region ceiling on what it touches, and
+  // the queue lists only what the caller's regions allow. Who may NOT approve (the office
+  // approver, the invoice's maker) is the services' check, under the segregation-of-duties setting.
+
+  @Get('final-approval')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @ApiOperation({ summary: "The HOD's queue: bills, payouts, reimbursements and client invoices waiting for final approval" })
+  async finalApprovalQueue(@GlobalScopeFilter() scope?: GlobalScope) {
+    return await this.finalApproval.queue(scope);
+  }
+
+  @Post('final-approval/approve')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Start giving final approval to the ticked items; poll bulk-jobs/:jobId' })
+  async finalApproveMany(@Body() dto: FinalApproveManyDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.finalApproval.assertInScope(dto.items, scope);
+    return await this.bulkJobs.enqueueFinalApprove(dto.items, jobActorFrom(req), assignedRegions(req.user));
+  }
+
+  @Post('final-approval/payouts/:id/approve')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Final approval of one payout (approved without a bill) or expense reimbursement' })
+  async finalApprovePayout(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertPayableInScope(id, scope);
+    await this.finalApproval.approveOne({ kind: 'DIRECT_PAYOUT', id }, this.userId(req));
+    return { approved: true };
+  }
+
+  @Post('final-approval/payouts/:id/reject')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send a payout back to the office with the reason; it returns to Due' })
+  async finalRejectPayout(@Param('id', ParseUUIDPipe) id: string, @Body() dto: HodRejectDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertPayableInScope(id, scope);
+    return await this.service.hodRejectPayout(id, dto.reason, this.userId(req));
+  }
+
+  @Post('final-approval/assayer-invoices/:id/approve')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Final approval of an office-approved assayer bill — its payouts become payable" })
+  async finalApproveBill(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInvoiceInScope(id, scope);
+    return await this.assayerInvoices.hodApprove(id, this.userId(req));
+  }
+
+  @Post('final-approval/assayer-invoices/:id/reject')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send an assayer bill back to the office with the reason; it returns to confirmed' })
+  async finalRejectBill(@Param('id', ParseUUIDPipe) id: string, @Body() dto: HodRejectDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInvoiceInScope(id, scope);
+    return await this.assayerInvoices.hodReject(id, this.userId(req), dto.reason);
+  }
+
+  @Post('final-approval/invoices/:id/approve')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Final approval of a client invoice — it can then be marked sent to the client' })
+  async finalApproveInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertInvoiceInScope(id, scope);
+    return await this.service.hodApproveInvoice(id, this.userId(req));
+  }
+
+  @Post('final-approval/invoices/:id/reject')
+  @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
+  @RequirePermissions('billing:final_approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send a client invoice back to the office with the reason; it returns to draft' })
+  async finalRejectInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: HodRejectDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertInvoiceInScope(id, scope);
+    return await this.service.hodRejectInvoice(id, dto.reason, this.userId(req));
   }
 
   // ── Invoices ──────────────────────────────────────────────────────────────
@@ -602,10 +767,19 @@ export class BillingEngineController {
     return await this.service.getInvoiceDocument(id, scope);
   }
 
+  @Patch('invoices/:id/request-final-approval')
+  @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:edit:organization')
+  @ApiOperation({ summary: "Send a draft invoice for the HOD's final approval" })
+  async requestInvoiceFinalApproval(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertInvoiceInScope(id, scope);
+    return await this.service.requestInvoiceFinalApproval(id, this.userId(req));
+  }
+
   @Patch('invoices/:id/send')
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:edit:organization')
-  @ApiOperation({ summary: 'Mark an invoice as sent to the client' })
+  @ApiOperation({ summary: 'Mark an HOD-approved invoice as sent to the client' })
   async sendInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertInvoiceInScope(id, scope);
     return await this.service.sendInvoice(id, this.userId(req));
@@ -718,7 +892,9 @@ export class BillingEngineController {
   @ApiOperation({ summary: 'Queue a reconcile: book every completed assignment missing a payout or client line' })
   @HttpCode(HttpStatus.ACCEPTED)
   async reconcile(@Body() dto: ReconcileDto, @Req() req: any) {
-    return await this.jobs.enqueueReconcile(this.userId(req), dto.since || null);
+    // `requestedBy` stays what it always was (`userId(req)`) — it is the dedupe key's owner and the
+    // attribution on every row the reconcile writes.
+    return await this.jobs.enqueueReconcile({ ...jobActorFrom(req), userId: this.userId(req) }, dto.since || null, assignedRegions(req.user));
   }
 
   @Get('jobs/:jobId')

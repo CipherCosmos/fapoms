@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { MapPin, Navigation } from 'lucide-react';
+import { STREET_TILE_OPTIONS, STREET_TILE_URL } from './geo/basemap';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A lightweight, optional map picker for the registration page.
@@ -22,6 +23,22 @@ const MARKER_ICON = L.icon({
   shadowSize: [41, 41],
 });
 
+/**
+ * Whether a coordinate can be a place in India — the same box the phone app checks
+ * (`isPlausibleIndianCoord` in mobile's `MapPicker`), so a pin the phone would refuse is refused
+ * here too. A pin dropped in the sea off Chennai or a stray tap on the world view is caught with a
+ * sentence, instead of being saved as somebody's home and quietly dropped by the server later.
+ */
+export function isPlausibleIndianCoord(latitude?: number | null, longitude?: number | null): boolean {
+  if (latitude == null || longitude == null) return false;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
+  if (latitude === 0 && longitude === 0) return false;
+  return latitude >= 6.4 && latitude <= 37.7 && longitude >= 68.0 && longitude <= 97.5;
+}
+
+const PIN_OUTSIDE_INDIA = 'That point is outside India. Move the pin to your home address.';
+const FIX_OUTSIDE_INDIA = 'Your device reported a place outside India. Tap the map to place the pin instead.';
+
 /** Default center — geographic center of India. */
 const INDIA_CENTER: L.LatLngTuple = [22.5, 82.0];
 const DEFAULT_ZOOM = 5;
@@ -42,6 +59,34 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
   const [geoStatus, setGeoStatus] = useState<'idle' | 'finding' | 'denied' | 'unavailable'>('idle');
+  const [pinError, setPinError] = useState<string | null>(null);
+  /** The last accepted pin, so a refused drag can put the marker back where it was. */
+  const lastGood = useRef<{ lat: number; lng: number } | null>(
+    latitude != null && longitude != null ? { lat: latitude, lng: longitude } : null,
+  );
+
+  /**
+   * Every way a pin can arrive — a tap, a drag, the device's own fix — goes through here. Outside
+   * India it is refused with a sentence and the marker goes back; inside, it is saved.
+   */
+  const place = useCallback((lat: number, lng: number, fromDevice = false): boolean => {
+    if (!isPlausibleIndianCoord(lat, lng)) {
+      setPinError(fromDevice ? FIX_OUTSIDE_INDIA : PIN_OUTSIDE_INDIA);
+      const back = lastGood.current;
+      if (markerRef.current) {
+        if (back) markerRef.current.setLatLng([back.lat, back.lng]);
+        else if (mapRef.current) { mapRef.current.removeLayer(markerRef.current); markerRef.current = null; }
+      }
+      return false;
+    }
+    setPinError(null);
+    lastGood.current = { lat: round(lat), lng: round(lng) };
+    onChange(round(lat), round(lng));
+    return true;
+  }, [onChange]);
+  // Leaflet's handlers are bound once, when the map is made; they call the latest `place`.
+  const placeRef = useRef(place);
+  placeRef.current = place;
 
   // ── Initialise Leaflet ──────────────────────────────────────────────
   useEffect(() => {
@@ -67,31 +112,32 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
      * suppressed. `InteractivePlanningMap` already credits it the same way; this is the one
      * surface that did not.
      */
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors',
-    }).addTo(map);
+    L.tileLayer(STREET_TILE_URL, STREET_TILE_OPTIONS).addTo(map);
 
     if (latitude != null && longitude != null) {
       markerRef.current = L.marker([latitude, longitude], { icon: MARKER_ICON, draggable: true }).addTo(map);
       markerRef.current.on('dragend', () => {
         const pos = markerRef.current!.getLatLng();
-        onChange(round(pos.lat), round(pos.lng));
+        placeRef.current(pos.lat, pos.lng);
       });
     }
 
     map.on('click', (e: L.LeafletMouseEvent) => {
       const { lat, lng } = e.latlng;
+      if (!isPlausibleIndianCoord(lat, lng)) {
+        placeRef.current(lat, lng);
+        return;
+      }
       if (markerRef.current) {
         markerRef.current.setLatLng([lat, lng]);
       } else {
         markerRef.current = L.marker([lat, lng], { icon: MARKER_ICON, draggable: true }).addTo(map);
         markerRef.current.on('dragend', () => {
           const pos = markerRef.current!.getLatLng();
-          onChange(round(pos.lat), round(pos.lng));
+          placeRef.current(pos.lat, pos.lng);
         });
       }
-      onChange(round(lat), round(lng));
+      placeRef.current(lat, lng);
     });
 
     mapRef.current = map;
@@ -110,6 +156,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
 
   // ── Sync marker when external lat/lng changes ───────────────────────
   useEffect(() => {
+    if (latitude != null && longitude != null) lastGood.current = { lat: latitude, lng: longitude };
     if (!mapRef.current) return;
     if (latitude != null && longitude != null) {
       if (markerRef.current) {
@@ -118,7 +165,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
         markerRef.current = L.marker([latitude, longitude], { icon: MARKER_ICON, draggable: true }).addTo(mapRef.current);
         markerRef.current.on('dragend', () => {
           const pos = markerRef.current!.getLatLng();
-          onChange(round(pos.lat), round(pos.lng));
+          placeRef.current(pos.lat, pos.lng);
         });
       }
     }
@@ -135,7 +182,10 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
       (pos) => {
         const lat = round(pos.coords.latitude);
         const lng = round(pos.coords.longitude);
-        onChange(lat, lng);
+        if (!place(lat, lng, true)) {
+          setGeoStatus('idle');
+          return;
+        }
         if (mapRef.current) {
           mapRef.current.flyTo([lat, lng], PIN_ZOOM, { duration: 0.8 });
         }
@@ -145,7 +195,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
           markerRef.current = L.marker([lat, lng], { icon: MARKER_ICON, draggable: true }).addTo(mapRef.current);
           markerRef.current.on('dragend', () => {
             const p = markerRef.current!.getLatLng();
-            onChange(round(p.lat), round(p.lng));
+            placeRef.current(p.lat, p.lng);
           });
         }
         setGeoStatus('idle');
@@ -155,13 +205,15 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
       },
       { enableHighAccuracy: true, timeout: 12000 },
     );
-  }, [onChange]);
+  }, [place]);
 
   const clearPin = useCallback(() => {
     if (markerRef.current && mapRef.current) {
       mapRef.current.removeLayer(markerRef.current);
       markerRef.current = null;
     }
+    lastGood.current = null;
+    setPinError(null);
     onChange(null, null);
   }, [onChange]);
 
@@ -179,6 +231,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
+        title={expanded ? 'Hide the map picker' : 'Show the map picker to pin your location'}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: '8px',
           padding: '12px 16px', background: 'none', border: 'none',
@@ -225,6 +278,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
               type="button"
               onClick={useMyLocation}
               disabled={geoStatus === 'finding'}
+              title="Use your device location for the pin"
               style={{
                 display: 'flex', alignItems: 'center', gap: '5px',
                 padding: '6px 12px', borderRadius: '6px',
@@ -240,6 +294,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
               <button
                 type="button"
                 onClick={clearPin}
+                title="Remove the pinned location"
                 style={{
                   padding: '6px 12px', borderRadius: '6px',
                   background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)',
@@ -252,6 +307,11 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
             )}
           </div>
 
+          {pinError && (
+            <div role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginBottom: '8px' }}>
+              {pinError}
+            </div>
+          )}
           {geoStatus === 'denied' && (
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginBottom: '8px' }}>
               Location access was denied. You can still tap the map to place your pin manually.

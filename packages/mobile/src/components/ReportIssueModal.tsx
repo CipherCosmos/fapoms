@@ -8,7 +8,8 @@ import {
   type AssignmentIssueCategory,
 } from '@fapoms/shared';
 import type { AssayerAssignment } from '../types/mobile-app';
-import { useT, type TranslationKey } from '../i18n';
+import { useT, t as translate, type TranslationKey } from '../i18n';
+import { runSheetSubmit, type SheetSubmitAnswer } from './sheet-submit';
 
 const CATEGORY_ICON: Record<AssignmentIssueCategory, string> = {
   CANNOT_ATTEND: 'calendar-clear-outline',
@@ -22,8 +23,11 @@ export interface ReportIssueModalProps {
   visible: boolean;
   assignment: AssayerAssignment | null;
   onClose: () => void;
-  /** Resolves to true on success so the caller can close and confirm. */
-  onSubmit: (category: AssignmentIssueCategory, note: string) => Promise<boolean>;
+  /**
+   * Resolves true on success so the caller can close and confirm. On failure, `{ ok: false, error }`
+   * with the words to show — shown inside this sheet, because a toast would be hidden behind it.
+   */
+  onSubmit: (category: AssignmentIssueCategory, note: string) => Promise<SheetSubmitAnswer>;
 }
 
 /**
@@ -49,11 +53,13 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
   const [category, setCategory] = useState<AssignmentIssueCategory | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
     setCategory(null);
     setNote('');
     setBusy(false);
+    setError(null);
   };
 
   const close = () => {
@@ -64,8 +70,16 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
   const submit = async () => {
     if (!category || busy) return;
     setBusy(true);
-    const ok = await onSubmit(category, note);
-    setBusy(false);
+    setError(null);
+    let ok = false;
+    try {
+      const outcome = await runSheetSubmit(() => onSubmit(category, note), translate('issue.failedBody'));
+      ok = outcome.ok;
+      setError(outcome.error);
+    } finally {
+      // Always, even if something above threw: a spinner that never stops is a dead end.
+      setBusy(false);
+    }
     if (ok) close();
   };
 
@@ -145,6 +159,11 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
             maxLength={1000}
           />
 
+          {error && (
+            <AppText variant="small" tone="danger">
+              {error}
+            </AppText>
+          )}
           <Button
             label={busy ? tr('issue.sending') : tr('issue.send')}
             icon="send"

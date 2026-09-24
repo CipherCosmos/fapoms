@@ -139,7 +139,6 @@ export const ROSTER_EXPORT_COLUMNS: RosterExportColumn[] = [
   { key: 'skills', label: 'Skills', group: 'Their work with us', value: (a) => list(a.skills) },
   { key: 'specializations', label: 'Specialisations', group: 'Their work with us', value: (a) => list(a.specializations) },
   { key: 'preferredRegions', label: 'Preferred regions', group: 'Their work with us', value: (a) => list(a.preferredRegions) },
-  { key: 'maxDailyWorkload', label: 'Max audits per day', group: 'Their work with us', value: (a) => a.maxDailyWorkload },
   { key: 'maxWeeklyWorkload', label: 'Max audits per week', group: 'Their work with us', value: (a) => a.maxWeeklyWorkload },
   { key: 'performanceRating', label: 'Performance rating', group: 'Their work with us', value: (a) => a.performanceRating },
   {
@@ -271,7 +270,7 @@ export const EXPORT_PRESETS: { key: string; label: string; hint: string; columns
     hint: 'What each person can do and how far their pin can be trusted.',
     columns: [
       'assayerCode', 'displayName', 'state', 'district', 'city', 'region', 'pinQuality',
-      'skills', 'languages', 'experienceYears', 'maxDailyWorkload', 'lifecycleStatus',
+      'skills', 'languages', 'experienceYears', 'maxWeeklyWorkload', 'lifecycleStatus',
     ],
   },
   {

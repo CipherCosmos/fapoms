@@ -42,6 +42,12 @@ import { SystemRole } from '@fapoms/shared';
  * that would silently give both roles both halves.
  */
 const ADMIN_BUSINESS_GRANTS: string[] = [
+  /*
+    The approval before training (2026-09-23): the senior's decision on a joiner HR has finished
+    with. Admin holds it; a custom role (HR Head, Regional Manager) can be given it. OPERATIONS
+    deliberately does not — HR prepares the file, somebody above HR decides it.
+  */
+  'ASSAYER:APPROVE:ORGANIZATION',
   'ASSAYER:CREATE:ORGANIZATION',
     'ASSAYER:DELETE:ORGANIZATION',
     'ASSAYER:EDIT:ORGANIZATION',
@@ -55,6 +61,12 @@ const ADMIN_BUSINESS_GRANTS: string[] = [
     'BILLING:APPROVE:ORGANIZATION',
     'BILLING:CREATE:ORGANIZATION',
     'BILLING:EDIT:ORGANIZATION',
+    /*
+      The HOD's final billing approval (2026-09-24): after the office approves, before money moves.
+      Admin holds it; a custom role (an "HOD" built in Users & Roles) can be given it. OPERATIONS
+      deliberately does not — the office approves, somebody above the office signs off.
+    */
+    'BILLING:FINAL_APPROVE:ORGANIZATION',
     'BILLING:VIEW:PLATFORM',
     'BRANCH:CREATE:ORGANIZATION',
     'BRANCH:DELETE:ORGANIZATION',

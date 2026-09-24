@@ -191,7 +191,7 @@ export function pickRegistrationRecordFields(
 export const EMPLOYMENT_TERM_FIELD_KEYS = [
   'joiningDate', 'employmentType', 'engagementType',
   'managerId', 'department', 'region', 'hrOwnerName',
-  'maxDailyWorkload', 'maxWeeklyWorkload',
+  'maxWeeklyWorkload',
 ] as const;
 
 export type EmploymentTermFieldKey = typeof EMPLOYMENT_TERM_FIELD_KEYS[number];

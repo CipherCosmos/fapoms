@@ -4,7 +4,7 @@ import { billingApi } from '../services/billing';
 import type {
   PageParams, PayPayoutsPayload, CreateInvoicePayload, InvoicePaymentPayload, ClientLinePatch,
 } from '../services/billing';
-import type { InvoiceStatus, AssayerPayableStatus, AssayerInvoiceStatus, AssayerInvoiceInvitation } from '@fapoms/shared';
+import type { InvoiceStatus, AssayerPayableStatus, AssayerInvoiceStatus, AssayerInvoiceInvitation, FinalApprovalRef } from '@fapoms/shared';
 
 /**
  * Mount control for the list queries. The billing workspace shows one tab at a time; every
@@ -27,7 +27,7 @@ export function useBillingOverview(options: BillingQueryOptions = {}) {
 }
 
 export function usePayouts(
-  params: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean; onBill?: boolean } & PageParams = {},
+  params: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean; onBill?: boolean; hodApproved?: boolean } & PageParams = {},
   options: BillingQueryOptions = {},
 ) {
   return useQuery({
@@ -133,6 +133,31 @@ export function useAssignmentMoney(assignmentId: string | null, options: Billing
   });
 }
 
+/**
+ * Bank-account warnings for a set of payouts (audit F2/F3) — read when an approve or pay dialog
+ * opens. Only for those who may approve or pay (the route's own gate); a failure leaves the dialog
+ * without warnings rather than blocking it, because the server re-checks on the action itself.
+ */
+export function usePayoutDestinationChecks(payableIds: string[], options: BillingQueryOptions = {}) {
+  const ids = [...new Set(payableIds.filter(Boolean))].sort();
+  return useQuery({
+    queryKey: queryKeys.billing.destinationChecks(ids),
+    queryFn: () => billingApi.getPayoutDestinationChecks(ids),
+    enabled: ids.length > 0 && (options.enabled ?? true),
+    staleTime: 15_000,
+  });
+}
+
+/** The HOD's queue (2026-09-24). Mount only for whoever holds the final billing approval. */
+export function useFinalApprovalQueue(options: BillingQueryOptions = {}) {
+  return useQuery({
+    queryKey: queryKeys.billing.finalApproval(),
+    queryFn: () => billingApi.getFinalApprovalQueue(),
+    staleTime: 30_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
 export function useReconcilePreview(since: string | undefined, options: BillingQueryOptions = {}) {
   return useQuery({
     queryKey: queryKeys.billing.reconcilePreview(since),
@@ -216,6 +241,22 @@ export function useReversePayment() {
 export function useEditClientLine() {
   return useBillingMutation(({ assignmentId, patch }: { assignmentId: string; patch: ClientLinePatch }) =>
     billingApi.editClientLine(assignmentId, patch));
+}
+
+export function useFinalApprove() {
+  return useBillingMutation((ref: FinalApprovalRef) => billingApi.finalApprove(ref));
+}
+
+export function useFinalReject() {
+  return useBillingMutation(({ ref, reason }: { ref: FinalApprovalRef; reason: string }) => billingApi.finalReject(ref, reason));
+}
+
+export function useFinalApproveMany() {
+  return useBillingMutation((items: FinalApprovalRef[]) => billingApi.finalApproveMany(items));
+}
+
+export function useRequestInvoiceFinalApproval() {
+  return useBillingMutation((id: string) => billingApi.requestInvoiceFinalApproval(id));
 }
 
 export function useReconcile() {

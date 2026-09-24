@@ -1,3 +1,4 @@
+import { pushRefreshData } from './push-refresh-data';
 import { Process, Processor } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -113,7 +114,11 @@ export class NotificationDeliveryWorker {
     // DELIVERED/READ push fall through and send a SECOND push (the sweep/requeue path
     // or any resend could trigger it). A legitimate manual resend resets status to
     // PENDING before re-enqueuing, so it is not caught here.
-    if ([NotificationStatus.DELIVERED, NotificationStatus.READ, NotificationStatus.SUPPRESSED]
+    //
+    // SENT too: that is a push being handed to FCM by another job RIGHT NOW (a duplicate job, or a
+    // sweeper re-queue racing the original). A retry after a failure does not arrive here as SENT —
+    // the failing attempt puts the row back to PENDING before handing it to Bull's backoff (below).
+    if ([NotificationStatus.DELIVERED, NotificationStatus.READ, NotificationStatus.SUPPRESSED, NotificationStatus.SENT]
       .includes(notification.status)) {
       return;
     }
@@ -209,6 +214,8 @@ export class NotificationDeliveryWorker {
           // Carried in `data` as well as on the payload so the app can present a
           // locally-raised copy of the same event on the same channel.
           priority: notification.priority ?? '',
+          // Additive: the ids the app refreshes in the background (see push-refresh-data.ts).
+          ...pushRefreshData(notification),
         },
       },
     );
@@ -245,9 +252,16 @@ export class NotificationDeliveryWorker {
       return;
     }
 
-    await this.notificationRepo.update(notification.id, { failureReason: reason });
-    // Hand back to Bull so the configured backoff applies. On the final attempt
-    // `onFailed` records the terminal state.
+    // The last attempt settles FAILED here, rather than throwing into a `mark-exhausted` handler
+    // that nothing ever enqueued (the row stayed SENT — "sent" — for ever).
+    const attemptsAllowed = Number(job.opts?.attempts ?? 1);
+    if ((job.attemptsMade ?? 0) + 1 >= attemptsAllowed) {
+      await this.markFailed(notification, `${reason} (tried ${attemptsAllowed} times)`);
+      return;
+    }
+    // Back to PENDING so the retry can pass the terminal-state guard above, then hand back to Bull
+    // so the configured backoff applies.
+    await this.notificationRepo.update(notification.id, { status: NotificationStatus.PENDING, failureReason: reason });
     throw new Error(reason);
   }
 
@@ -595,19 +609,4 @@ export class NotificationDeliveryWorker {
       failureReason: reason.slice(0, 1000),
     });
   }
-
-  /**
-   * Records the terminal failure once Bull has exhausted every retry.
-   *
-   * Without this a notification that genuinely never arrived would sit at
-   * `SENT` forever, which reads as success.
-   */
-  @Process('mark-exhausted')
-  async markExhausted(job: Job<DeliveryJob & { reason?: string }>): Promise<void> {
-    const n = await this.notificationRepo.findOne({ where: { id: job.data.notificationId } });
-    if (n && n.status !== NotificationStatus.DELIVERED && n.status !== NotificationStatus.READ) {
-      await this.markFailed(n, job.data.reason ?? 'Delivery failed after all retries.');
-    }
-  }
-
 }

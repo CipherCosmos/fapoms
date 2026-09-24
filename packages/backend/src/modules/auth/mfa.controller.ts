@@ -1,7 +1,7 @@
 import {
   Controller, Get, Post, Delete, Body, Query, Req, HttpCode, HttpStatus, UseGuards, BadRequestException,
 } from '@nestjs/common';
-import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEmail, MaxLength } from 'class-validator';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard, AnyAuthenticated } from './guards';
@@ -11,6 +11,22 @@ class MfaCodeDto {
   @IsString()
   @IsNotEmpty()
   code: string;
+}
+
+/**
+ * Proof that the person at the keyboard is the account holder, for actions that weaken the account.
+ * One of the two is required; which one is checked in MfaService.assertStepUp.
+ */
+class MfaStepUpDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  currentPassword?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  code?: string;
 }
 
 class EmailEnrolDto {
@@ -31,9 +47,9 @@ class SmsEnrolDto {
  * (JwtAuthGuard); MFA is opt-in, so an account with nothing enrolled is unaffected until it uses
  * these. Enrol/disable/regenerate throttled to blunt automated abuse.
  *
- * KNOWN RESIDUAL (documented, step-up auth is out of Wave 2 scope): these accept a live session and
- * do NOT re-prompt for the password, so an attacker holding a stolen session could change MFA. See
- * MfaService's note; mitigations are session revocation and the audit trail.
+ * Turning a factor off and regenerating recovery codes additionally require the current password or
+ * a fresh authenticator code in the body (MfaStepUpDto), so a stolen session alone cannot weaken the
+ * account. See MfaService.assertStepUp.
  */
 @ApiTags('MFA')
 @ApiBearerAuth()
@@ -120,12 +136,14 @@ export class MfaController {
    * `?factor=TOTP|EMAIL|SMS` it removes just that one (leaving any others, and their shared
    * recovery codes, in place unless it was the last).
    */
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Delete()
   @AnyAuthenticated()
-  @ApiOperation({ summary: 'Disable my MFA (all factors, or one via ?factor=)' })
-  async disable(@Req() req: any, @Query('factor') factor?: string) {
+  @ApiOperation({ summary: 'Disable my MFA (all factors, or one via ?factor=); needs current password or an authenticator code' })
+  async disable(@Req() req: any, @Body() proof: MfaStepUpDto, @Query('factor') factor?: string) {
     const f = factor ? String(factor).toUpperCase() : undefined;
     if (f && !['TOTP', 'EMAIL', 'SMS'].includes(f)) throw new BadRequestException('Unknown factor.');
+    await this.mfa.assertStepUp(req.user.id, proof ?? {}, f ? `turn off ${f}` : 'turn off two-step verification');
     await this.mfa.disable(req.user.id, req.user.id, f as any);
     return { message: f ? `${f} factor removed.` : 'MFA disabled.' };
   }
@@ -135,8 +153,9 @@ export class MfaController {
   @Post('recovery/regenerate')
   @AnyAuthenticated()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Regenerate my recovery codes (old ones stop working)' })
-  async regenerate(@Req() req: any) {
+  @ApiOperation({ summary: 'Regenerate my recovery codes (old ones stop working); needs current password or an authenticator code' })
+  async regenerate(@Req() req: any, @Body() proof: MfaStepUpDto) {
+    await this.mfa.assertStepUp(req.user.id, proof ?? {}, 'regenerate recovery codes');
     return { recoveryCodes: await this.mfa.regenerateRecoveryCodes(req.user.id) };
   }
 }

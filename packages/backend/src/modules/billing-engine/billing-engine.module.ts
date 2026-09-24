@@ -20,6 +20,7 @@ import { BillingJobsWorker } from './billing-jobs.worker';
 import { BILLING_BULK_QUEUE } from './billing-bulk-jobs.contract';
 import { BillingBulkJobsService } from './billing-bulk-jobs.service';
 import { BillingBulkJobsWorker } from './billing-bulk-jobs.worker';
+import { FinalApprovalService } from './final-approval.service';
 
 @Module({
   imports: [
@@ -63,7 +64,7 @@ import { BillingBulkJobsWorker } from './billing-bulk-jobs.worker';
   controllers: [BillingEngineController],
   providers: [
     BillingEngineService, AssayerInvoiceService, BillingJobsService, BillingJobsWorker,
-    BillingBulkJobsService, BillingBulkJobsWorker,
+    BillingBulkJobsService, BillingBulkJobsWorker, FinalApprovalService,
   ],
   exports: [BillingEngineService, AssayerInvoiceService, BillingJobsService],
 })

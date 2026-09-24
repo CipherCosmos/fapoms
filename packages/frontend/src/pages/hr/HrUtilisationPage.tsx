@@ -65,7 +65,8 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
   // describes the *absence of work*, not the behaviour of the people — and a screen full of
   // amber "idle" and "0%" reads as an accusation. Say once, at the top, why it is all zero and
   // where work is created, and stand the per-person amber down for the same reason.
-  const noWorkYet = p.totalAssignments === 0 && d.utilisation.idleCount === d.utilisation.neverAssigned;
+  // `?? 0`: a server older than the COALESCE sent null for an empty roster, which is still "no work".
+  const noWorkYet = (p.totalAssignments ?? 0) === 0 && d.utilisation.idleCount === d.utilisation.neverAssigned;
   const attrition = attritionExplainer(d.attrition);
   /**
    * The person-by-person table below is the whole active roster, uncapped — five hundred rows
@@ -134,6 +135,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
                     type="button"
                     onClick={() => setWorkloadPosture(f.key)}
                     aria-pressed={on}
+                    title={`${f.label} — ${f.count} people. Click to filter the workload table.`}
                     style={{
                       padding: '5px 10px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
                       borderRadius: '999px',

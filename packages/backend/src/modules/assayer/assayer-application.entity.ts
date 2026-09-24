@@ -122,6 +122,17 @@ export class AssayerApplicationEntity extends BaseEntity {
   @Column({ name: 'review_notes', type: 'text', nullable: true })
   reviewNotes: string | null;
 
+  /**
+   * The targeted asks behind the latest request for more information — one entry per document
+   * or field HR ticked, each with its own instruction for the candidate.
+   *
+   * `reviewNotes` stays as the overall note; this is the to-do list the candidate's link renders
+   * instead of making them guess from a paragraph. Shape-checked on read
+   * (`readApplicationInfoRequests` in shared) because jsonb outlives the build that wrote it.
+   */
+  @Column({ name: 'info_requests', type: 'jsonb', nullable: true })
+  infoRequests: Array<Record<string, unknown>> | null;
+
   /** Set once, on approval. The application stays around as the record of how the candidate applied. */
   @Column({ name: 'promoted_assayer_id', type: 'uuid', nullable: true })
   promotedAssayerId: string | null;

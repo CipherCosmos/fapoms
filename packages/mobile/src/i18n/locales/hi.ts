@@ -15,8 +15,8 @@ import type { en } from './en';
  *      balance, a hold or a TDS deduction is worse than English, and this is the screen a field
  *      assayer opens most often after the schedule.
  *   3. `assignment` — check-in and check-out. These are attendance evidence in a bank audit,
- *      and the two "not confirmed" sentences have to leave the assayer sure of what to do next
- *      without implying the record was or was not written.
+ *      and the two "saved offline" sentences (`checkInSavedOffline`/`checkOutSavedOffline`) must
+ *      say plainly that the time recorded is when the check-in arrives, not when it was tapped.
  *   4. The registration screens. Wrong copy there makes an optional accelerator read as a demand.
  *   5. Register and formality. This is drafted in plain, spoken-register Hindi, not the
  *      Sanskritised register of government forms, because the reader is a field worker and
@@ -74,6 +74,9 @@ export const hi: PartialCatalogue<typeof en> = {
     retry: 'दोबारा कोशिश करें',
     notOnFile: 'दर्ज नहीं है',
     willRetry: 'सेव हो गया। नेटवर्क वापस आते ही यह अपने आप भेज दिया जाएगा।',
+    savedOfflineTitle: 'आपके फ़ोन में सेव हो गया',
+    savedOfflineBody: 'नेटवर्क वापस आते ही यह अपने आप भेज दिया जाएगा।',
+    showMore: '%{count} और दिखाएँ',
   },
 
   login: {
@@ -154,6 +157,7 @@ export const hi: PartialCatalogue<typeof en> = {
   },
 
   registration: {
+    signOutUnsentBody: 'अभी तक न भेजी गई फ़ोटो: %{count}। साइन आउट करने पर ये इस फ़ोन से हट जाएँगी।',
     banner: {
       oneFailed: 'एक कागज़ नहीं भेजा जा सका',
       manyFailed: '%{count} कागज़ नहीं भेजे जा सके',
@@ -243,6 +247,14 @@ export const hi: PartialCatalogue<typeof en> = {
     },
   },
 
+  selfRegistration: {
+    unlock: {
+      title: 'आगे बढ़ने के लिए पुष्टि करें कि यह आप हैं',
+      body: 'आपकी सेव की गई जानकारी और कागज़ सुरक्षित हैं। हम आपके %{last4} पर ख़त्म होने वाले मोबाइल नंबर पर 6 अंकों का कोड भेजेंगे। अगर यह नंबर अब आपका नहीं है, तो HR से ठीक करवाएँ।',
+      continue: 'आगे बढ़ें',
+    },
+  },
+
   errors: {
     network: 'कोई नेटवर्क नहीं। अपना सिग्नल देखें और फिर कोशिश करें।',
     serverUnreachable: 'सर्वर से बात नहीं हो पाई। थोड़ी देर बाद कोशिश करें।',
@@ -278,6 +290,33 @@ export const hi: PartialCatalogue<typeof en> = {
     fileNotAccepted: 'वह फ़ाइल स्वीकार नहीं हो पाई। साफ़ फ़ोटो या PDF चुनकर फिर कोशिश करें।',
     fileTypeNotAllowed: 'यह फ़ाइल प्रकार यहाँ स्वीकार नहीं है। फ़ोटो या PDF इस्तेमाल करें।',
     fileTooLarge: 'यह फ़ाइल भेजने के लिए बहुत बड़ी है। छोटी फ़ोटो या PDF इस्तेमाल करें।',
+    assayerOnLeave: 'इस काम के दिन आप छुट्टी पर हैं, इसलिए इसे स्वीकार नहीं किया जा सकता। ऑपरेशंस से तारीख बदलने या किसी और को देने को कहें।',
+    notScheduledToday: 'यह काम आज का नहीं है। चेक-इन काम वाले दिन ही खुलता है। अगर विज़िट की तारीख बदली है, तो पहले ऑपरेशंस से तारीख बदलवाएँ।',
+    notYourAssignment: 'यह काम अब आपके नाम पर नहीं है। अपनी सूची ताज़ा करने के लिए नीचे खींचें।',
+    assayerNotActive: 'आपका खाता चालू नहीं है, इसलिए आप काम नहीं ले सकते या शुरू नहीं कर सकते। HR से बात करें।',
+    invalidStateForCheckIn: 'चेक-इन से पहले इस काम को स्वीकार करें।',
+    complianceBlocked: 'आपके रिकॉर्ड की एक जाँच पूरी होने तक आप नया काम नहीं ले सकते। HR से बात करें।',
+    invalidAssignmentTransition: 'यह काम आगे बढ़ चुका है और यहाँ से बदला नहीं जा सकता। ताज़ा करने के लिए नीचे खींचें।',
+    tooFarFromBranch: 'आप शाखा से बहुत दूर लग रहे हैं। चेक-इन सिर्फ़ शाखा पर ही होता है। साफ़ GPS के लिए बाहर जाएँ और फिर कोशिश करें।',
+    acceptDateUnavailable: 'इस काम के लिए वह तारीख नहीं चल सकती। ऑपरेशंस से दूसरी तारीख माँगें।',
+    reassignAfterCheckIn: 'आप इस काम में चेक-इन कर चुके हैं, इसलिए इसे किसी और को नहीं दिया जा सकता। ऑपरेशंस से बात करें।',
+    officeCheckInReasonRequired: 'ऑफ़िस से किसी का चेक-इन करने पर कारण लिखना ज़रूरी है।',
+  },
+
+  queue: {
+    refusedTitle: 'ऑफ़िस ने स्वीकार नहीं किया',
+    refusedNotifyTitle: '%{what} स्वीकार नहीं हुआ',
+    refusedLine: '%{what}: %{reason}',
+    refusedFallback: 'ऑफ़िस ने इसे स्वीकार नहीं किया।',
+    dismiss: 'ठीक है',
+    dismissAccessibility: 'हटाएँ: %{what}',
+    kinds: {
+      CHECK_IN: 'आपका चेक-इन',
+      CHECK_OUT: 'आपका चेक-आउट',
+      ASSIGNMENT_STATUS: 'काम के ऑफ़र पर आपका जवाब',
+      EXPENSE_CLAIM: 'आपका खर्च का दावा',
+      QUERY_MESSAGE: 'आपका जवाब',
+    },
   },
 
   profile: {
@@ -389,7 +428,6 @@ export const hi: PartialCatalogue<typeof en> = {
       skillsPlaceholder: 'सोने की जाँच, शुद्धता की जाँच',
       languages: 'भाषाएँ',
       experienceYears: 'तजुर्बा (साल)',
-      maxPerDay: 'एक दिन में ज़्यादा से ज़्यादा',
       maxPerWeek: 'एक हफ़्ते में ज़्यादा से ज़्यादा',
       preferredRegions: 'पसंदीदा इलाके',
       bankAccount: 'बैंक खाता',
@@ -445,6 +483,7 @@ export const hi: PartialCatalogue<typeof en> = {
         WORKFORCE: 'आपका रिकॉर्ड',
         BILLING: 'पैसे',
         SYSTEM: 'सिस्टम',
+        FEEDBACK: 'सुझाव और शिकायत',
       },
       categoryHints: {
         ASSIGNMENT: 'नए काम, मंज़ूरी और रद्द होना',
@@ -454,6 +493,7 @@ export const hi: PartialCatalogue<typeof en> = {
         WORKFORCE: 'सर्टिफ़िकेट की मियाद और आपकी जानकारी में बदलाव',
         BILLING: 'खर्च पर फ़ैसले और भुगतान',
         SYSTEM: 'सेवा से जुड़ी सूचनाएँ और ऐप के अपडेट',
+        FEEDBACK: 'आपकी भेजी समस्याओं और सुझावों पर जवाब',
       },
     },
     location: {
@@ -503,8 +543,7 @@ export const hi: PartialCatalogue<typeof en> = {
       // "HR" left in English throughout: it is what this workforce calls the office that holds
       // these records, on every notice and roster message they already receive.
       fallback: 'यह ऑफ़िस के पास है — बदलवाने के लिए HR से कहें।',
-      maxDailyWorkload: 'ऑपरेशंस तय करता है — इसी से तय होता है कि आपको कितना काम दिया जा सकता है।',
-      maxWeeklyWorkload: 'ऑपरेशंस तय करता है, आपकी रोज़ की हद के साथ।',
+      maxWeeklyWorkload: 'ऑपरेशंस तय करता है — इसी से तय होता है कि हफ़्ते में आपको कितना काम दिया जा सकता है।',
       panNumber: 'HR के पास है। ठीक करवाने के लिए अपने HR से बात करें।',
       bankAccountNumber: 'पैसे की जानकारी सिर्फ़ HR बदलता है, ताकि फ़ोन से किसी और खाते में पैसा न भेजा जा सके।',
       ifscCode: 'HR इसे आपके बैंक खाते के साथ बदलता है।',
@@ -580,6 +619,10 @@ export const hi: PartialCatalogue<typeof en> = {
     navigate: 'रास्ता दिखाएँ',
     checkOut: 'निकलने की हाज़िरी',
     details: 'पूरी जानकारी',
+    jobOnDate: 'आपका काम %{date} को है',
+    checkInNotAvailable: 'इस काम में अभी चेक-इन नहीं हो सकता।',
+    acceptNotAvailable: 'यह ऑफ़र अभी स्वीकार नहीं किया जा सकता।',
+    redoPapers: 'कागज़ दोबारा भेजें',
   },
 
   schedule: {
@@ -662,8 +705,8 @@ export const hi: PartialCatalogue<typeof en> = {
     checkedInBody: '%{branch} पर चेक-इन हुआ',
     checkInFailedTitle: 'चेक-इन नहीं हुआ',
     checkInFailedBody: 'चेक-इन नहीं हो सका। फिर कोशिश करें।',
-    checkInUnconfirmed:
-      'आपका चेक-इन पक्का नहीं हुआ — कनेक्शन टूट गया। अच्छे नेटवर्क में जाकर फिर “चेक इन” दबाएँ; अगर वह पहले ही दर्ज हो चुका है तो चेक-इन दिखने लगेगा।',
+    checkInSavedOffline:
+      '%{branch} का आपका चेक-इन नेटवर्क वापस आते ही भेज दिया जाएगा। दर्ज समय वह होगा जब यह पहुँचेगा।',
     serverUnreachableTitle: 'सर्वर तक नहीं पहुँच सके',
     checkOutConfirmTitle: 'इस ब्रांच से चेक आउट करें?',
     checkOutConfirmBody:
@@ -674,8 +717,13 @@ export const hi: PartialCatalogue<typeof en> = {
     checkedOutBody: 'आप %{branch} से निकल चुके हैं। कागज़ तैयार हों तो भेज दें।',
     checkOutFailedTitle: 'चेक-आउट नहीं हुआ',
     checkOutFailedBody: 'चेक-आउट नहीं हो सका। फिर कोशिश करें।',
-    checkOutUnconfirmed:
-      'आपका चेक-आउट पक्का नहीं हुआ — कनेक्शन टूट गया। अच्छे नेटवर्क में जाकर फिर “चेक आउट” दबाएँ; अगर वह पहले ही दर्ज हो चुका है तो चेक-आउट दिखने लगेगा।',
+    checkOutSavedOffline:
+      '%{branch} से आपका चेक-आउट नेटवर्क वापस आते ही भेज दिया जाएगा। दर्ज समय वह होगा जब यह पहुँचेगा।',
+    checkOutBeforeReturnTitle: 'पहले चेक-आउट करें?',
+    checkOutBeforeReturnBody:
+      'आप अभी भी %{branch} में चेक-इन हैं। कागज़ भेजते ही काम पूरा हो जाता है, और उसके बाद निकलने का समय दर्ज नहीं हो सकता।',
+    checkOutBeforeReturnCheckOut: 'चेक-आउट करें, फिर भेजें',
+    checkOutBeforeReturnSendAnyway: 'चेक-आउट किए बिना भेजें',
   },
 
   scan: {
@@ -724,10 +772,14 @@ export const hi: PartialCatalogue<typeof en> = {
     submit: 'खर्च भेजें',
     noAssignmentTitle: 'कोई काम नहीं चुना गया',
     noAssignmentBody: 'जिस काम का दावा कर रहे हैं उसे खोलें और वहीं से खर्च दर्ज करें।',
+    jobLabel: 'यह किस काम का खर्च है?',
+    noClaimableJobs: 'किसी काम में चेक-इन करने के बाद ही खर्च का दावा किया जा सकता है।',
+    chooseJob: 'चुनें कि यह खर्च किस काम का है।',
     invalidAmountTitle: 'सही रकम लिखें',
     invalidAmountBody: 'सिर्फ़ अंक लिखें, जैसे 1000 या 1,000।',
     filedTitle: 'दावा दर्ज हो गया',
     filedBody: '%{category} के लिए %{amount} मंज़ूरी के इंतज़ार में है।',
+    savedOfflineBody: 'नेटवर्क वापस आते ही आपका दावा अपने आप भेज दिया जाएगा।',
     failedTitle: 'दावा दर्ज नहीं हुआ',
     failedBody: 'यह खर्च भेजा नहीं जा सका।',
   },
@@ -836,7 +888,8 @@ export const hi: PartialCatalogue<typeof en> = {
     payoutsEmptyBody: 'ऑडिट पूरा होते ही भुगतान बन जाता है — अभी आपके हिसाब में कोई नहीं है।',
     payableStatus: {
       pending: 'मंज़ूरी बाक़ी',
-      approved: 'मंज़ूर',
+      approved: 'मंज़ूर, अंतिम मंज़ूरी बाक़ी',
+      approvedForPayment: 'भुगतान के लिए मंज़ूर',
       paid: 'मिल गया',
       onHold: 'रोका गया',
       voided: 'रद्द किया गया',
@@ -852,7 +905,8 @@ export const hi: PartialCatalogue<typeof en> = {
     invoiceStatus: {
       invited: 'आपको भेजा गया',
       submitted: 'भेज दिया',
-      approved: 'मंज़ूर',
+      approved: 'मंज़ूर, अंतिम मंज़ूरी बाक़ी',
+      hodApproved: 'भुगतान के लिए मंज़ूर',
       paid: 'भुगतान हो गया',
       cancelled: 'रद्द',
       superseded: 'नए इनवॉइस से बदला गया',
@@ -892,6 +946,7 @@ export const hi: PartialCatalogue<typeof en> = {
   },
 
   queries: {
+    replySavedOffline: 'नेटवर्क वापस आते ही आपका जवाब भेज दिया जाएगा।',
     tabNeedsAttention: 'ध्यान चाहिए',
     tabAll: 'सभी',
     state: {
@@ -1074,8 +1129,6 @@ export const hi: PartialCatalogue<typeof en> = {
     tooBigTitle: 'फ़ाइल बहुत बड़ी है',
     pickFailedTitle: 'फ़ाइलें नहीं खुलीं',
     pickFailedBody: 'फ़ाइल चुनी नहीं जा सकी।',
-    nameRequiredTitle: 'नाम चाहिए',
-    nameRequiredBody: 'सेव करने से पहले कागज़ को कोई नाम दें।',
     hint: {
       card: 'कार्ड को सपाट रखें — चारों कोने दिखने चाहिए।',
       aadhaarFront: 'जिस तरफ फोटो है वह तरफ। पिछली तरफ अलग पंक्ति में लगेगी।',
@@ -1087,26 +1140,14 @@ export const hi: PartialCatalogue<typeof en> = {
       free: 'दस्तावेज़ से पूरा फ्रेम भरें और हाथ स्थिर रखें।',
     },
     close: 'स्कैनर बंद करें',
-    saveTitle: 'कागज़ सेव करें',
     scanTitle: 'कागज़ स्कैन करें',
-    onePage: '1 पेज',
-    manyPages: '%{count} पेज',
     opening: 'स्कैनर खुल रहा है…',
-    fileNameLabel: 'फ़ाइल का नाम',
-    fileNamePlaceholder: 'कागज़ का नाम',
-    pagesLabel: 'पेज',
-    savedAsPdf:
-      'एक ही PDF में सेव होगा। स्कैनर स्क्रीन से पेज आगे-पीछे कर सकते हैं, काट सकते हैं, घुमा सकते हैं।',
-    savedAsImages: 'पेज तस्वीरों के रूप में सेव होंगे।',
-    notHereTitle: 'यहाँ स्कैनर नहीं है',
-    notHereBody: 'फ़ोन में कागज़ स्कैन करने के लिए Android ऐप चाहिए। इसके बजाय कोई फ़ाइल लगाएँ।',
-    readyTitle: 'स्कैन के लिए तैयार',
-    readyBody: 'कागज़ को फ़्रेम के अंदर रखें। किनारे अपने आप पहचान लिए जाते हैं।',
-    rescan: 'दोबारा स्कैन करें',
-    openScanner: 'स्कैनर खोलें',
-    attachFile: 'फ़ाइल लगाएँ',
-    saveOne: '1 पेज सेव करें',
-    saveMany: '%{count} पेज सेव करें',
+    cameraBody: 'सपाट रखें, अच्छी रोशनी, चारों कोने दिखें।',
+    takePhoto: 'फोटो लें',
+    orChooseFile: 'या फ़ाइल चुनें',
+    chooseFile: 'फ़ाइल चुनें',
+    cameraDenied: 'Orbit के लिए कैमरा बंद है। Settings में कैमरा चालू करें, या फ़ाइल चुनें।',
+    openSettings: 'Settings में कैमरा चालू करें',
   },
 
   decline: {

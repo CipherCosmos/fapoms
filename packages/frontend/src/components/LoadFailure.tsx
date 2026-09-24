@@ -117,6 +117,7 @@ export const LoadFailure: React.FC<{
         {canRetry && (
           <button
             onClick={() => failed.forEach((l) => { void l.query.refetch(); })}
+            title="Try loading again from the server"
             className="btn btn-secondary"
             style={{ padding: '3px 10px', fontSize: 'var(--text-2xs)' }}
           >

@@ -141,3 +141,49 @@ describe('a 403 that means "finish registering first"', () => {
     expect(MobileApiService.registrationInProgress).toBe(false);
   });
 });
+
+/**
+ * And the way back down. Nothing used to lower the gate, so a person HR approved stayed on the
+ * forced checklist until they signed out. `checkRegistrationGate` asks a route the gate covers.
+ */
+describe('checkRegistrationGate', () => {
+  beforeEach(() => {
+    (MobileApiService as any).authToken = 'token';
+    MobileApiService.registrationInProgress = true;
+  });
+
+  afterEach(() => {
+    (MobileApiService as any).authToken = null;
+    MobileApiService.registrationInProgress = false;
+  });
+
+  it('asks a gated route — not one the registration session is allowed', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { count: 0 } }), { status: 200 }),
+    );
+    global.fetch = fetchMock as any;
+
+    expect(await MobileApiService.checkRegistrationGate()).toBe('released');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/notifications/unread-count');
+  });
+
+  it('still registering while the server still refuses', async () => {
+    global.fetch = jest.fn().mockResolvedValue(registrationRefusal()) as any;
+    expect(await MobileApiService.checkRegistrationGate()).toBe('in-progress');
+  });
+
+  it('no answer changes nothing', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network request failed')) as any;
+    expect(await MobileApiService.checkRegistrationGate()).toBe('unknown');
+    global.fetch = jest.fn().mockResolvedValue(plainRefusal()) as any;
+    expect(await MobileApiService.checkRegistrationGate()).toBe('unknown');
+  });
+
+  it('does not ask at all with no session', async () => {
+    (MobileApiService as any).authToken = null;
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as any;
+    expect(await MobileApiService.checkRegistrationGate()).toBe('unknown');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

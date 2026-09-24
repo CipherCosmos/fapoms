@@ -52,6 +52,10 @@ export * from './email-layout';
 // GST state-code resolution, tax-split labelling and amount-in-words for invoices
 export * from './gst';
 export * from './billing-liveness';
+export * from './billing-final-approval';
+// Paise rounding, the Indian financial year, the client invoice series, s.194J withholding and
+// what a payer is told about a payout's bank account — one rule each for web, app and server.
+export * from './billing-money-rules';
 export * from './assayer-lifecycle';
 export * from './assayer-record';
 export * from './workforce-registration';
@@ -67,6 +71,9 @@ export * from './assignment-fee';
 // The Appraiser Recruitment application layer — pre-account interview/registration, separate
 // from the guarded live assayer lifecycle
 export * from './assayer-application';
+
+// References a candidate names before approval: how many, and what counts as one
+export * from './application-references';
 
 // PAN/Aadhaar/IFSC/phone validation — one rulebook for the importer and every API write path
 export * from './identity-validation';
@@ -89,6 +96,9 @@ export * from './service-logs';
 // Lives here so a translated client keys off a code rather than matching the English sentence.
 export * from './error-codes';
 
+// Approving an expense claim the rules refuse: who may override, and on which refusals
+export * from './expense-approval';
+
 // Cleans the workforce-attribute vocabulary endpoint's raw rows into name lists — one
 // implementation, read by both the web hook and the mobile service that used to each carry their
 // own de-dupe/sort.
@@ -105,3 +115,21 @@ export * from './socket-transport-config';
 export * from './registration-consent';
 export * from './identifier-entry';
 export * from './registration-form';
+export * from './source-referral';
+export * from './onboarding-approval';
+export * from './periodic-checks';
+export * from './bgv-parts';
+export * from './record-capabilities';
+export * from './check-in-rules';
+// The candidate's road from the registration form to their first job — the one step list, and the
+// words for it, that the web link and the phone app both show after the form is sent.
+export * from './candidate-journey';
+
+// Work the server accepted and is doing in the background (uploads, imports): status, progress,
+// result, and which page owns each kind
+export * from './background-jobs';
+
+// A branch list rehearsed, reviewed and committed as background jobs: which fields a person may
+// edit in the review, what makes a row ready, and how their decisions are applied — one rule
+// for the review screen and the commit job alike.
+export * from './branch-import';

@@ -14,7 +14,9 @@ import { BackupOnDemandService, OnDemandBackup } from './backup-on-demand.servic
  * rather than wholesale — they have no enforced FK to `users` (verified against the live schema),
  * so nothing cascades them automatically the way `notifications` does.
  */
-const USER_SCOPED_TABLES = new Set(['device_tokens', 'refresh_tokens']);
+const USER_SCOPED_TABLES = new Set([
+  'device_tokens', 'refresh_tokens', 'user_sessions', 'user_mfa', 'mfa_recovery_codes', 'activity_telemetry',
+]);
 
 /**
  * The audit entry's `entity_id` for a wipe: this event is about the database as a whole rather

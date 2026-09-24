@@ -16,6 +16,7 @@ import { userMessage, AppError } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { uploadSizeProblem, SystemRole } from '@fapoms/shared';
 import { useCurrentRoles, useCurrentPermissions, canReadCustomerMaster, hasAnyRole } from '../hooks/useCurrentRoles';
+import { documentActionsFor } from './documents/document-actions';
 import { Page } from '../components/ui/Page';
 
 /**
@@ -163,6 +164,8 @@ export const Documents: React.FC = () => {
    */
   const canDispatchDocuments = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK]);
   const canSendToExternalOcr = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.DESK]);
+  /** Every paperwork action, one flag per server route — the same answer on all three panels. */
+  const documentActions = documentActionsFor(roles);
   const [view, setView] = useState<'daily' | 'branch' | 'flat' | 'versions'>(canCustomerMaster ? 'daily' : 'branch');
   const [projectId, setProjectId] = useState<string>('');
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
@@ -260,7 +263,8 @@ export const Documents: React.FC = () => {
 
   useEffect(() => {
     // The daily run is scoped to one project's schedule for a date.
-    api.request<Array<{ id: string; name: string }>>('/projects')
+    // `limit=200` is the server's ceiling; the default page of 50 hid every later project.
+    api.request<Array<{ id: string; name: string }>>('/projects?limit=200')
       .then((list) => {
         setProjects(list || []);
         if (list?.length) setProjectId((cur) => cur || list[0].id);
@@ -495,7 +499,7 @@ export const Documents: React.FC = () => {
         title="Documents"
         subtitle="Every branch's files in one place — upload, dispatch, receive and process without switching screens."
         actions={
-          <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button onClick={loadOverview} className="btn btn-secondary" title="Refresh document status and file lists" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <RefreshCw size={16} /> Refresh
           </button>
         }
@@ -547,18 +551,38 @@ export const Documents: React.FC = () => {
           <DocumentModelLegend />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             {canCustomerMaster && (
-              <button onClick={() => setView('daily')} className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+              <button
+                onClick={() => setView('daily')}
+                className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'}
+                title="View documents scheduled and prepared for today's audit runs"
+                style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+              >
                 Daily Run
               </button>
             )}
-            <button onClick={() => setView('branch')} className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+            <button
+              onClick={() => setView('branch')}
+              className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'}
+              title="Organize and inspect audit paperwork grouped by individual bank branch"
+              style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+            >
               By Branch
             </button>
-            <button onClick={() => setView('flat')} className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+            <button
+              onClick={() => setView('flat')}
+              className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'}
+              title="View all audit paperwork and uploaded attachments across all branches"
+              style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+            >
               All Files
             </button>
             {canCustomerMaster && (
-              <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+              <button
+                onClick={() => setView('versions')}
+                className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'}
+                title="Manage customer master sheets, imports, and revision history"
+                style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+              >
                 Customer Master
               </button>
             )}
@@ -568,6 +592,7 @@ export const Documents: React.FC = () => {
                 value={projectId}
                 onChange={setProjectId}
                 options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                title="Filter daily run documents by project"
                 style={{ marginLeft: 4 }}
               />
             )}
@@ -584,6 +609,8 @@ export const Documents: React.FC = () => {
               onSuccess={setSuccessMsg}
               canDispatch={canDispatchDocuments}
               canSendToOcr={canSendToExternalOcr}
+              canUpload={documentActions.upload}
+              canDownload={documentActions.download}
             />
           ) : view === 'branch' ? (
             <BranchDocumentPanel
@@ -607,6 +634,7 @@ export const Documents: React.FC = () => {
               onMarkReceived={handleMarkReceived}
               onSendToOcr={handleSendToOcr}
               onUploadExcel={handleUploadExcel}
+              actions={documentActions}
             />
           ) : (
             <DocumentControlPanel
@@ -619,6 +647,7 @@ export const Documents: React.FC = () => {
               stage={branchStage}
               onStageChange={changeBranchStage}
               onPageChange={setBranchPage}
+              actions={documentActions}
             />
           )}
         </div>

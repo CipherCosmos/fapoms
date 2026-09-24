@@ -27,7 +27,7 @@ describe('an unrated assayer', () => {
       activeWorkloadByAssayer: {}, routeByAssayer: {}, assignmentTotalsByAssayer: {},
       sameDayAcceptedCountByAssayer: {}, sameDayBranchPointsByAssayer: {}, priorVisitsByAssayer: {},
       queryCountByAssayer: {}, completedByAssayer: {}, remarksByAssayer: {}, recentOffersByAssayer: {},
-      commercialProfilesByAssayer: {}, doubleBookedByAssayer: {}, rules: [], lastAssignment: null,
+      commercialProfilesByAssayer: {}, rules: [], lastAssignment: null,
       projectBranch: null, fairnessOfferCap: 8,
     },
   }) as any;

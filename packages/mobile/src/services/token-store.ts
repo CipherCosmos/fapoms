@@ -33,6 +33,19 @@ export type TokenKey =
 
 const isWeb = Platform.OS === 'web';
 
+/**
+ * Keychain options for every token read and write, or none (the platform default).
+ *
+ * The current app never sets this, so it keeps the default iOS class (readable only while the
+ * phone is unlocked). The rebuilt app sets AFTER_FIRST_UNLOCK at its entry point, before anything
+ * reads a token, so a check-in triggered by arriving at a branch works while the phone is locked in
+ * a pocket. Android ignores it.
+ */
+let secureOptions: SecureStore.SecureStoreOptions | undefined;
+export function setSecureStoreOptions(options: SecureStore.SecureStoreOptions | undefined): void {
+  secureOptions = options;
+}
+
 const webStorage = (): Storage | null => {
   try {
     const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
@@ -45,7 +58,7 @@ const webStorage = (): Storage | null => {
 export async function readToken(key: TokenKey): Promise<string | null> {
   try {
     if (isWeb) return webStorage()?.getItem(key) ?? null;
-    return await SecureStore.getItemAsync(key);
+    return await SecureStore.getItemAsync(key, secureOptions);
   } catch (err) {
     // A keystore read can fail on a device whose credentials were invalidated (biometric
     // enrolment changed, for instance). Report it rather than silently signing the user out
@@ -61,7 +74,7 @@ export async function writeToken(key: TokenKey, value: string): Promise<void> {
       webStorage()?.setItem(key, value);
       return;
     }
-    await SecureStore.setItemAsync(key, value);
+    await SecureStore.setItemAsync(key, value, secureOptions);
   } catch (err) {
     console.warn(`Could not persist ${key} to secure storage:`, err);
   }
@@ -73,7 +86,7 @@ export async function deleteToken(key: TokenKey): Promise<void> {
       webStorage()?.removeItem(key);
       return;
     }
-    await SecureStore.deleteItemAsync(key);
+    await SecureStore.deleteItemAsync(key, secureOptions);
   } catch (err) {
     console.warn(`Could not clear ${key} from secure storage:`, err);
   }
@@ -143,7 +156,29 @@ export async function writePreference(key: string, value: string): Promise<void>
  */
 const CACHE_FILE = `${FileSystem.documentDirectory}cache.json`;
 
-export async function readCache<T>(key: string): Promise<T | null> {
+/**
+ * Every write to the cache file goes through this one line, in order.
+ *
+ * The file holds several unrelated keys (the schedule, three queues, the queue owner), and a write
+ * is read-whole-file, change one key, write-whole-file. Two writes in flight at once each wrote
+ * back the copy they had read, so one silently undid the other. Worse, sign-out deletes the file
+ * while the queues are writing their empty lists: a write that had read the file before the delete
+ * put the whole of it back — the previous person's cached schedule and queued work included.
+ */
+let cacheChain: Promise<unknown> = Promise.resolve();
+function inCacheOrder<T>(task: () => Promise<T>): Promise<T> {
+  const run = cacheChain.then(task, task);
+  cacheChain = run.catch(() => undefined);
+  return run;
+}
+
+export function readCache<T>(key: string): Promise<T | null> {
+  // In order with the writes too, so a read never sees a file half-way through being rewritten
+  // (which parses as nothing — and a queue that loads "nothing" then persists an empty list).
+  return inCacheOrder(() => readCacheNow<T>(key));
+}
+
+async function readCacheNow<T>(key: string): Promise<T | null> {
   try {
     if (isWeb) {
       const raw = webStorage()?.getItem(`cache_${key}`);
@@ -158,7 +193,20 @@ export async function readCache<T>(key: string): Promise<T | null> {
   }
 }
 
-export async function writeCache(key: string, value: unknown): Promise<void> {
+/**
+ * `stillValid`, when given, is asked at the moment the write actually runs — after every write and
+ * delete queued before it — and the write is dropped if it says no. That is what lets data fetched
+ * under one session refuse to land once sign-out has wiped the file (see `session-epoch.ts`):
+ * checking only when the write was requested would miss a sign-out that happened while it waited.
+ */
+export function writeCache(key: string, value: unknown, stillValid?: () => boolean): Promise<void> {
+  return inCacheOrder(async () => {
+    if (stillValid && !stillValid()) return;
+    await writeCacheNow(key, value);
+  });
+}
+
+async function writeCacheNow(key: string, value: unknown): Promise<void> {
   try {
     if (isWeb) {
       webStorage()?.setItem(`cache_${key}`, JSON.stringify(value));
@@ -178,11 +226,13 @@ export async function writeCache(key: string, value: unknown): Promise<void> {
 }
 
 /** Dropped on sign-out — one assayer's schedule must not survive into another's session. */
-export async function clearCache(): Promise<void> {
-  try {
-    if (isWeb) return;
-    await FileSystem.deleteAsync(CACHE_FILE, { idempotent: true });
-  } catch {
-    /* nothing cached is fine */
-  }
+export function clearCache(): Promise<void> {
+  return inCacheOrder(async () => {
+    try {
+      if (isWeb) return;
+      await FileSystem.deleteAsync(CACHE_FILE, { idempotent: true });
+    } catch {
+      /* nothing cached is fine */
+    }
+  });
 }

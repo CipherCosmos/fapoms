@@ -51,6 +51,8 @@ describe('activation is gated on a verified identity', () => {
       // The double mirrors production's shape — the background gate reads this on the same moves.
       // Null = no check ever recorded: passes activation, rides the warn default at the BGV exit.
       latestBackgroundVerdict: jest.fn().mockResolvedValue(null),
+      bgvReportOnFile: jest.fn().mockResolvedValue(false),
+      bgvPartsMissing: jest.fn().mockResolvedValue([]),
     };
     svc.platformSettings = { get: jest.fn().mockResolvedValue(mode) };
     svc.findOne = jest.fn(async () => row());

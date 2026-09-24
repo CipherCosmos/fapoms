@@ -29,7 +29,6 @@ describe('applyOverridePolicy — what a stated reason waives', () => {
     AssignmentRule.SKILLS_AND_CERTIFICATIONS,
     AssignmentRule.DISTANCE_CEILING,
     AssignmentRule.REPEAT_AUDITOR_ROTATION,
-    AssignmentRule.DATE_AVAILABILITY,
   ])('waives %s with a stated reason', (rule) => {
     expect(apply(rule, 'Cleared by ops after speaking to the branch.').overrideReason)
       .toBe('Cleared by ops after speaking to the branch.');
@@ -54,7 +53,8 @@ describe('applyOverridePolicy — what a stated reason waives', () => {
 
   it.each([
     AssignmentRule.DISTANCE_FLOOR,
-    AssignmentRule.ASSAYER_DOUBLE_BOOKED,
+    // F17: a holiday, an out-of-window date or a leave day is not waived by a reason.
+    AssignmentRule.DATE_AVAILABILITY,
     AssignmentRule.BRANCH_ALREADY_ASSIGNED,
     AssignmentRule.BRANCH_NOT_OPEN,
     AssignmentRule.PROFILE_NOT_DEPLOYABLE,

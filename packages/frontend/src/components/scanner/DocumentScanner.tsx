@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Camera, Check, Loader2, RotateCcw, X, Zap, ZapOff, Plus, FileText, Sun, Contrast,
+  Camera, Check, Loader2, RotateCcw, X, Zap, ZapOff, Plus, SwitchCamera, ImagePlus,
 } from 'lucide-react';
 import {
-  SCAN_SHAPE_ASPECT, scanFileName, shapeRemark, shapeVerdict,
+  SCAN_SHAPE_ASPECT, SCAN_UPLOAD_ACCEPT, SCAN_UPLOAD_IMAGE_ACCEPT, scanFileName, shapeRemark, shapeVerdict,
   type DocumentScanProfile, type ScanShape,
 } from '@fapoms/shared';
 import {
@@ -46,11 +46,16 @@ interface Shot {
   turned: boolean;
 }
 
-const FINISHES: Array<{ value: ScanFinish; label: string; icon: React.ReactNode; hint: string }> = [
-  { value: 'photo', label: 'Colour', icon: <Sun size={14} />, hint: 'Leaves the colours alone — photographs, passbooks, anything where the colour is part of what is checked.' },
-  { value: 'document', label: 'Document', icon: <FileText size={14} />, hint: 'Grey, with the contrast stretched — what a flatbed scanner gives you.' },
-  { value: 'ink', label: 'High contrast', icon: <Contrast size={14} />, hint: 'Black on white, shadow-tolerant — for dense text you need to read.' },
-];
+/** Which way the camera looks. `user` is the screen side — the one for a photograph of yourself. */
+export type CameraFacing = 'user' | 'environment';
+
+/**
+ * The camera to open first. A face photograph is taken of oneself, holding the phone, so it starts
+ * on the front camera; every document is held or laid in front of the back one.
+ */
+export function initialFacing(profile: DocumentScanProfile): CameraFacing {
+  return profile.shape === 'portrait' ? 'user' : 'environment';
+}
 
 /** The longest edge of an uploaded scan. Bigger reads no better and costs the candidate data. */
 const MAX_OUTPUT_EDGE = 2000;
@@ -68,10 +73,15 @@ export interface DocumentScannerProps {
   profile: DocumentScanProfile;
   onCancel: () => void;
   onScanned: (files: File[]) => void;
+  /**
+   * What "Choose photo" offers when the camera cannot be opened. Defaults to the shared scan list,
+   * narrowed to images for a face photograph (a portrait is not a PDF).
+   */
+  accept?: string;
 }
 
 export const DocumentScanner: React.FC<DocumentScannerProps> = ({
-  documentLabel, profile, onCancel, onScanned,
+  documentLabel, profile, onCancel, onScanned, accept,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -83,7 +93,22 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   const [stage, setStage] = useState<Stage>('starting');
   const [refusal, setRefusal] = useState<string | null>(null);
   const [shot, setShot] = useState<Shot | null>(null);
-  const [finish, setFinish] = useState<ScanFinish>(profile.finish);
+  /*
+    The finish is the document's, not a choice put to the person holding the phone. A chooser of
+    "Colour / Document / High contrast" was one more decision between them and a finished scan,
+    asked of people who had no way to know which the desk wanted — and the table in shared already
+    knows: colour for an identity card, flatbed grey for a signed page.
+  */
+  const finish: ScanFinish = profile.finish;
+  const [facing, setFacing] = useState<CameraFacing>(() => initialFacing(profile));
+  // Read by `startCamera`, which is stable: a retake or a further page reopens the side in use.
+  const facingRef = useRef<CameraFacing>(facing);
+  const pickerRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * A face is not a page: the edge detector would find a collar or a door frame and crop to it. A
+   * portrait is cut to the outline the person lined themselves up in instead.
+   */
+  const detects = profile.shape !== 'portrait';
   const [pages, setPages] = useState<File[]>([]);
   const [torchOn, setTorchOn] = useState(false);
   const [torchable, setTorchable] = useState(false);
@@ -101,7 +126,8 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
     streamRef.current = null;
   }, []);
 
-  const startCamera = useCallback(async () => {
+  const startCamera = useCallback(async (towards: CameraFacing = facingRef.current) => {
+    stopCamera();
     setStage('starting');
     setRefusal(null);
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -114,7 +140,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
         // `ideal`, never `exact`: a laptop has only a front camera, and demanding the back one
         // there fails outright instead of using the one camera the machine has.
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: towards },
           width: { ideal: 1920 },
           height: { ideal: 1080 },
         },
@@ -140,12 +166,20 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
       );
       setStage('refused');
     }
-  }, []);
+  }, [stopCamera]);
 
   useEffect(() => {
     void startCamera();
     return stopCamera;
   }, [startCamera, stopCamera]);
+
+  const switchCamera = async () => {
+    const next: CameraFacing = facing === 'user' ? 'environment' : 'user';
+    facingRef.current = next;
+    setFacing(next);
+    setTorchOn(false);
+    await startCamera(next);
+  };
 
   const toggleTorch = async () => {
     const track = streamRef.current?.getVideoTracks()[0];
@@ -201,7 +235,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
       if (!wctx) return;
       wctx.drawImage(video, 0, 0, sw, sh);
       const small = wctx.getImageData(0, 0, sw, sh);
-      const quad = detectPageQuad(toGrey(small.data, sw, sh), sw, sh);
+      const quad = detects ? detectPageQuad(toGrey(small.data, sw, sh), sw, sh) : null;
 
       ctx.clearRect(0, 0, vw, vh);
       drawGuide(ctx, vw, vh, profile.shape);
@@ -226,7 +260,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
     };
-  }, [stage, profile.shape]);
+  }, [stage, profile.shape, detects]);
 
   // ── Taking the shot ───────────────────────────────────────────────────────
 
@@ -249,7 +283,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
     work.height = sh;
     const wctx = work.getContext('2d');
     let quad: Quad | null = null;
-    if (wctx) {
+    if (wctx && detects) {
       wctx.drawImage(canvas, 0, 0, sw, sh);
       const small = wctx.getImageData(0, 0, sw, sh);
       const found = detectPageQuad(toGrey(small.data, sw, sh), sw, sh);
@@ -275,7 +309,8 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
     setShot({
       image,
       quad: verdict === 'sideways' ? rotateQuad(found) : found,
-      guessed: !quad,
+      // A portrait is cut to its outline by design, not because detection failed.
+      guessed: detects && !quad,
       remark: shapeRemark(verdict, profile.shape),
       turned: verdict === 'sideways',
     });
@@ -438,11 +473,12 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
       role="dialog"
       aria-modal="true"
       aria-label={`Scan ${documentLabel}`}
-      // The finish in force, on the element rather than only inside a closure. The chooser itself
-      // only exists after a capture — which needs a canvas, which jsdom has not got — so without
-      // this there is no way to prove a signed form starts on the finish that keeps a signature
-      // and a PAN card starts in colour. It reflects state; it does not create any.
+      // The finish in force, on the element rather than only inside a closure: the scan is only
+      // built after a capture — which needs a canvas, which jsdom has not got — so without this
+      // there is no way to prove a signed form gets the finish that keeps a signature and a PAN
+      // card stays in colour. It reflects the profile; it does not create anything.
       data-finish={finish}
+      data-facing={facing}
     >
       <header style={{
         display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px',
@@ -458,6 +494,18 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
               : profile.hint}
           </div>
         </div>
+        {(stage === 'live' || stage === 'starting') && (
+          <button
+            type="button"
+            onClick={() => void switchCamera()}
+            disabled={stage === 'starting'}
+            aria-label={facing === 'user' ? 'Use the back camera' : 'Use the front camera'}
+            title="Switch camera"
+            style={ghostButton}
+          >
+            <SwitchCamera size={16} />
+          </button>
+        )}
         {stage === 'live' && torchable && (
           <button
             type="button"
@@ -502,13 +550,19 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
               ref={videoRef}
               playsInline
               muted
-              style={{ maxWidth: '100%', maxHeight: '100%', display: stage === 'live' ? 'block' : 'none' }}
+              style={{
+                maxWidth: '100%', maxHeight: '100%', display: stage === 'live' ? 'block' : 'none',
+                // A front camera shown unmirrored feels backwards to the person in it; the photo
+                // itself is taken the right way round.
+                transform: facing === 'user' ? 'scaleX(-1)' : undefined,
+              }}
             />
             <canvas
               ref={overlayRef}
               style={{
                 position: 'absolute', maxWidth: '100%', maxHeight: '100%',
                 pointerEvents: 'none', display: stage === 'live' ? 'block' : 'none',
+                transform: facing === 'user' ? 'scaleX(-1)' : undefined,
               }}
             />
             {stage === 'starting' && (
@@ -530,24 +584,6 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
                   : shot.remark ?? 'Held sideways, so the scan has been turned upright.'}
               </div>
             )}
-            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
-              {FINISHES.map((f) => (
-                <button
-                  key={f.value}
-                  type="button"
-                  title={f.hint}
-                  onClick={() => setFinish(f.value)}
-                  style={{
-                    ...ghostButton,
-                    fontSize: 'var(--text-xs)',
-                    padding: '7px 11px',
-                    background: finish === f.value ? 'rgba(59,130,246,0.28)' : 'rgba(255,255,255,0.08)',
-                  }}
-                >
-                  {f.icon}{f.label}
-                </button>
-              ))}
-            </div>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => void retake()} disabled={working} style={ghostButton}>
                 <RotateCcw size={14} /> Retake
@@ -569,8 +605,31 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
             </div>
           </div>
         ) : stage === 'refused' ? (
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
+          /*
+            Not a dead end: the camera refusing is not the person refusing. "Choose photo" is the
+            file already on the phone — the gallery, or a PDF somebody sent them.
+          */
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => pickerRef.current?.click()}
+              style={{ ...ghostButton, background: 'rgba(34,197,94,0.9)', color: '#052e16', fontWeight: 600 }}
+            >
+              <ImagePlus size={14} /> Choose photo
+            </button>
             <button type="button" onClick={close} style={ghostButton}>Close</button>
+            <input
+              ref={pickerRef}
+              type="file"
+              data-testid="scanner-choose-photo"
+              accept={accept ?? (profile.shape === 'portrait' ? SCAN_UPLOAD_IMAGE_ACCEPT : SCAN_UPLOAD_ACCEPT)}
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const chosen = Array.from(e.target.files ?? []);
+                e.target.value = '';
+                if (chosen.length) onScanned(chosen.slice(0, 1));
+              }}
+            />
           </div>
         ) : (
           <div style={{ display: 'flex', justifyContent: 'center' }}>

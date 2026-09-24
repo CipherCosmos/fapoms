@@ -1,6 +1,6 @@
 import { Entity, Column, ManyToOne, JoinColumn, Index, Unique } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
-import { OnboardingDocument } from '@fapoms/shared';
+import { ApplicationDocumentReviewStatus, OnboardingDocument } from '@fapoms/shared';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 
 /**
@@ -31,4 +31,29 @@ export class AssayerApplicationDocumentEntity extends BaseEntity {
 
   @Column({ name: 'file_paths', type: 'jsonb', default: () => "'[]'::jsonb" })
   filePaths: string[];
+
+  /**
+   * HR's verdict on this requirement — the per-file send-back the hiring review was missing.
+   *
+   * A requirement sent back (`NEEDS_RESUBMIT`) is what reopens the candidate's SAME link as
+   * `AWAITING_INFO` with this item flagged, instead of rejecting the whole application over one
+   * blurry scan. Cleared back to `PENDING` the moment the candidate (or the desk) attaches a
+   * fresh scan, so a resubmission never inherits its own rejection.
+   */
+  @Column({ name: 'review_status', type: 'varchar', length: 20, default: ApplicationDocumentReviewStatus.PENDING })
+  reviewStatus: ApplicationDocumentReviewStatus;
+
+  /** Structured send-back reason (`DocumentRejectionReason`), so the candidate gets guidance. */
+  @Column({ name: 'rejection_reason', type: 'varchar', length: 40, nullable: true })
+  rejectionReason: string | null;
+
+  /** HR's per-file instruction, shown beside this document on the candidate's link. */
+  @Column({ name: 'rejection_note', type: 'text', nullable: true })
+  rejectionNote: string | null;
+
+  @Column({ name: 'reviewed_by', type: 'uuid', nullable: true })
+  reviewedBy: string | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt: Date | null;
 }

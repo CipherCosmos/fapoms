@@ -62,15 +62,33 @@ export function confirmSms(code: string): Promise<{ recoveryCodes: string[] }> {
 
 // --- Manage ---
 
-/** Remove one factor, or (with no argument) all of them. */
-export function disableMfa(factor?: MfaFactor): Promise<{ message: string }> {
-  const q = factor ? `?factor=${encodeURIComponent(factor)}` : '';
-  return api.request(`/auth/mfa${q}`, { method: 'DELETE' });
+/**
+ * Proof that the person is the account holder, not just someone holding their session. The server
+ * requires one of these before anything that weakens the account (turning a factor off, replacing
+ * the recovery codes): the current password, or a fresh code from the authenticator app.
+ */
+export interface MfaStepUpProof {
+  currentPassword?: string;
+  code?: string;
 }
 
-/** Replace the recovery codes; the old set stops working. Returns the new codes once. */
-export function regenerateRecoveryCodes(): Promise<{ recoveryCodes: string[] }> {
-  return api.request('/auth/mfa/recovery/regenerate', { method: 'POST' });
+/** Only the fields that were actually filled in go to the server. */
+function proofBody(proof: MfaStepUpProof): string {
+  const body: MfaStepUpProof = {};
+  if (proof.currentPassword) body.currentPassword = proof.currentPassword;
+  if (proof.code?.trim()) body.code = proof.code.trim();
+  return JSON.stringify(body);
+}
+
+/** Remove one factor, or (with no factor) all of them. Needs the password or an authenticator code. */
+export function disableMfa(factor: MfaFactor | undefined, proof: MfaStepUpProof): Promise<{ message: string }> {
+  const q = factor ? `?factor=${encodeURIComponent(factor)}` : '';
+  return api.request(`/auth/mfa${q}`, { method: 'DELETE', body: proofBody(proof) });
+}
+
+/** Replace the recovery codes; the old set stops working. Returns the new codes once. Needs proof as above. */
+export function regenerateRecoveryCodes(proof: MfaStepUpProof): Promise<{ recoveryCodes: string[] }> {
+  return api.request('/auth/mfa/recovery/regenerate', { method: 'POST', body: proofBody(proof) });
 }
 
 // --- Login-time challenge (no session yet) ---

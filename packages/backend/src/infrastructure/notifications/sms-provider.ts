@@ -122,30 +122,38 @@ export class SmsProvider implements OnModuleInit {
    * Refusals that no retry can fix — no gateway, not a mobile, no DLT template id under DLT — come
    * back `permanent`, so the worker settles them instead of spending its attempts on them.
    */
+  /**
+   * Why this text cannot be delivered, when that is knowable WITHOUT sending it — or null.
+   *
+   * No gateway, not a mobile, and a DLT entity with no template id are all facts about the message
+   * and the configuration, not about the network. They were checked only here in `send`, which the
+   * worker calls after the message was queued — so `SmsService.queue` answered QUEUED for a text
+   * that could never go, and every caller counted it as a channel delivered. Approving an appraiser
+   * reported their credential as texted while the gateway refused every one for want of a DLT id.
+   * One check, used by both, so the queue and the send cannot disagree about what is hopeless.
+   */
+  preflight(message: Pick<SmsMessage, 'to' | 'dltTemplateId'>): string | null {
+    if (!this.transport || !this.sendSettings) return 'SMS is not configured.';
+    if (!toE164IndianMobile(message.to)) return 'That is not an Indian mobile number a text can be sent to.';
+    if (this.sendSettings.dltEntityId && !message.dltTemplateId?.trim()) {
+      return 'This text has no DLT template id; add it under SMS templates in Platform Settings.';
+    }
+    return null;
+  }
+
   async send(message: SmsMessage): Promise<SmsSendResult> {
-    const transport = this.transport;
-    const settings = this.sendSettings;
-    if (!transport || !settings) {
-      return { success: false, error: 'SMS is not configured.', permanent: true };
-    }
-
-    const to = toE164IndianMobile(message.to);
-    if (!to) return { success: false, error: 'That is not an Indian mobile number a text can be sent to.', permanent: true };
-
-    if (settings.dltEntityId && !message.dltTemplateId?.trim()) {
-      return {
-        success: false,
-        error: 'This text has no DLT template id; add it under SMS templates in Platform Settings.',
-        permanent: true,
-      };
-    }
+    const refused = this.preflight(message);
+    if (refused) return { success: false, error: refused, permanent: true };
+    const transport = this.transport!;
+    const settings = this.sendSettings!;
+    const to = toE164IndianMobile(message.to)!;
 
     try {
       return await transport.send({ ...message, to, dltTemplateId: message.dltTemplateId?.trim() || null }, settings);
     } catch (err: any) {
       // An adapter is written not to throw; this is the belt to that promise, and it names no text.
       this.logger.warn(`${transport.name} SMS send failed unexpectedly: ${err?.message ?? 'unknown error'}.`);
-      return { success: false, error: 'The SMS gateway could not be reached.' };
+      return { success: false, error: 'The SMS gateway could not be reached.', transportFault: true };
     }
   }
 

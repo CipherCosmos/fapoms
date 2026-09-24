@@ -27,8 +27,10 @@ const TOKENS: Record<string, string[]> = {
   'otp-verification': ['{{otpCode}}', '{{validMinutes}}'],
   'registration-invite': ['href="{{inviteUrl}}"', '&bull; PAN &amp; Aadhaar Cards<br/>'],
   'app-credentials': ['{{username}}', '{{temporaryPassword}}', '{{validDays}}', 'href="{{loginUrl}}"'],
-  'application-approved': ['{{assayerCode}}', '{{effectiveDate}}', 'href="{{loginUrl}}"'],
+  'application-approved': ['{{assayerCode}}', '{{effectiveDate}}', 'href="{{appDownloadUrl}}"'],
   'application-rejected': ['{{reviewNotes}}'],
+  'application-info-requested': ['{{itemsText}}'],
+  'reference-notice': ['{{contactLine}}'],
   'branch-audit-paperwork': ['{{bankName}}', '{{branchName}}', '{{documentType}}', '{{fileName}}', 'href="{{downloadUrl}}"'],
   'morning-digest': ['{{briefDate}}', '{{subjectCounts}}', '>{{{digestSectionsHtml}}}</div>', 'href="{{portalUrl}}"'],
 };
@@ -124,3 +126,13 @@ describe('compileVisualToHtml', () => {
     expect(body).toContain(shellOpening);
   });
 });
+
+describe('the two templates with no button', () => {
+  /** The requested items are a list; the callout must keep them one per line. */
+  it('puts what HR asked for in its own callout, keeping one item per line', () => {
+    const html = compileVisualToHtml('application-info-requested', FIELDS);
+    expect(html).toMatch(/What HR asked for<\/div>[\s\S]*white-space:pre-line;">\{\{itemsText\}\}<\/div>/);
+  });
+
+});
+

@@ -79,6 +79,8 @@ describe('AssayerService', () => {
   };
 
   const mockActivityRepo = {
+    // The lifecycle trail: no row means "not parked mid-onboarding" — a working return.
+    findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn(),
     save: jest.fn(),
     findAndCount: jest.fn(),
@@ -841,12 +843,8 @@ describe('AssayerService', () => {
         AssignmentStatus.CANCELLED,
         'user-1',
         'a-1',
-        [
-          AssignmentStatus.PENDING,
-          AssignmentStatus.ACCEPTED,
-          AssignmentStatus.CHECKED_IN,
-          AssignmentStatus.IN_PROGRESS,
-        ],
+        // PENDING/ACCEPTED only (owner decision 2026-09-24): on-site work refuses the cascade.
+        [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED],
       ]);
 
       // 2. Work that already ended: deactivated only. Its status and stated reason survive.
@@ -1550,8 +1548,8 @@ describe('AssayerService', () => {
       expect(sql).not.toMatch(/status\s*!=/);
       expect(params).toEqual([
         AssignmentStatus.CANCELLED, expect.any(String), 'u-1', 'as-1',
-        [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED,
-         AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS],
+        // PENDING/ACCEPTED only (owner decision 2026-09-24): on-site work refuses the cascade.
+        [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED],
       ]);
     });
 

@@ -4,9 +4,9 @@ import {
   Copy, Check, Trash2, RefreshCw, Loader2, X,
 } from 'lucide-react';
 import * as mfa from '../../services/mfa';
-import type { MfaFactor, MfaStatus } from '../../services/mfa';
+import type { MfaFactor, MfaStatus, MfaStepUpProof } from '../../services/mfa';
 import { userMessage } from '../../services/errors';
-import { useToast, useConfirm, AlertBanner } from '../../components/ui';
+import { useToast, AlertBanner, Modal } from '../../components/ui';
 import { QrCode } from '../../components/QrCode';
 
 /** One card per factor. `phase` tracks where an in-progress enrolment has reached. */
@@ -41,6 +41,13 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: 'var(--text-base)', outline: 'none',
 };
 
+/**
+ * An action that weakens the account, waiting for the person to prove it is them. The server
+ * refuses both without the current password or a fresh authenticator code, so a session left open
+ * on a shared desk (or stolen) cannot switch 2FA off or mint itself new recovery codes.
+ */
+type StepUp = { kind: 'disable'; factor: MfaFactor } | { kind: 'regenerate' };
+
 /** Group a base32 setup key into 4-char blocks so it can be typed into an authenticator by hand. */
 function groupSecret(secret: string): string {
   return (secret.match(/.{1,4}/g) || [secret]).join(' ');
@@ -48,7 +55,6 @@ function groupSecret(secret: string): string {
 
 export const MfaPanel: React.FC = () => {
   const { toast } = useToast();
-  const { confirm, confirmDialog } = useConfirm();
 
   const [status, setStatus] = useState<MfaStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +63,10 @@ export const MfaPanel: React.FC = () => {
   const [flowError, setFlowError] = useState<string | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [copied, setCopied] = useState(false);
+  const [stepUp, setStepUp] = useState<StepUp | null>(null);
+  const [proof, setProof] = useState<MfaStepUpProof>({});
+  const [stepUpBusy, setStepUpBusy] = useState(false);
+  const [stepUpError, setStepUpError] = useState<string | null>(null);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -133,37 +143,34 @@ export const MfaPanel: React.FC = () => {
     }
   };
 
-  const removeFactor = async (factor: MfaFactor) => {
-    const ok = await confirm({
-      title: `Turn off ${FACTOR_META[factor].label}?`,
-      message: 'You will no longer be asked for this factor when you sign in. If it is your only factor, your account goes back to password-only.',
-      confirmLabel: 'Turn off',
-      reversible: false,
-      tone: 'danger',
-    });
-    if (!ok) return;
-    try {
-      await mfa.disableMfa(factor);
-      await refresh();
-      toast({ type: 'success', message: `${FACTOR_META[factor].label} turned off.` });
-    } catch (e) {
-      toast({ type: 'error', title: 'Could not turn it off', message: userMessage(e) });
-    }
+  const openStepUp = (next: StepUp) => {
+    setProof({}); setStepUpError(null); setStepUpBusy(false); setStepUp(next);
   };
+  const closeStepUp = () => { setStepUp(null); setProof({}); setStepUpError(null); setStepUpBusy(false); };
 
-  const regenerate = async () => {
-    const ok = await confirm({
-      title: 'Generate new recovery codes?',
-      message: 'Your current recovery codes stop working immediately. Save the new ones somewhere safe.',
-      confirmLabel: 'Generate new codes',
-      reversible: false,
-    });
-    if (!ok) return;
+  const removeFactor = (factor: MfaFactor) => openStepUp({ kind: 'disable', factor });
+  const regenerate = () => openStepUp({ kind: 'regenerate' });
+
+  const hasProof = !!proof.currentPassword || (proof.code ?? '').trim().length >= 6;
+
+  /** Run the waiting action with the proof typed in. A wrong answer keeps the dialog open to retry. */
+  const submitStepUp = async () => {
+    if (!stepUp || !hasProof) return;
+    setStepUpBusy(true); setStepUpError(null);
     try {
-      const { recoveryCodes: codes } = await mfa.regenerateRecoveryCodes();
-      setRecoveryCodes(codes);
+      if (stepUp.kind === 'disable') {
+        await mfa.disableMfa(stepUp.factor, proof);
+        closeStepUp();
+        await refresh();
+        toast({ type: 'success', message: `${FACTOR_META[stepUp.factor].label} turned off.` });
+      } else {
+        const { recoveryCodes: codes } = await mfa.regenerateRecoveryCodes(proof);
+        closeStepUp();
+        setRecoveryCodes(codes);
+      }
     } catch (e) {
-      toast({ type: 'error', title: 'Could not regenerate codes', message: userMessage(e) });
+      setStepUpError(userMessage(e));
+      setStepUpBusy(false);
     }
   };
 
@@ -237,10 +244,10 @@ export const MfaPanel: React.FC = () => {
             ))}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={copyRecovery} className="btn btn-ghost" style={{ gap: 8, fontSize: 'var(--text-sm)' }}>
+            <button onClick={copyRecovery} className="btn btn-ghost" title="Copy all recovery codes to the clipboard" style={{ gap: 8, fontSize: 'var(--text-sm)' }}>
               {copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Copied' : 'Copy all'}
             </button>
-            <button onClick={() => setRecoveryCodes(null)} className="btn btn-primary" style={{ gap: 8, fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+            <button onClick={() => setRecoveryCodes(null)} className="btn btn-primary" title="Confirm you saved the codes and close this panel" style={{ gap: 8, fontSize: 'var(--text-sm)', fontWeight: 600 }}>
               <Check size={15} /> I’ve saved these
             </button>
           </div>
@@ -266,7 +273,7 @@ export const MfaPanel: React.FC = () => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--text-primary)' }}>{meta.label}</span>
                     {on && <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'var(--status-active-bg, rgba(34,197,94,0.14))', color: 'var(--success, #22c55e)' }}>ON</span>}
-                    {offline && !on && <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>Unavailable</span>}
+                    {offline && !on && <span className="badge" title="Text messages have not been set up on this system yet" style={{ fontSize: 'var(--text-3xs)', background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>Unavailable</span>}
                   </div>
                   <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: '3px 0 0' }}>{meta.blurb}</p>
                   {offline && (
@@ -275,15 +282,15 @@ export const MfaPanel: React.FC = () => {
                 </div>
                 <div style={{ flexShrink: 0 }}>
                   {on ? (
-                    <button onClick={() => removeFactor(factor)} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)', color: 'var(--danger, #ef4444)' }}>
+                    <button onClick={() => removeFactor(factor)} className="btn btn-ghost" title={`Disable ${meta.label} as a two-step verification method`} style={{ gap: 6, fontSize: 'var(--text-xs)', color: 'var(--danger, #ef4444)' }}>
                       <Trash2 size={14} /> Turn off
                     </button>
                   ) : open ? (
-                    <button onClick={closeFlow} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
+                    <button onClick={closeFlow} className="btn btn-ghost" title="Cancel factor setup" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                       <X size={14} /> Cancel
                     </button>
                   ) : offline ? null : (
-                    <button onClick={() => startFlow(factor)} disabled={busy} className="btn btn-primary" style={{ gap: 6, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
+                    <button onClick={() => startFlow(factor)} disabled={busy} className="btn btn-primary" title={`Configure and activate ${meta.label} for two-step verification`} style={{ gap: 6, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
                       Set up
                     </button>
                   )}
@@ -317,6 +324,7 @@ export const MfaPanel: React.FC = () => {
                             }}>{groupSecret(flow.secret || '')}</code>
                             <button
                               onClick={async () => { try { await navigator.clipboard.writeText(flow.secret || ''); toast({ type: 'success', message: 'Setup key copied.' }); } catch { /* ignore */ } }}
+                              title="Copy the setup key to the clipboard for manual entry"
                               className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}
                             ><Copy size={14} /> Copy key</button>
                           </div>
@@ -333,6 +341,7 @@ export const MfaPanel: React.FC = () => {
                       <label style={labelStyle}>MOBILE NUMBER</label>
                       <input
                         type="tel" autoFocus value={flow.phone || ''} placeholder="e.g. 9876543210"
+                        title="Type the mobile number that should receive setup codes by text"
                         onChange={(e) => setFlow({ ...flow, phone: e.target.value })}
                         style={inputStyle}
                       />
@@ -351,6 +360,7 @@ export const MfaPanel: React.FC = () => {
                       <input
                         inputMode="numeric" autoComplete="one-time-code" autoFocus={flow.factor !== 'TOTP'}
                         value={flow.code} placeholder="000000" maxLength={8}
+                        title="Type the 6-digit code from your authenticator app or message"
                         onChange={(e) => setFlow({ ...flow, code: e.target.value })}
                         onKeyDown={(e) => { if (e.key === 'Enter') void confirmCode(); }}
                         style={{ ...inputStyle, letterSpacing: 4, fontSize: 'var(--text-lg)', textAlign: 'center' }}
@@ -360,18 +370,18 @@ export const MfaPanel: React.FC = () => {
 
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                     {flow.factor === 'SMS' && flow.phase === 'phone' ? (
-                      <button onClick={sendSms} disabled={busy || !(flow.phone || '').trim()} className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
+                      <button onClick={sendSms} disabled={busy || !(flow.phone || '').trim()} title="Send a setup code to this mobile number" className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
                         {busy && <Loader2 size={15} className="spin" />} Send code
                       </button>
                     ) : (
-                      <button onClick={confirmCode} disabled={busy || flow.code.trim().length < 6} className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
+                      <button onClick={confirmCode} disabled={busy || flow.code.trim().length < 6} title="Check the code and turn on two-step verification" className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
                         {busy && <Loader2 size={15} className="spin" />} Verify & turn on
                       </button>
                     )}
                     {flow.phase === 'code' && flow.factor !== 'TOTP' && (
                       <button
                         onClick={() => (flow.factor === 'SMS' ? sendSms() : startFlow('EMAIL'))}
-                        disabled={busy} className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }}
+                        disabled={busy} title="Send the setup code again" className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }}
                       >Resend code</button>
                     )}
                   </div>
@@ -389,13 +399,71 @@ export const MfaPanel: React.FC = () => {
             <KeyRound size={13} style={{ verticalAlign: -2, marginRight: 6 }} />
             Recovery codes remaining: <strong style={{ color: 'var(--text-primary)' }}>{status?.recoveryCodesRemaining ?? 0}</strong>
           </div>
-          <button onClick={regenerate} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
+          <button onClick={regenerate} className="btn btn-ghost" title="Create new recovery codes; the current ones stop working at once" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} /> Regenerate recovery codes
           </button>
         </div>
       )}
 
-      {confirmDialog}
+      <Modal
+        open={!!stepUp}
+        onClose={closeStepUp}
+        width={440}
+        asForm
+        onSubmit={(e) => { e.preventDefault(); void submitStepUp(); }}
+        title={stepUp?.kind === 'disable'
+          ? `Turn off ${FACTOR_META[stepUp.factor].label}?`
+          : 'Generate new recovery codes?'}
+        footer={
+          <>
+            <button type="button" className="btn btn-secondary" onClick={closeStepUp}>Cancel</button>
+            <button
+              type="submit" className="btn btn-primary" disabled={!hasProof || stepUpBusy}
+              style={stepUp?.kind === 'disable'
+                ? { background: 'var(--danger)', borderColor: 'var(--danger)', opacity: hasProof ? 1 : 0.5, gap: 8 }
+                : { opacity: hasProof ? 1 : 0.5, gap: 8 }}
+            >
+              {stepUpBusy && <Loader2 size={15} className="spin" />}
+              {stepUp?.kind === 'disable' ? 'Turn off' : 'Generate new codes'}
+            </button>
+          </>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <p style={{ fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--text-secondary)', margin: 0 }}>
+            {stepUp?.kind === 'disable'
+              ? 'You will no longer be asked for this factor when you sign in. If it is your only factor, your account goes back to password-only.'
+              : 'Your current recovery codes stop working immediately. Save the new ones somewhere safe.'}
+          </p>
+          <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--danger)', margin: 0 }}>This cannot be undone.</p>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)', margin: 0 }}>
+            To confirm it is you, enter your current password{active('TOTP') ? ' or a code from your authenticator app' : ''}.
+          </p>
+          {stepUpError && <AlertBanner type="error" message={stepUpError} />}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label htmlFor="mfa-stepup-password" style={labelStyle}>CURRENT PASSWORD</label>
+            <input
+              id="mfa-stepup-password" type="password" autoComplete="current-password" autoFocus
+              value={proof.currentPassword ?? ''}
+              title="Type the password you sign in with"
+              onChange={(e) => setProof({ ...proof, currentPassword: e.target.value })}
+              style={inputStyle}
+            />
+          </div>
+          {active('TOTP') && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 240 }}>
+              <label htmlFor="mfa-stepup-code" style={labelStyle}>OR AUTHENTICATOR CODE</label>
+              <input
+                id="mfa-stepup-code" inputMode="numeric" autoComplete="one-time-code" placeholder="000000" maxLength={8}
+                value={proof.code ?? ''}
+                title="Type the 6-digit code your authenticator app shows now"
+                onChange={(e) => setProof({ ...proof, code: e.target.value })}
+                style={{ ...inputStyle, letterSpacing: 4, textAlign: 'center' }}
+              />
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };

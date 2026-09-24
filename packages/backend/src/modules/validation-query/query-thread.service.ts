@@ -6,9 +6,12 @@ import { ValidationQueryEntity } from './validation-query.entity';
 import { ValidationQueryMessageEntity, QueryMessageAuthor } from './validation-query-message.entity';
 import { ValidationCaseEntity } from '../validation/validation-case.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-import { ValidationQueryStatus } from '@fapoms/shared';
+import { SystemRole, ValidationQueryStatus } from '@fapoms/shared';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { getRequestContext } from '../../core/context/request-context';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { STAFF_ROLES } from '../auth/staff-roles';
 
 export interface PostMessageDto {
   body?: string;
@@ -49,6 +52,7 @@ export class QueryThreadService {
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   /**
@@ -268,6 +272,7 @@ export class QueryThreadService {
   async addReaction(messageId: string, emoji: string, userId: string, userName: string): Promise<ValidationQueryMessageEntity> {
     const msg = await this.messageRepository.findOne({ where: { id: messageId } });
     if (!msg) throw new NotFoundException(`Message ${messageId} not found`);
+    await this.assertCallerMayTouchThread(await this.mustExist(msg.validationQueryId), 'validation-query:addReaction');
 
     const existing = msg.reactions || [];
     const filtered = existing.filter((r) => !(r.userId === userId && r.emoji === emoji));
@@ -279,6 +284,7 @@ export class QueryThreadService {
   async removeReaction(messageId: string, emoji: string, userId: string): Promise<ValidationQueryMessageEntity> {
     const msg = await this.messageRepository.findOne({ where: { id: messageId } });
     if (!msg) throw new NotFoundException(`Message ${messageId} not found`);
+    await this.assertCallerMayTouchThread(await this.mustExist(msg.validationQueryId), 'validation-query:removeReaction');
 
     const existing = msg.reactions || [];
     msg.reactions = existing.filter((r) => !(r.userId === userId && r.emoji === emoji));
@@ -286,7 +292,7 @@ export class QueryThreadService {
   }
 
   async markThreadAsRead(queryId: string, userId: string): Promise<{ updatedCount: number }> {
-    await this.mustExist(queryId);
+    await this.assertCallerMayTouchThread(await this.mustExist(queryId), 'validation-query:markRead');
     const unread = await this.messageRepository.find({
       where: { validationQueryId: queryId, isRead: false },
     });
@@ -305,8 +311,63 @@ export class QueryThreadService {
   async toggleStarMessage(messageId: string): Promise<ValidationQueryMessageEntity> {
     const msg = await this.messageRepository.findOne({ where: { id: messageId } });
     if (!msg) throw new NotFoundException(`Message ${messageId} not found`);
+    await this.assertCallerMayTouchThread(await this.mustExist(msg.validationQueryId), 'validation-query:toggleStar');
     msg.isStarred = !msg.isStarred;
     return this.messageRepository.save(msg);
+  }
+
+  /**
+   * The object-level check for the message-keyed routes (reactions, star) and mark-read.
+   *
+   * Those routes admit ASSAYER and every staff role but took nothing but a message/query id, so
+   * any field assayer could react to, star, or mark read ANY thread's messages — and got the
+   * message back — and region-assigned staff reached other regions' threads. The rule is the one
+   * `ValidationQueryController` applies on the thread's read routes: an assayer is pinned to their
+   * own clarification (`assertAssayerOwnsQuery`'s predicate), and staff get the staged region
+   * ceiling on the clarification's region (same staged boundary, same `resolveRegion` chain).
+   *
+   * Enforced here rather than in the controller because the controller does not pass the caller:
+   * identity comes from the ambient request context the auth interceptor fills from the verified
+   * principal. With no authenticated caller in context this refuses — these methods have no
+   * system caller, so "nobody asked" is not a licence.
+   */
+  private async assertCallerMayTouchThread(query: ValidationQueryEntity, context: string): Promise<void> {
+    const ctx = getRequestContext();
+    const userId = ctx?.userId;
+    if (!userId) throw new ForbiddenException('No authenticated caller for this clarification thread.');
+    const roles = ctx?.roleNames ?? [];
+    const isAssayer = roles.includes(SystemRole.ASSAYER)
+      && !roles.some((r) => (STAFF_ROLES as string[]).includes(r));
+    if (isAssayer) {
+      if (query.assayerId !== userId) {
+        throw new ForbiddenException('You can only view your own clarifications.');
+      }
+    } else {
+      // Read from the database, not the JWT: a token minted before region assignment carries no
+      // `regions` claim, and "claim absent" must not read as "unrestricted".
+      const regions = await this.regionGuard.getUserRegions(userId);
+      if (regions?.length) {
+        const region = await this.queryRegion(query.id);
+        await this.regionGuard.assertRegionAllowedStaged(region, { regions: regions as any }, context);
+      }
+    }
+  }
+
+  /**
+   * query → case → project branch → branch region. The same chain as
+   * `ValidationQueryService.resolveRegion`; not called through it because that service already
+   * depends on this one (constructor injection would be circular).
+   */
+  private async queryRegion(queryId: string): Promise<string | null> {
+    const row = await this.queryRepository
+      .createQueryBuilder('q')
+      .leftJoin('q.validationCase', 'vc')
+      .leftJoin('vc.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'b')
+      .select('b.region', 'region')
+      .where('q.id = :id', { id: queryId })
+      .getRawOne<{ region: string | null }>();
+    return row?.region ?? null;
   }
 
   private async mustExist(queryId: string): Promise<ValidationQueryEntity> {

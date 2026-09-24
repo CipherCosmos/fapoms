@@ -43,6 +43,7 @@ const DomainChips: React.FC<{ request: DestructiveActionRequest; domains: WipeDo
       {request.domainKeys.map((key) => (
         <span
           key={key}
+          title={`${labelOf(key)}: ${(request.previewCounts?.[key] ?? 0).toLocaleString()} rows in the approved scope`}
           style={{
             fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '2px 9px', borderRadius: '10px',
             border: '1px solid var(--border-color)', color: 'var(--text-secondary)',
@@ -234,6 +235,7 @@ export const DangerZoneSection: React.FC = () => {
               className="btn btn-secondary"
               style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }}
               disabled={withdraw.isPending}
+              title="Withdraw this wipe request and unlock the domain selection"
               onClick={async () => {
                 const ok = await confirm({
                   title: 'Withdraw this wipe request?',
@@ -296,6 +298,7 @@ export const DangerZoneSection: React.FC = () => {
             <button
               className="btn btn-secondary"
               style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }}
+              title="Dismiss this notice and start a fresh wipe request"
               onClick={() => setDismissedId(notice.id)}
             >
               Start a new request
@@ -317,7 +320,7 @@ export const DangerZoneSection: React.FC = () => {
         ) : domainsFailed ? (
           <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
             <div>Couldn&apos;t load what can be cleared. {userMessage(error)}</div>
-            <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }} onClick={() => refetch()}>Try again</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }} title="Try loading the wipeable data again" onClick={() => refetch()}>Try again</button>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -343,6 +346,7 @@ export const DangerZoneSection: React.FC = () => {
                     type="checkbox"
                     checked={checked}
                     disabled={locked}
+                    title={locked ? `${d.label}: locked while a wipe request is in flight` : `${checked ? 'Remove' : 'Include'} ${d.label} (${count.toLocaleString()} rows) in the wipe`}
                     onChange={() => toggle(d.key)}
                     style={{ marginTop: '2px', cursor: locked ? 'not-allowed' : 'pointer' }}
                   />
@@ -369,6 +373,7 @@ export const DangerZoneSection: React.FC = () => {
               className="btn btn-primary"
               disabled={selectedKeys.length === 0}
               onClick={() => setModal('request')}
+              title="Review the selection and file this wipe for administrator approval"
               style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 16px', fontSize: 'var(--text-xs)' }}
             >
               <Send size={14} /> Request wipe…
@@ -383,6 +388,7 @@ export const DangerZoneSection: React.FC = () => {
             <button
               className="btn btn-primary"
               onClick={() => { setExecuting(activeRequest); setModal('execute'); }}
+              title="Open the final confirmation to run the approved wipe"
               style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 16px', fontSize: 'var(--text-xs)' }}
             >
               <Trash2 size={14} /> Execute approved wipe…

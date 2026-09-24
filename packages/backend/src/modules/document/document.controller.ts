@@ -1,4 +1,4 @@
-import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, Inject, HttpCode } from '@nestjs/common';
+import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, ConflictException, Inject, HttpCode } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength, IsEmail } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -6,33 +6,38 @@ import { FileScanInterceptor } from '../../infrastructure/security/file-scan.int
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
 import { Response } from 'express';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { randomUUID } from 'crypto';
+import { Repository, In } from 'typeorm';
 import { DocumentService } from './document.service';
+import type { DocumentEntity } from './document.entity';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES } from '@fapoms/shared';
+import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES, isAssignmentTerminal, AssignmentAction } from '@fapoms/shared';
+import { evaluateOwnership, evaluateSubmitReturn } from '../assignment/assignment-capabilities';
+import { IN_FLIGHT_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { withCode } from '../../infrastructure/http/api-error';
 
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
-import { assertUploadAllowed, uploadMulterOptions, diskUploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
-import { DiskUploadScanInterceptor } from './disk-upload-scan.interceptor';
+import { assertUploadAllowed, uploadMulterOptions, diskUploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES } from './upload-validation';
+import { DiskUploadCleanupInterceptor } from './disk-upload-cleanup.interceptor';
+import { GENERATED_DOCUMENT_BATCH_KIND } from './generated-document-batch.job';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
 import { DocumentDispatchJobsService } from './document-dispatch-jobs.service';
 import { jobActorFrom } from '../../infrastructure/queue/job-actor';
-import { createReadStream } from 'fs';
 import { AssignmentService } from '../assignment/assignment.service';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
-import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { RegionGuardService, roleNames } from '../../infrastructure/scope/region-guard.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { buildPaginationMeta } from '../../infrastructure/http/pagination';
 import { deriveFileIntegrity, verifyClientHash } from './document-integrity';
+import { directUploadKeyFor, finalKeyForDirectUpload, PRESIGN_UPLOAD_EXPIRY_SECONDS } from './direct-upload-key';
+import { integrityGate, hasRecordedSha256, DocumentIntegrityMismatchError } from './download-integrity';
 
 /**
  * Multer memory-storage configuration shared by the single-file document upload routes.
@@ -56,8 +61,8 @@ const documentUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_B
  * Disk, not memory, and this is the one route where that is right. A day's batch is up to 100 files
  * of up to 50 MB each, and in memory that was up to 5 GB held at once in an API container capped at
  * 1.5 GB — one large batch could get the API killed for every user. On disk the batch costs one file
- * at a time: `DiskUploadScanInterceptor` reads each back to scan it, and the handler streams each
- * one to storage. See `diskUploadMulterOptions`.
+ * at a time: `BackgroundJobsService.create` streams each one to storage, and the background job
+ * scans each when it files it. See `diskUploadMulterOptions`.
  */
 const documentBatchUploadMulterOptions = diskUploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 100 });
 
@@ -165,6 +170,30 @@ class FinalizeUploadRequestDto {
   customerMasterVersionId?: string;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The job parameters a background upload sends as the multipart `params` field (JSON text — see
+ * `uploadJob` in the web client). Query parameters, the route's older shape, win where both are sent.
+ */
+function jobParamsFromMultipart(req: any): Record<string, unknown> {
+  const raw = req?.body?.params;
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    throw new BadRequestException('params must be a JSON object.');
+  }
+}
+
+/**
+ * `S3StorageService.saveFileAt` — a write at a key the server chose. Optional, like the other
+ * S3-only capabilities on `StorageEngine` (presign, multipart): the local-disk driver has no
+ * presigned upload, so it never reaches the one route that needs this.
+ */
+type ServerKeyedWrite = { saveFileAt?: (key: string, content: Buffer, mimeType?: string) => Promise<string> };
+
 @ApiTags('Documents')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -187,6 +216,7 @@ export class DocumentController {
     private readonly fileScanner: FileScanService,
     private readonly regionGuard: RegionGuardService,
     private readonly dispatchJobs: DocumentDispatchJobsService,
+    private readonly backgroundJobs: BackgroundJobsService,
   ) {}
 
   @Post('upload')
@@ -308,9 +338,10 @@ export class DocumentController {
     // No bytes exist yet, so only the declared type is checkable here; finalize re-applies the
     // same helper with the object's real size once it has landed.
     assertUploadAllowed({ contentType });
-    const safeName = (body.fileName || 'upload.bin').replace(/[^\w.-]+/g, '_').slice(0, 120) || 'upload.bin';
-    const objectKey = `documents/direct/${randomUUID()}/${safeName}`;
-    const expiresIn = 900; // 15 minutes to complete the PUT
+    const objectKey = directUploadKeyFor(body.fileName);
+    // Five minutes to START the PUT (see direct-upload-key.ts). Finalize moves the object off this
+    // key, so the URL's remaining life can no longer reach a registered document either way.
+    const expiresIn = PRESIGN_UPLOAD_EXPIRY_SECONDS;
     const uploadUrl = await this.storage.getSignedUploadUrl(objectKey, contentType, expiresIn);
     return { objectKey, uploadUrl, method: 'PUT', headers: { 'Content-Type': contentType }, expiresIn };
   }
@@ -322,10 +353,9 @@ export class DocumentController {
   async finalizeUpload(@Body() body: FinalizeUploadRequestDto, @Req() req: any) {
     // Only keys minted by presignUpload can be finalized — never an arbitrary storage key,
     // so a caller cannot register another namespace's object (a pre-field PDF, someone
-    // else's return) as their own document.
-    if (!body.objectKey.startsWith('documents/direct/')) {
-      throw new BadRequestException('objectKey is not a direct-upload key issued by /documents/upload/presign.');
-    }
+    // else's return) as their own document. The parse is exact, not a prefix check: see
+    // direct-upload-key.ts.
+    const finalKey = finalKeyForDirectUpload(body.objectKey);
     /**
      * Idempotent, not merely repeatable. Verified live: finalizing the same objectKey twice
      * created two separate `documents` rows pointing at the identical storage object — the same
@@ -335,10 +365,25 @@ export class DocumentController {
      * whose bytes travel client→storage directly, so the client's own network can drop the
      * finalize response after the server already succeeded, and an honest retry resends the
      * identical request. Short-circuit before repeating the stat/scan/create work.
+     *
+     * The row now points at the server-owned final key, so that is what a retry is recognised by.
+     * Anything sitting at the direct key by then was PUT after the first finalize — through a URL
+     * that has not expired yet — and is deleted rather than left for a later finalize to register.
+     * The direct-key lookup stays for rows finalized before the move existed.
      */
-    const existing = await this.documentService.findByFilePath(body.objectKey);
+    const existing = (await this.documentService.findByFilePath(finalKey))
+      ?? (await this.documentService.findByFilePath(body.objectKey));
     if (existing) {
+      if (existing.filePath !== body.objectKey) {
+        await this.storage.deleteFile(body.objectKey).catch(() => undefined);
+      }
       return existing;
+    }
+    const writer = this.storage as StorageEngine & ServerKeyedWrite;
+    if (typeof writer.saveFileAt !== 'function') {
+      throw new NotImplementedException(
+        'Direct-to-storage upload is not available on this storage backend. Use POST /documents/upload or the resumable chunked upload endpoints.',
+      );
     }
     // Confirm the object actually landed before creating a row that claims it did.
     let size = 0;
@@ -360,57 +405,71 @@ export class DocumentController {
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
       throw err;
     }
-    // Malware-scan the object the client PUT straight to storage — the presigned upload bypassed the
-    // API, so this is the first point the bytes can be inspected. Delete + reject on a hit (or when a
-    // required scan can't run), so an infected object is never registered as a document.
     /**
-     * The presigned PUT bypassed the API, so these bytes did not arrive through it — but the
-     * malware scan reads the whole object back to inspect it, and that buffer is as good a source
-     * of truth as an upload buffer. It attests to what storage holds at registration time, which
-     * is precisely what a document's integrity metadata should say.
+     * Read ONCE. Everything after this line — the size re-check, the malware scan, the hash, and
+     * the bytes written to the final key — works from this one buffer, never from the direct key
+     * again. The direct key is client-writable until its URL expires, so a second read (the old
+     * in-place `sealObject`) could scan one file and keep another.
      *
-     * The earlier position was that this route cannot hash what it never receives. That is true
-     * of the PUT and false of finalize as implemented: the object is already fully in memory
-     * here, and the cost is already being paid by the scan.
+     * The presigned PUT bypassed the API, so these bytes did not arrive through it — but this
+     * buffer is as good a source of truth as an upload buffer: it is exactly what is stored.
      */
-    let integrity: ReturnType<typeof deriveFileIntegrity> | undefined;
+    let stored: Buffer;
+    let integrity: ReturnType<typeof deriveFileIntegrity>;
     try {
       const stream = await this.storage.getFileStream(body.objectKey);
       const parts: Buffer[] = [];
       for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      const stored = Buffer.concat(parts);
-      await this.fileScanner.scanOrThrow(stored, body.fileName);
+      stored = Buffer.concat(parts);
+      // The object was replaced between the HeadObject above and this read: the size that passed
+      // the limit is not the size in hand, so refuse rather than guess which one was meant.
+      if (stored.length !== size) {
+        throw new ConflictException('The uploaded object changed while it was being finalized. Upload it again.');
+      }
+      await this.fileScanner.scanOrThrow(stored, body.fileName, body.contentType);
       integrity = deriveFileIntegrity(stored, body.contentType);
     } catch (err) {
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
       throw err;
     }
 
-    // The client wrote this object straight into the store, so the app never had the chance to
-    // encrypt it on the way in. It is encrypted here, after it has passed the scan and before it is
-    // registered — see document-cipher.ts. A failure leaves no plaintext document on the record.
+    // The scanned buffer, not the object, goes to the server-owned key — encrypted on the way in by
+    // `saveFileAt` exactly as `saveFile` encrypts (see document-cipher.ts).
     try {
-      await this.storage.sealObject?.(body.objectKey);
+      await writer.saveFileAt(finalKey, stored, body.contentType);
     } catch (err) {
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
       throw err;
     }
 
-    const doc = await this.documentService.create(
-      {
-        assessmentId: body.assessmentId,
-        fileName: body.fileName,
-        filePath: body.objectKey,
-        // `size` comes from a real HeadObject, so it was already trustworthy; the derived count
-        // is used anyway so one source describes every field.
-        fileSize: integrity?.byteLength ?? size,
-        mimeType: body.contentType,
-        type: body.type,
-        customerMasterVersionId: body.customerMasterVersionId,
-        integrity,
-      },
-      req?.user?.id || '00000000-0000-0000-0000-000000000000',
-    );
+    let doc: DocumentEntity;
+    try {
+      doc = await this.documentService.create(
+        {
+          assessmentId: body.assessmentId,
+          fileName: body.fileName,
+          filePath: finalKey,
+          // Counted from the buffer that was scanned and stored — equal to the HeadObject size by
+          // the check above.
+          fileSize: integrity.byteLength,
+          mimeType: body.contentType,
+          type: body.type,
+          customerMasterVersionId: body.customerMasterVersionId,
+          integrity,
+        },
+        req?.user?.id || '00000000-0000-0000-0000-000000000000',
+      );
+    } catch (err) {
+      // No row points at the final object; remove it. The direct object stays so the client can
+      // retry the finalize without re-uploading.
+      await this.storage.deleteFile(finalKey).catch(() => undefined);
+      throw err;
+    }
+
+    // Registered at the final key; the direct key is now dead weight and a write target.
+    await this.storage.deleteFile(body.objectKey).catch((err: any) => {
+      this.logger.warn(`Finalized ${doc.id} but could not delete its direct-upload object: ${err?.message}`);
+    });
 
     return doc;
   }
@@ -427,7 +486,7 @@ export class DocumentController {
       }
     }
 
-    await this.assertMaySubmitReturnFor(req.user, body.assignmentId);
+    const ownAssignment = await this.assertMaySubmitReturnFor(req.user, { assignmentId: body.assignmentId });
 
     const fileName = body.fileName || `audited_report_${Date.now()}.pdf`;
 
@@ -454,11 +513,23 @@ export class DocumentController {
       hint: 'Scan at a lower quality, or split it.',
     });
 
+    // A finished job: the same bytes again are a retry of a delivered upload and get the stored
+    // document back; different bytes are refused. Nothing is scanned or written for a replay.
+    const replay = await this.replayOrRefuseOnFinishedJob(ownAssignment, deriveFileIntegrity(buffer, 'application/pdf').sha256);
+    if (replay && ownAssignment) {
+      return {
+        success: true,
+        assignmentCompletion: this.replayedCompletion(ownAssignment),
+        data: replay,
+        documentUrl: `/documents/${replay.id}/download`,
+      };
+    }
+
     // Malware scan BEFORE the file is stored — this JSON base64 route bypassed the
     // FileScanInterceptor that guards every multipart upload route (the interceptor reads a
     // multipart file, not a base64 body), so an audited-return PDF arriving here reached storage
     // and the data-entry pipeline unscanned. `scanOrThrow` fails closed when scanning is required.
-    await this.fileScanner.scanOrThrow(buffer, fileName);
+    await this.fileScanner.scanOrThrow(buffer, fileName, 'application/pdf');
 
     /**
      * The JSON sibling of `mobile-upload-binary`, and it must describe its bytes the same way.
@@ -557,7 +628,7 @@ export class DocumentController {
       hint: 'Scan at a lower quality, or split it.',
     });
 
-    await this.assertMaySubmitReturnFor(req.user, assignmentId);
+    const ownAssignment = await this.assertMaySubmitReturnFor(req.user, { assignmentId });
 
     let targetId = assessmentId || assignmentId;
     if (assignmentId && !assessmentId) {
@@ -576,6 +647,13 @@ export class DocumentController {
         'UPLOAD_CHECKSUM_MISMATCH: the bytes received do not match the sha256 supplied with them. '
         + 'Nothing was stored. Retry the upload.',
       ), OTHER_CONFLICT_ERROR_CODES.UPLOAD_CHECKSUM_MISMATCH);
+    }
+
+    // A finished job: the same bytes again are a retry of a delivered upload and get the stored
+    // document back, with nothing written and completion not re-run; different bytes are refused.
+    const replay = await this.replayOrRefuseOnFinishedJob(ownAssignment, integrity.sha256);
+    if (replay && ownAssignment) {
+      return { success: true, assignmentCompletion: this.replayedCompletion(ownAssignment), data: replay };
     }
 
     const savedFilePath = await this.storage.saveFile(file.originalname, file.buffer, integrity.effectiveMimeType);
@@ -624,26 +702,120 @@ export class DocumentController {
    * assayer's behalf (a real workflow when a scan arrives by email); `createdBy` on the
    * document preserves who actually did it.
    */
-  private async assertMaySubmitReturnFor(user: any, assignmentId?: string): Promise<void> {
+  private async assertMaySubmitReturnFor(
+    user: any,
+    ref: { assignmentId?: string | null; targetId?: string | null },
+  ): Promise<AssignmentEntity | null> {
     const roles: string[] = (user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
-    if (!roles.includes(SystemRole.ASSAYER)) return; // staff path, already role-gated
-    if (!assignmentId) {
+    if (!roles.includes(SystemRole.ASSAYER)) return null; // staff path, already role-gated
+
+    let assignment: AssignmentEntity | null = null;
+    if (ref.assignmentId) {
+      assignment = await this.assignmentRepository
+        .findOne({ where: { id: ref.assignmentId } })
+        .catch(() => null);
+      if (!assignment) {
+        throw new NotFoundException('That assignment could not be found.');
+      }
+    } else if (ref.targetId) {
+      /**
+       * The resumable path names its target, not its assignment.
+       *
+       * `POST /upload/session` carries only `assessmentId`, and the assayer app fills it with the
+       * ASSIGNMENT's own id (see `uploadAuditPdfResumable`) — while an older caller may send a real
+       * assessment or project-branch id. The same three readings `completeAssignmentForReturn`
+       * resolves by, asked here of the caller's own assignments only: a target they hold no
+       * assignment on is somebody else's work. A live one wins over a finished one, so an old
+       * cancelled assignment on the same branch does not shadow the current job.
+       */
+      const mine = await this.assignmentRepository
+        .find({
+          where: [
+            { id: ref.targetId, assayerId: user?.id },
+            { assessmentId: ref.targetId, assayerId: user?.id },
+            { projectBranchId: ref.targetId, assayerId: user?.id },
+          ],
+        })
+        .catch(() => [] as AssignmentEntity[]);
+      assignment = mine.find((a) => !isAssignmentTerminal(a.status)) ?? mine[0] ?? null;
+      if (!assignment) {
+        this.logger.warn(
+          `Assayer ${user?.id} attempted to upload field paperwork against ${ref.targetId}, on which they hold no assignment.`,
+        );
+        throw new ForbiddenException('You can only submit paperwork for an assignment that is assigned to you.');
+      }
+    } else {
       throw new BadRequestException('An assignment must be specified when submitting an audited return.');
     }
 
-    const assignment = await this.assignmentRepository
-      .findOne({ where: { id: assignmentId } })
-      .catch(() => null);
-
-    if (!assignment) {
-      throw new NotFoundException('That assignment could not be found.');
-    }
-    if (assignment.assayerId !== user?.id) {
+    // `evaluateOwnership` — the rule the field app's SUBMIT_RETURN capability is built from.
+    if (!evaluateOwnership(AssignmentAction.SUBMIT_RETURN, assignment, user?.id).allowed) {
       this.logger.warn(
-        `Assayer ${user?.id} attempted to submit an audited return for assignment ${assignmentId}, which belongs to ${assignment.assayerId}.`,
+        `Assayer ${user?.id} attempted to submit an audited return for assignment ${assignment.id}, which belongs to ${assignment.assayerId}.`,
       );
       throw new ForbiddenException('You can only submit paperwork for an assignment that is assigned to you.');
     }
+
+    return assignment;
+  }
+
+  /**
+   * The second half of the same rule: what an assayer's upload on a FINISHED job gets.
+   *
+   * A finished job takes no more field paperwork from the field. "Finished" is the shared
+   * terminal rule (`isAssignmentTerminal`: COMPLETED, REJECTED, CANCELLED), not a list written
+   * here. A COMPLETED assignment has already booked its payable and client line, so a late upload
+   * used to land a second "audited return" beside the one the data-entry desk already worked from.
+   * The way back for a return that genuinely needs replacing is operations reopening the
+   * assignment (`POST /assignments/:id/reopen`), after which the upload goes through again.
+   *
+   * EXCEPT the same file again. Weak signal is the normal case at a branch: the return lands, the
+   * job closes, and the response never reaches the phone. The app's upload outbox then retries,
+   * and it treats any 4xx other than 401/408/429 as a permanent refusal — so refusing the retry
+   * parked a delivered packet as "refused" and sent the assayer to redo papers the desk already
+   * had. A byte-identical file (`content_sha256`, derived from the bytes, never the client's
+   * claim) already stored as this assignment's audited return is therefore answered as the
+   * success it was: the EXISTING document, nothing written, completion not re-run. Only a
+   * DIFFERENT file on a finished job is refused with `ASSIGNMENT_CLOSED`.
+   *
+   * Returns the stored document to replay, or null to proceed with an ordinary upload. `assignment`
+   * is what `assertMaySubmitReturnFor` resolved — null for staff, who are never stopped here: a
+   * back-office upload of a scan that arrived by email is the exception this route has always
+   * allowed.
+   */
+  private async replayOrRefuseOnFinishedJob(
+    assignment: AssignmentEntity | null,
+    sha256: string,
+  ): Promise<DocumentEntity | null> {
+    if (!assignment) return null;
+    // `evaluateSubmitReturn` — a finished job (`isAssignmentTerminal`) takes no more paperwork. The
+    // same function tells the field app, in advance, that a return can no longer be sent.
+    const gate = evaluateSubmitReturn(assignment);
+    if (gate.allowed) return null;
+
+    const stored = await this.documentService.findStoredReturnByContent(
+      [assignment.id, assignment.assessmentId, assignment.projectBranchId].filter(Boolean) as string[],
+      sha256,
+    );
+    if (stored) {
+      this.logger.log(
+        `Assignment ${assignment.id} is ${assignment.status}; an identical return (${sha256.slice(0, 12)}…) is already stored `
+        + `as document ${stored.id}, so this retry is answered with it and nothing new is written.`,
+      );
+      return stored;
+    }
+    throw withCode(new ConflictException(gate.reason), gate.code as any);
+  }
+
+  /**
+   * What a replayed upload reports about the job — the same `assignmentCompletion` shape a first
+   * upload returns, read off the job as it now stands. Completion is NOT re-run: the first attempt
+   * already did whatever it could.
+   */
+  private replayedCompletion(assignment: AssignmentEntity): { completed: boolean; blockedReason?: string } {
+    return assignment.status === AssignmentStatus.COMPLETED
+      ? { completed: true }
+      : { completed: false, blockedReason: `This assignment is ${String(assignment.status).toLowerCase()}.` };
   }
 
   // ── Resumable chunked upload ───────────────────────────────────────────────────
@@ -661,6 +833,18 @@ export class DocumentController {
     if (!body?.assessmentId || !body?.fileName) {
       throw new BadRequestException('assessmentId and fileName are required.');
     }
+    /**
+     * Ownership is checked before a multipart upload is opened in the store, so a refused caller
+     * leaves nothing behind — same rule, same function, as both single-shot routes.
+     *
+     * The finished-job half is NOT asked here, deliberately. No bytes exist yet, and the installed
+     * app never resumes an old session after a lost response: every outbox retry calls
+     * `uploadAuditPdfResumable` again, which opens a FRESH session. Refusing that create on a
+     * finished job would refuse the identical-file retry before it could be recognised (and the
+     * app would fall back to the single-shot route anyway). So the owner may open a session on a
+     * finished job, and `completeUpload` decides — replay for the same bytes, refusal for others.
+     */
+    await this.assertMaySubmitReturnFor(req.user, { targetId: body.assessmentId });
     const session = await this.chunkedUploadService.createSession({
       assessmentId: body.assessmentId,
       fileName: body.fileName,
@@ -678,8 +862,8 @@ export class DocumentController {
   @Get('upload/session/:uploadId')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Resume: report which chunks the server already holds' })
-  async getUploadSession(@Param('uploadId') uploadId: string) {
-    const session = await this.chunkedUploadService.getSession(uploadId);
+  async getUploadSession(@Param('uploadId') uploadId: string, @Req() req: any) {
+    const session = await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
     const received = await this.chunkedUploadService.receivedChunks(uploadId);
     const missing: number[] = [];
     for (let i = 0; i < session.totalChunks; i++) if (!received.includes(i)) missing.push(i);
@@ -700,7 +884,9 @@ export class DocumentController {
     @Param('uploadId') uploadId: string,
     @Param('index') index: string,
     @UploadedFile() chunk: any,
+    @Req() req: any,
   ) {
+    await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
     if (!chunk?.buffer) {
       throw new BadRequestException('No chunk content received.');
     }
@@ -714,7 +900,9 @@ export class DocumentController {
   async getChunkPresignedUrl(
     @Param('uploadId') uploadId: string,
     @Param('index') index: string,
+    @Req() req: any,
   ) {
+    await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
     const data = await this.chunkedUploadService.getPresignedPartUrl(uploadId, Number(index));
     return { ...data, index: Number(index) };
   }
@@ -730,6 +918,18 @@ export class DocumentController {
     const type = body?.type && (Object.values(DocumentType) as string[]).includes(body.type)
       ? body.type
       : DocumentType.AUDITED_RETURN_PDF;
+
+    /**
+     * Only the account that opened the session may complete it, and only for an assignment that is
+     * theirs. Both asked BEFORE `assemble`, which finalises the object in the store, so a refusal
+     * leaves the multipart upload open and the session intact.
+     *
+     * Whether the job is finished is decided after assembly instead, because that decision needs
+     * the bytes (an identical retry is replayed, a different file refused) and the parts only
+     * become one object — one hash — once assembled. See below.
+     */
+    const opened = await this.chunkedUploadService.getSessionFor(uploadId, req?.user?.id);
+    const ownAssignment = await this.assertMaySubmitReturnFor(req.user, { assignmentId: body?.assignmentId, targetId: opened.assessmentId });
 
     // assemble() calls S3 CompleteMultipartUpload — the object is now in MinIO
     // under s3Key. No buffer assembly happens in this process; no filesystem I/O.
@@ -748,12 +948,42 @@ export class DocumentController {
       const parts: Buffer[] = [];
       for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       const assembled = Buffer.concat(parts);
-      await this.fileScanner.scanOrThrow(assembled, session.fileName);
+      await this.fileScanner.scanOrThrow(assembled, session.fileName, 'application/pdf');
       integrity = deriveFileIntegrity(assembled, 'application/pdf');
     } catch (err) {
       await this.storage.deleteFile(s3Key).catch(() => undefined);
       await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
       throw err;
+    }
+
+    /**
+     * A finished job, now that the assembled bytes have a hash.
+     *
+     * Same bytes as the return already stored: this is the outbox retrying a delivered upload
+     * through a fresh session, so the duplicate object just assembled is deleted, the session is
+     * closed, and the stored document is answered — no new row, no completion re-run.
+     *
+     * Different bytes: refused with `ASSIGNMENT_CLOSED`. The assembled object is deleted and the
+     * session closed too — once CompleteMultipartUpload has run the session cannot be assembled a
+     * second time, and keeping an orphan object for a job that takes no paperwork keeps nothing
+     * useful. After operations reopens the job the phone sends the file again, as it would anyway.
+     */
+    let replay: DocumentEntity | null = null;
+    try {
+      replay = await this.replayOrRefuseOnFinishedJob(ownAssignment, integrity!.sha256);
+    } catch (err) {
+      await this.storage.deleteFile(s3Key).catch(() => undefined);
+      await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
+      throw err;
+    }
+    if (replay && ownAssignment) {
+      await this.storage.deleteFile(s3Key).catch(() => undefined);
+      await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
+      return {
+        success: true,
+        assignmentCompletion: type === DocumentType.AUDITED_RETURN_PDF ? this.replayedCompletion(ownAssignment) : undefined,
+        data: replay,
+      };
     }
 
     let doc = await this.documentService.create(
@@ -811,6 +1041,52 @@ export class DocumentController {
    * fires), the schedule, the assessment status, the validation case, the audit trail, the
    * notification and the assayer stats.
    */
+  /**
+   * The assignment a return uploaded against a project branch belongs to — deterministically.
+   *
+   * A branch accumulates assignment rows over its life (a cancelled one, then its replacement; a
+   * declined offer and the one after it), and this was an unordered `findOne` by branch: Postgres
+   * could hand back any of them, so a return could land on — and try to complete — a dead row
+   * while the live job stayed open. Preference, in order:
+   *   1. the live row (PENDING/ACCEPTED/CHECKED_IN/IN_PROGRESS, not deleted) — at most one exists,
+   *      `idx_assignments_single_active_branch` guarantees it; newest first only as a tie-break;
+   *   2. otherwise the most recently created row of any status (id as the final tie-break), which
+   *      is the one whose outcome the return most plausibly describes.
+   */
+  private async assignmentForBranch(projectBranchId: string): Promise<AssignmentEntity | null> {
+    return this.preferredAssignment({ projectBranchId });
+  }
+
+  /**
+   * The same preference, by assessment — the lookup just before the branch fallback. An assessment
+   * belongs to one project branch, so it has the same history of rows and had the same unordered
+   * `findOne` (E11 leftover, 2026-09-24).
+   */
+  private async assignmentForAssessment(assessmentId: string): Promise<AssignmentEntity | null> {
+    return this.preferredAssignment({ assessmentId });
+  }
+
+  /** Live row first, else the newest (id as tie-break) — see `assignmentForBranch`. */
+  private async preferredAssignment(
+    key: { projectBranchId: string } | { assessmentId: string },
+  ): Promise<AssignmentEntity | null> {
+    const live = await this.assignmentRepository
+      .findOne({
+        where: { ...key, isActive: true, status: In(IN_FLIGHT_ASSIGNMENT_STATUSES) },
+        relations: ['projectBranch'],
+        order: { createdAt: 'DESC', id: 'DESC' },
+      })
+      .catch(() => null);
+    if (live) return live;
+    return this.assignmentRepository
+      .findOne({
+        where: { ...key },
+        relations: ['projectBranch'],
+        order: { createdAt: 'DESC', id: 'DESC' },
+      })
+      .catch(() => null);
+  }
+
   private async completeAssignmentForReturn(
     doc: { id: string; assessmentId: string | null },
     assignmentId: string | undefined,
@@ -826,14 +1102,10 @@ export class DocumentController {
         .catch(() => null);
     }
     if (!targetAsn && doc.assessmentId) {
-      targetAsn = await this.assignmentRepository
-        .findOne({ where: { assessmentId: doc.assessmentId }, relations: ['projectBranch'] })
-        .catch(() => null);
+      targetAsn = await this.assignmentForAssessment(doc.assessmentId);
     }
     if (!targetAsn && fallbackTargetId) {
-      targetAsn = await this.assignmentRepository
-        .findOne({ where: { projectBranchId: fallbackTargetId }, relations: ['projectBranch'] })
-        .catch(() => null);
+      targetAsn = await this.assignmentForBranch(fallbackTargetId);
     }
 
     /**
@@ -909,6 +1181,10 @@ export class DocumentController {
   // header — that constraint is why this endpoint was fully public, exposing bank customer
   // paperwork to anyone who could reach the API.
   @Public()
+  // The token mint (`download-token`) records WHO asked; this records that the file was actually
+  // fetched — from which address, and how often (a range resume is its own fetch). A bad or
+  // expired token is logged as a failed attempt.
+  @AuditRead({ resource: 'DOCUMENT', idParam: 'id', eventType: 'DOCUMENT_DOWNLOADED' })
   @ApiOperation({ summary: 'Download a document using a short-lived signed token' })
   async downloadFile(
     @Param('id', ParseUUIDPipe) id: string,
@@ -997,7 +1273,59 @@ export class DocumentController {
     // Content-Length lets the client show real progress and detect a truncated transfer.
     res.setHeader('Content-Length', stat.size);
     const fileStream = await this.storage.getFileStream(doc.filePath);
-    fileStream.pipe(res);
+    // Rows recorded before integrity existed have nothing to compare against and are served as
+    // they always were. A recorded hash is checked before the file is released — see
+    // download-integrity.ts for what "before" means past the hold limit.
+    if (!hasRecordedSha256(doc.contentSha256)) {
+      fileStream.pipe(res);
+      return;
+    }
+    this.pipeVerified(fileStream, doc.contentSha256, res, doc);
+  }
+
+  /**
+   * Stream `source` to `res` through the integrity gate. On a mismatch nothing (or, past the hold
+   * limit, not the whole file) has been sent: the caller gets a 500 naming the problem when headers
+   * are still unsent, and a cut-short transfer otherwise. Either way it is logged loudly, because a
+   * stored document that no longer matches its hash is evidence that has been tampered with or
+   * corrupted, and someone has to go and find out which.
+   */
+  private pipeVerified(
+    source: NodeJS.ReadableStream,
+    expectedSha256: string,
+    res: Response,
+    doc: { id: string; fileName?: string; filePath?: string },
+  ): void {
+    const gate = integrityGate(expectedSha256);
+    const fail = (err: any) => {
+      source.unpipe?.(gate);
+      gate.unpipe(res);
+      if (err instanceof DocumentIntegrityMismatchError) {
+        this.logger.error(
+          `INTEGRITY MISMATCH on document ${doc.id} (${doc.fileName}) at ${doc.filePath}: recorded sha256 `
+          + `${err.expectedSha256}, storage returned ${err.actualSha256}. Download refused.`,
+        );
+      } else {
+        this.logger.error(`Download of document ${doc.id} failed mid-stream: ${err?.message}`);
+      }
+      if (!res.headersSent) {
+        for (const h of ['Content-Length', 'Content-Disposition', 'ETag', 'Last-Modified', 'Cache-Control', 'Accept-Ranges']) {
+          res.removeHeader(h);
+        }
+        res.status(500).json({
+          statusCode: 500,
+          code: err instanceof DocumentIntegrityMismatchError ? 'DOCUMENT_INTEGRITY_MISMATCH' : 'DOCUMENT_STREAM_FAILED',
+          message: err instanceof DocumentIntegrityMismatchError
+            ? 'This document no longer matches the file that was originally accepted, so it has not been served. Please report this to your administrator.'
+            : 'The document could not be read from storage.',
+        });
+      } else {
+        res.destroy(err);
+      }
+    };
+    source.on('error', fail);
+    gate.on('error', fail);
+    source.pipe(gate).pipe(res);
   }
 
   /**
@@ -1105,7 +1433,13 @@ export class DocumentController {
       + 'received, delegated, sent to OCR — have their own routes, which record the act. '
       + 'A packet only ever moves forward; see DOCUMENT_TRANSITIONS.',
   })
-  async updateStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDocumentStatusRequestDto, @Req() req: any) {
+  async updateStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateDocumentStatusRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.assertDocumentRegion(id, scope, 'document:updateStatus');
     const properRoute = DocumentController.STATUS_HAS_ITS_OWN_ROUTE[dto.status];
     if (properRoute) {
       throw new BadRequestException(
@@ -1177,7 +1511,24 @@ export class DocumentController {
   @Post(':id/receive')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Mark a dispatched document as received back' })
-  async receiveDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async receiveDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    /**
+     * Same fork `issueDownloadToken` makes. A pure assayer may only mark receipt of paperwork on a
+     * branch they hold an engaged assignment on — this route admitted ASSAYER with no ownership
+     * check at all, so any field account could flip any document in the system to RECEIVED (and
+     * page the desk about it). Staff get the region ceiling every other document write carries.
+     */
+    const roles = roleNames(req?.user?.roles);
+    const isPureAssayer = roles.includes(SystemRole.ASSAYER) && roles.every((r) => r === SystemRole.ASSAYER);
+    if (isPureAssayer) {
+      await this.documentService.assertAssayerMayReceive(id, req.user.assayerId ?? req.user.id);
+    } else {
+      await this.assertDocumentRegion(id, scope, 'document:receive');
+    }
     const userId = req?.user?.id || id;
     const doc = await this.documentService.receiveDocument(id, userId);
     return { success: true, data: doc, message: 'Document marked as received.' };
@@ -1185,6 +1536,9 @@ export class DocumentController {
 
   @Get('project-branch/:projectBranchId/download-pdf')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  // Streams the file through an internal call to `downloadFile`, which bypasses that route's own
+  // access record — so this route records it, against the branch it was addressed by.
+  @AuditRead({ resource: 'PROJECT_BRANCH', idParam: 'projectBranchId', eventType: 'PRE_FIELD_PACKET_DOWNLOADED' })
   @ApiOperation({ summary: 'Directly download the Pre-Audit PDF file for a project branch' })
   async downloadBranchPdf(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
@@ -1298,95 +1652,75 @@ export class DocumentController {
   }
 
   @Post('upload-generated-batch')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @RequirePermissions('document:upload:organization')
-  // DiskUploadScanInterceptor, not FileScanInterceptor: the files are on disk, and the shared
-  // interceptor only scans a `buffer` — it would pass every one of them unscanned. This one scans
-  // each file from disk and deletes them all when the request ends, whatever happened.
-  @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), DiskUploadScanInterceptor)
+  // Stored, not scanned, in the request: every file is scanned (malware + content gate) by the
+  // background job before it is filed as a document — `GeneratedDocumentBatchJob.fileOne`, pinned
+  // by upload-scan-parity.spec.ts. This interceptor deletes the temp files however the request ends.
+  @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), DiskUploadCleanupInterceptor)
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
+  @ApiOperation({ summary: "Upload a day's generated audit PDFs together; answers 202 with the background job that matches each file to its branch by filename and files it" })
   async uploadGeneratedBatch(
-    @UploadedFiles() files: any[],
-    @Query('projectId', ParseUUIDPipe) projectId: string,
-    @Query('auditDate') auditDate: string,
+    @UploadedFiles() files: Express.Multer.File[],
     @Req() req: any,
-    @Query('customerMasterVersionId') customerMasterVersionId?: string,
+    // Either as query parameters (the route's original shape) or in the multipart `params` JSON.
+    @Query('projectId') projectIdQuery?: string,
+    @Query('auditDate') auditDateQuery?: string,
+    @Query('customerMasterVersionId') customerMasterVersionIdQuery?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     if (!files?.length) throw new BadRequestException('No files received.');
-    if (!auditDate) throw new BadRequestException('auditDate is required.');
-
-    const { matches, unmatched, branchesWithoutFile } =
-      await this.documentService.matchPdfsToBranches(projectId, auditDate, files.map((f) => f.originalname));
+    const body = jobParamsFromMultipart(req);
+    const projectId = projectIdQuery ?? body.projectId;
+    const auditDate = auditDateQuery ?? body.auditDate;
+    const customerMasterVersionId = customerMasterVersionIdQuery ?? body.customerMasterVersionId ?? null;
+    if (typeof projectId !== 'string' || !UUID_PATTERN.test(projectId)) {
+      throw new BadRequestException('Choose the project these packets belong to.');
+    }
+    if (typeof auditDate !== 'string' || !auditDate) throw new BadRequestException('auditDate is required.');
 
     /**
-     * The region ceiling, per matched branch, before the first file is filed.
+     * The region ceiling, per matched branch, before anything is stored — so an out-of-region
+     * packet in the set is still an immediate 403 for the whole upload, exactly as when the filing
+     * ran here. Matching reads only the file NAMES (one query), so it costs the request nothing
+     * that matters; the worker matches again and re-checks against the regions captured with the
+     * job before it files.
      *
      * `GET /documents/project/:projectId` narrows what a region-scoped desk may READ of a
-     * project's packets, and the three project-branch reads in this file each assert the same
-     * boundary — this route, which CREATES those packets, asserted nothing. Matched branches
-     * rather than the project as a whole (`assertProjectInScope`) because the day's filing is a
-     * per-branch operation: a national project legitimately spans regions, and refusing it
-     * wholesale would stop the in-region filing this route exists to do. Staged, like every other
-     * document boundary — see `region-guard.service.ts` on why these six roll out behind
-     * `security.regionScope.mode`.
+     * project's packets; this route CREATES those packets. Matched branches rather than the
+     * project as a whole (`assertProjectInScope`) because the day's filing is a per-branch
+     * operation: a national project legitimately spans regions. Staged, like every other document
+     * boundary — see `region-guard.service.ts` on `security.regionScope.mode`.
      */
+    const { matches } = await this.documentService.matchPdfsToBranches(projectId, auditDate, files.map((f) => f.originalname));
     for (const m of matches) {
       const region = await this.documentService.resolveProjectBranchRegion(m.projectBranchId);
       await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:uploadGeneratedBatch');
     }
 
-    const byName = new Map(files.map((f) => [f.originalname, f]));
-    const created: Array<{ documentId: string; fileName: string; branchName: string }> = [];
-    const failed: Array<{ fileName: string; reason: string }> = [];
-
-    // Only files that matched exactly one branch are stored. An unmatched file is
-    // returned to the operator rather than filed against a guessed branch — a
-    // misfiled packet sends one branch's customers to another branch's assayer.
-    for (const m of matches) {
-      const file = byName.get(m.fileName);
-      if (!file) continue;
-      try {
-        // The one route in the file that saved straight to storage with no type check at all —
-        // every other upload route calls this (see the identical note on `uploadExcelReport`
-        // just below and `POST /customer-master/upload`). Size is already capped at the multer
-        // layer here (`documentBatchUploadMulterOptions`); this closes the type gap, scoped to
-        // what a generated audit packet can actually be. A rejected file lands in `failed` with
-        // a clear reason, exactly like any other per-file failure in this loop — it does not
-        // abort the rest of the batch.
-        assertUploadAllowed({
-          contentType: file.mimetype,
-          size: file.size,
-          fileName: file.originalname,
-          allowed: SCAN_UPLOAD_TYPES,
-        });
-        // Streamed from the temp file rather than read into memory: the S3 engine encrypts a stream
-        // part by part, so storing a 50 MB packet costs a few MB of buffer, not two copies of it.
-        const savedPath = await this.storage.saveFile(file.originalname, createReadStream(file.path), file.mimetype, file.size);
-        const doc = await this.documentService.create({
-          assessmentId: m.projectBranchId,
-          fileName: file.originalname,
-          filePath: savedPath,
-          fileSize: file.size,
-          mimeType: file.mimetype,
-          type: DocumentType.PRE_FIELD_AUDIT_PDF,
-          customerMasterVersionId,
-        }, req.user.id);
-        created.push({ documentId: doc.id, fileName: file.originalname, branchName: m.branchName });
-      } catch (err) {
-        failed.push({ fileName: file.originalname, reason: (err as Error).message });
-      }
-    }
-
-    return {
-      success: true,
-      data: { created, unmatched, failed, branchesWithoutFile },
-      message:
-        `Filed ${created.length} of ${files.length} packet(s).` +
-        (unmatched.length ? ` ${unmatched.length} could not be matched to a branch.` : '') +
-        (branchesWithoutFile.length ? ` ${branchesWithoutFile.length} scheduled branch(es) still have no packet.` : ''),
-    };
+    /**
+     * Accepted, not done: the set is stored (each file under its own key) and a background job
+     * recorded, and the answer is 202 with that job. Scanning, type-checking and filing each packet
+     * happen in the worker (`GeneratedDocumentBatchJob`), one file at a time with per-file progress;
+     * which packets were filed, which could not be placed and why is the job's result, read back
+     * from `GET /jobs` — so a refresh, or a closed tab, loses nothing.
+     */
+    return this.backgroundJobs.create({
+      kind: GENERATED_DOCUMENT_BATCH_KIND,
+      actor: jobActorFrom(req),
+      regions: assignedRegions(req.user),
+      scope: { type: 'PROJECT', id: projectId },
+      params: { projectId, auditDate, customerMasterVersionId },
+      globalScope: scope,
+      files: files.map((f) => ({
+        path: f.path,
+        buffer: f.path ? undefined : f.buffer,
+        originalName: f.originalname,
+        mimeType: f.mimetype,
+        size: f.size,
+      })),
+    });
   }
 
   /**
@@ -1420,6 +1754,7 @@ export class DocumentController {
     const data = await this.dispatchJobs.enqueueBatch(
       { documentIds: body.documentIds, branchEmail: body.branchEmail },
       jobActorFrom(req),
+      assignedRegions(req.user),
     );
     return {
       success: true,
@@ -1533,7 +1868,12 @@ export class DocumentController {
   // belong to the OCR boundary, which receives results; nothing is submitted to it here.
   @RequirePermissions('document:edit:organization')
   @ApiOperation({ summary: 'Mark an audited PDF as sent to External OCR application' })
-  async sendToExternalOcr(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async sendToExternalOcr(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.assertDocumentRegion(id, scope, 'document:sendToExternalOcr');
     // Was a raw `assessmentRepository.update(...)` alongside a status write — the same
     // hand-rolled pattern that produced the cross-view drift repaired earlier. The service
     // owns the transition: it validates the source status, stamps the transport trail, writes
@@ -1652,7 +1992,10 @@ export class DocumentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: AssignDataEntryRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.assertDocumentRegion(id, scope, 'document:assignDataEntry');
+    // The service refuses an assignee who is not an active desk member — see assignForDataEntry.
     const doc = await this.documentService.assignForDataEntry(id, body.assigneeId, req.user.id);
     return doc;
   }
@@ -1660,8 +2003,14 @@ export class DocumentController {
   @Post(':id/complete-data-entry')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Hand a processed packet back to the data entry head' })
-  async completeDataEntry(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    const doc = await this.documentService.completeDataEntry(id, req.user.id);
+  async completeDataEntry(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.assertDocumentRegion(id, scope, 'document:completeDataEntry');
+    // Only the member it was delegated to, or a desk head, may hand it back — the service decides.
+    const doc = await this.documentService.completeDataEntry(id, req.user.id, roleNames(req?.user?.roles));
     return doc;
   }
 }

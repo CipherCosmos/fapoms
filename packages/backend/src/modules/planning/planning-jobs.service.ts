@@ -9,7 +9,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import type { Job, JobOptions, Queue } from 'bull';
+import type { Queue } from 'bull';
 
 import {
   PLANNING_JOB,
@@ -22,12 +22,12 @@ import {
   ProjectCandidatesJobData,
 } from './planning-jobs.contract';
 import {
-  IN_FLIGHT_SCAN_LIMIT,
   QueuedJobEnvelope,
   QueuedJobStatus,
   assertJobVisibleTo,
   dedupeKeyFor,
   describeJob,
+  findInFlightDuplicate,
 } from '../../infrastructure/queue/queued-job';
 
 /** What a POST returns: the id to poll, and whether it joined a run already in flight. */
@@ -48,8 +48,9 @@ export class PlanningJobsService {
 
   constructor(@InjectQueue(PLANNING_QUEUE) private readonly queue: Queue) {}
 
-  async enqueueCoveragePlan(projectId: string, scope: ScopeSnapshot, requestedBy: string): Promise<EnqueueResult> {
-    const params = { projectId, scope: scope ?? null };
+  async enqueueCoveragePlan(projectId: string, scope: ScopeSnapshot, requestedBy: string, startDate?: string | null): Promise<EnqueueResult> {
+    // The start date is part of the fingerprint: a plan for another start day is another run.
+    const params = { projectId, scope: scope ?? null, ...(startDate ? { startDate } : {}) };
     return this.add<CoveragePlanJobData>(PLANNING_JOB.COVERAGE_PLAN, {
       ...params,
       requestedBy,
@@ -57,8 +58,8 @@ export class PlanningJobsService {
     });
   }
 
-  async enqueueProjectCandidates(projectId: string, scope: ScopeSnapshot, requestedBy: string): Promise<EnqueueResult> {
-    const params = { projectId, scope: scope ?? null };
+  async enqueueProjectCandidates(projectId: string, scope: ScopeSnapshot, requestedBy: string, startDate?: string | null): Promise<EnqueueResult> {
+    const params = { projectId, scope: scope ?? null, ...(startDate ? { startDate } : {}) };
     return this.add<ProjectCandidatesJobData>(PLANNING_JOB.PROJECT_CANDIDATES, {
       ...params,
       requestedBy,
@@ -100,58 +101,24 @@ export class PlanningJobsService {
     return describeJob(job, { includeResult: true });
   }
 
+  /**
+   * Adds a job unless an identical one from the same account is still queued or running — the
+   * shared rule (`findInFlightDuplicate`), the same one `BackgroundJobsService.enqueueTracked` applies
+   * to the planning WRITE queue.
+   *
+   * These three are deliberately NOT tracked on a `background_jobs` row: each is a read the page
+   * starts by itself (opening the coverage modal, switching to the day tab, toggling a project chip)
+   * and awaits through the poll, so a row per run would fill the Jobs tray with noise. The candidates
+   * report has no web caller at all.
+   */
   private async add<T extends QueuedJobEnvelope>(name: PlanningJobName, data: T): Promise<EnqueueResult> {
-    return enqueueOnce(this.queue, name, data, PLANNING_JOB_OPTIONS, this.logger);
-  }
-}
-
-/**
- * Adds a job unless an identical one from the same account is still queued or running.
- *
- * Shared by the read queue (`PlanningJobsService`) and the write queue (`PlanningWriteJobsService`)
- * so the rule — join an unfinished duplicate, never a finished one, and never let the scan block the
- * enqueue — is written once for planning rather than once per queue.
- */
-export async function enqueueOnce<T extends QueuedJobEnvelope>(
-  queue: Queue,
-  name: string,
-  data: T,
-  options: JobOptions,
-  logger: Logger,
-): Promise<EnqueueResult> {
-  const inFlight = await findInFlight(queue, name, data.dedupeKey, logger);
-  if (inFlight) {
-    logger.log(`Joining in-flight ${name} job ${inFlight.id} rather than starting a duplicate.`);
-    return { jobId: String(inFlight.id), deduplicated: true };
-  }
-
-  const job = await queue.add(name, data, options);
-  logger.log(`Enqueued ${name} job ${job.id}.`);
-  return { jobId: String(job.id), deduplicated: false };
-}
-
-/**
- * Finds an identical request that has not finished yet.
- *
- * Only unfinished states are considered. Matching a *completed* job would be worse than no
- * deduplication at all: for the retention window every re-request would return the first run's
- * answer, and an operator who reassigned a branch and pressed refresh would be told nothing
- * had changed.
- *
- * A failure here is not allowed to block the enqueue. The scan is an optimisation — the worst
- * consequence of skipping it is one redundant run — whereas refusing to accept the work
- * because a list read failed would turn a Redis hiccup into an outage of the endpoint.
- */
-async function findInFlight(queue: Queue, name: string, dedupeKey: string, logger: Logger): Promise<Job | null> {
-  try {
-    const jobs = await queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
-    return (
-      jobs.find(
-        (j) => j?.name === name && (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
-      ) ?? null
-    );
-  } catch (err) {
-    logger.warn(`Could not scan for an in-flight ${name} job (${(err as Error).message}); enqueuing anyway.`);
-    return null;
+    const inFlight = await findInFlightDuplicate(this.queue, name, data.dedupeKey, this.logger);
+    if (inFlight) {
+      this.logger.log(`Joining in-flight ${name} job ${inFlight.id} rather than starting a duplicate.`);
+      return { jobId: String(inFlight.id), deduplicated: true };
+    }
+    const job = await this.queue.add(name, data, PLANNING_JOB_OPTIONS);
+    this.logger.log(`Enqueued ${name} job ${job.id}.`);
+    return { jobId: String(job.id), deduplicated: false };
   }
 }

@@ -156,4 +156,32 @@ describe('assayer DTO identity validation', () => {
   it('skips null the same way (@IsOptional covers both null and absent)', async () => {
     await expect(runUpdate({ panNumber: null as unknown as string })).resolves.toBeDefined();
   });
+
+  /**
+   * The account number had no rule at all — "there is no checkable shape". It has one now: 9 to 18
+   * digits once separators are gone. Blank still clears; a masked copy passes here so the masked-
+   * value guard can refuse it by name.
+   */
+  describe('bank account number', () => {
+    it.each(['123456789012', '1234 5678 9012', '1234-5678-9012', '123456789', '123456789012345678'])(
+      'accepts %s on create and update', async (account) => {
+        const created = (await refusalOf(runCreate({ firstName: 'A', lastName: 'B', state: 'Kerala', bankAccountNumber: account }))) ?? [];
+        expect(created.filter((m) => /account number/i.test(m))).toEqual([]);
+        expect(await refusalOf(runUpdate({ bankAccountNumber: account }))).toBeNull();
+      },
+    );
+
+    it.each(['12345678', '1234567890123456789', 'ABCD12345678', 'Ramesh Kumar'])(
+      'refuses %s, in words a clerk can act on', async (account) => {
+        const messages = await refusalOf(runUpdate({ bankAccountNumber: account }));
+        expect(messages).toEqual([expect.stringMatching(/9 to 18 digits/)]);
+      },
+    );
+
+    it('lets a blank clear the field, and leaves a masked copy to the masked-value guard', async () => {
+      expect(await refusalOf(runUpdate({ bankAccountNumber: '' }))).toBeNull();
+      expect(await refusalOf(runUpdate({ bankAccountNumber: '••••••••9012' }))).toBeNull();
+    });
+  });
 });
+

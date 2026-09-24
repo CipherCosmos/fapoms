@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { rbacPrincipalCacheKey } from './auth.service';
+import { RBAC_GRANTS_VERSION, rbacPrincipalCacheKey } from './auth.service';
 
 /**
  * A REVOKED ROLE MUST STOP WORKING ON THE NEXT REQUEST, NOT WHEN A TTL HAPPENS TO EXPIRE.
@@ -26,7 +26,7 @@ import { rbacPrincipalCacheKey } from './auth.service';
  * held constant and no cache flush anywhere, `POST /assignments` answered 400 (allowed, bad body),
  * then 403 the instant OPERATIONS was swapped for AUDITOR, then 400 again the instant it was put
  * back. A region change narrowed the same token's branch list from 10 to 8 on the very next
- * request. See docs/verification-2026-09-10-open-findings.md.
+ * request (verified 2026-09-10).
  *
  * ## What is deliberately not claimed
  *
@@ -106,7 +106,7 @@ describe('a change to what a principal holds takes effect on the next request', 
     });
 
     it('keys the cache per user, so one invalidation cannot miss and one cannot over-reach', () => {
-      expect(rbacPrincipalCacheKey('abc')).toBe('rbac:principal:abc');
+      expect(rbacPrincipalCacheKey('abc')).toBe(`rbac:principal:${RBAC_GRANTS_VERSION}:abc`);
       expect(rbacPrincipalCacheKey('abc')).not.toBe(rbacPrincipalCacheKey('abd'));
     });
 

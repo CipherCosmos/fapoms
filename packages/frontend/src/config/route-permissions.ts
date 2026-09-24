@@ -65,19 +65,20 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
   },
   {
     /**
-     * The support desk — the people who ANSWER the tickets, not the business owner. Since the
-     * DEVELOPER split (2026-09-05) that is DEVELOPER and PRODUCT_SUPPORT, and ADMIN loses the
-     * page: running the business does not include working the product-support queue. (A
-     * developer also reaches it through implication — DEVELOPER ⇒ PRODUCT_SUPPORT — but is
-     * named anyway so this table reads as the complete answer.) The header launcher is gated
-     * on this same entry (Header.tsx); sending feedback stays open to everyone — only browsing
-     * the channel is restricted. Mirrors FEEDBACK_TEAM_ROLES on the backend.
+     * Support has two sides on one page (FeedbackPage.tsx). The REPORTING side — send a bug, idea
+     * or question and follow your own requests — is for every signed-in person, and the backend
+     * already served it to them (`@AnyAuthenticated` on create/mine/thread/messages). The
+     * RESOLUTION side — the queue, triage, resolve, internal notes — is the desk's alone:
+     * FEEDBACK_TEAM_ROLES (DEVELOPER, PRODUCT_SUPPORT) on the backend, and the page switches views
+     * on the same list.
      *
-     * No permission: the backend gates the triage queue on FEEDBACK_TEAM_ROLES by name and
-     * declares nothing a role could be granted, so there is nothing here to honour yet.
+     * 2026-09-25, owner: "normal people don't able to use the support at all". This entry used to
+     * admit only the desk, and the header button, the sidebar entry and the page all read it —
+     * so gating the desk here hid the reporting side from everybody else as well.
      */
     path: '/feedback',
-    allowedRoles: [SystemRole.DEVELOPER, SystemRole.PRODUCT_SUPPORT],
+    allowedRoles: [],
+    anyAuthenticated: true,
   },
   {
     // The command centre this page draws asks for planning:view:organization.
@@ -112,11 +113,12 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
      * `/executive-map` stays open because its own content (`GET /planning/command-center`) fills
      * completely; only a client filter is short. This page's content is the project.
      *
-     * `@RolesFallbackPermissions('project:view:organization')` on `ProjectController.findAll`
-     * restores it; the permission belongs back here in the same change.
+     * `ProjectController.findAll` now carries `@RolesFallbackPermissions('project:view:organization')`,
+     * so the picker fills for a custom role — which therefore needs BOTH grants to be offered this.
      */
     path: '/planning',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['PLANNING:VIEW:ORGANIZATION', 'PROJECT:VIEW:ORGANIZATION'],
   },
   {
     // The Operations Inbox: every assignment awaiting a desk decision (call tasks for
@@ -175,27 +177,15 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
   },
   {
     /**
-     * The workforce console. The permission is OFF, and that is a correction, not a retreat.
-     *
-     * The line that stood here said "GET /hr/workforce asks for assayer:view:organization and
-     * answers a custom role holding it, so the web app must too". Half of that was true. The route
-     * (`modules/assayer/hr.controller.ts`) does declare `assayer:view:organization` — but its
-     * `@Roles(ADMIN, OPERATIONS)` carries neither `@AllowPermissionFallback()` nor
-     * `@RolesFallbackPermissions(...)`, so `RolesGuard` hard-denies every unrecognised role before
-     * it ever looks at a permission. Measured against a custom role holding exactly
-     * ASSAYER:VIEW:ORGANIZATION: `GET /hr/workforce` → 403.
-     *
-     * So this table was opening a page whose data is refused — the one thing the type's own note
-     * says it must not do. What the operator got was worse than a closed door: "The workforce
-     * figures could not be loaded just now. An unknown problem occurred. Please try again." —
-     * honest that something failed, wrong about what, and an invitation to retry forever.
-     *
-     * ONE LINE fixes it properly, and it is not in this workstream's files: add
-     * `@AllowPermissionFallback()` beside the `@RequirePermissions('assayer:view:organization')` on
-     * `HrController.workforce`. Restore this key in the same change.
+     * The workforce console. `GET /hr/workforce` declares assayer:view:organization AND carries
+     * `@AllowPermissionFallback()` (HrController.workforce), so a role built in Admin → Roles
+     * holding that grant loads it — this entry names the same permission. The permission was off
+     * for a while because the route refused every custom role; `custom-role-page-parity.spec.ts`
+     * (backend) now pins both ends together.
      */
     path: '/hr',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
   {
     /**
@@ -352,6 +342,20 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [SystemRole.DEVELOPER],
   },
   {
+    /**
+     * The approver's list of joiners awaiting approval before training (`/hr/approvals`).
+     *
+     * ADMIN by name, and a custom approver role by permission: the approval routes and the queue
+     * accept ASSAYER:APPROVE, and the section's own data (`GET /hr/workforce`), the person's file
+     * (`GET /assayers/:id`) and the dossier (view + approve) now honour a custom role too — so the
+     * page this opens can load. Both grants are needed (the dossier asks for both).
+     * OPERATIONS is left out on purpose: HR prepares the file, somebody above HR decides it.
+     */
+    path: '/hr/approvals',
+    allowedRoles: [SystemRole.ADMIN],
+    requiredPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
+  },
+  {
     // The approve side of the destructive-action two-person rule: a DEVELOPER requests a data
     // wipe in the Danger Zone, an ADMIN decides it here. Listed as ADMIN's page — developers
     // are refused the approve/reject ACTIONS by design, but the route gate cannot express that:
@@ -444,11 +448,11 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // Permission off, mirroring `/data-entry` — a redirect must never outlive its target's gate.
   },
   {
-    // A redirect into `/hr/roster`, so it carries what `/hr` carries — which since this change is
-    // roles only. `GET /assayers` declares `assayer:view:organization` and offers no fallback
-    // (`modules/assayer/**`), so admitting a custom role here sent it to a roster that answers 403.
+    // A redirect into `/hr/roster`, so it carries what `/hr` carries. `GET /assayers` now honours
+    // the permission fallback (field-level visibility still fails closed for a custom role).
     path: '/assayers',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
 ];
 
@@ -554,6 +558,10 @@ const HOME_BY_ROLE: [SystemRole, string][] = [
   [SystemRole.OPERATIONS, '/executive-map'], // live pipeline overview
   [SystemRole.DESK, '/documents'],           // packets out, packets back
   [SystemRole.DESK_OPERATOR, '/data-entry'], // their share of the desk's queue
+  // The support desk is PRODUCT_SUPPORT's job itself. A home here rather than a place in
+  // LANDING_ORDER, because /feedback is open to everyone (the reporting side) and would otherwise
+  // become the landing page of any role without an operational page.
+  [SystemRole.PRODUCT_SUPPORT, '/feedback'],
 ];
 
 /**
@@ -584,10 +592,6 @@ const LANDING_ORDER: string[] = [
   '/zones',
   '/users',
   '/admin/settings',
-  // The support desk: for PRODUCT_SUPPORT this is the job itself, and before this entry the
-  // role fell through to its own notification inbox — a page about the work instead of the work.
-  // Placed after the operational pages so no role that can open one of those lands here instead.
-  '/feedback',
   '/notifications',
   '/settings',
 ];

@@ -243,10 +243,10 @@ export const Holidays: React.FC = () => {
             <>
               {/* Most of a year's calendar is last year's calendar with new dates. Retyping
                   forty holidays each January is where the typos and the omissions came from. */}
-              <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
+              <button onClick={() => setShowCopy(true)} title={`Copy last year's holidays into ${yearFilter}`} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                 <CopyPlus size={14} /> Copy {yearFilter - 1}’s holidays
               </button>
-              <button onClick={() => handleOpenCreate()} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
+              <button onClick={() => handleOpenCreate()} title="Add a new holiday to the calendar" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                 <Plus size={14} /> Add Holiday
               </button>
             </>
@@ -260,10 +260,10 @@ export const Holidays: React.FC = () => {
       {view === 'calendar' ? (
         <div className="glass-card" style={{ padding: '18px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <button onClick={() => setMonthCursor((c) => new Date(c.getFullYear(), c.getMonth() - 1, 1))}
+            <button onClick={() => setMonthCursor((c) => new Date(c.getFullYear(), c.getMonth() - 1, 1))} title="Show the previous month"
               className="btn btn-secondary" style={{ padding: '6px 10px' }}><ChevronLeft size={14} /></button>
             <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>{MONTH_NAMES[monthCursor.getMonth()]} {monthCursor.getFullYear()}</div>
-            <button onClick={() => setMonthCursor((c) => new Date(c.getFullYear(), c.getMonth() + 1, 1))}
+            <button onClick={() => setMonthCursor((c) => new Date(c.getFullYear(), c.getMonth() + 1, 1))} title="Show the next month"
               className="btn btn-secondary" style={{ padding: '6px 10px' }}><ChevronRight size={14} /></button>
           </div>
 
@@ -337,7 +337,7 @@ export const Holidays: React.FC = () => {
               {/* An empty year is exactly the moment the copy is wanted, so offer it here
                   rather than making the user find the button in the toolbar. */}
               {canManage && (
-                <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
+                <button onClick={() => setShowCopy(true)} title={`Copy last year's holidays into ${yearFilter} instead of typing them`} className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                   <CopyPlus size={14} /> Copy {yearFilter - 1}'s holidays into {yearFilter}
                 </button>
               )}
@@ -347,12 +347,12 @@ export const Holidays: React.FC = () => {
             <table className="table" style={{ width: '100%', minWidth: '640px', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
-                  <th style={{ padding: '10px' }}>Date</th>
-                  <th style={{ padding: '10px' }}>Holiday Name</th>
-                  <th style={{ padding: '10px' }}>Type</th>
-                  <th style={{ padding: '10px' }}>Client Scope</th>
-                  <th style={{ padding: '10px' }}>Applicable States</th>
-                  {canManage && <th style={{ padding: '10px', textAlign: 'right' }}>Actions</th>}
+                  <th title="Calendar date of the holiday" style={{ padding: '10px' }}>Date</th>
+                  <th title="Name of the holiday" style={{ padding: '10px' }}>Holiday Name</th>
+                  <th title="Whether this is a bank, national or state holiday" style={{ padding: '10px' }}>Type</th>
+                  <th title="Which client's calendar this holiday belongs to" style={{ padding: '10px' }}>Client Scope</th>
+                  <th title="States where this holiday is observed" style={{ padding: '10px' }}>Applicable States</th>
+                  {canManage && <th title="Edit or delete this holiday" style={{ padding: '10px', textAlign: 'right' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -410,8 +410,8 @@ export const Holidays: React.FC = () => {
         <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Holiday Record' : 'Add New Holiday'} width="500px" closeIcon={<X size={18} />} asForm onSubmit={handleSubmit}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={submitting}>{submitting ? 'Saving…' : 'Save Holiday'}</button>
+              <button type="button" onClick={() => setShowModal(false)} title="Close without saving" className="btn btn-secondary" disabled={submitting}>Cancel</button>
+              <button type="submit" title={editingId ? 'Save changes to this holiday' : 'Add this holiday to the calendar'} className="btn btn-primary" disabled={submitting}>{submitting ? 'Saving…' : 'Save Holiday'}</button>
             </div>
           }
         >
@@ -431,14 +431,14 @@ export const Holidays: React.FC = () => {
 
             <div>
               <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Title</label>
-              <input type="text" required placeholder="e.g. Maharashtra Day" value={name} onChange={(e) => setName(e.target.value)}
+              <input type="text" required placeholder="e.g. Maharashtra Day" value={name} onChange={(e) => setName(e.target.value)} title="Type the holiday name as it should appear on the calendar"
                 style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Date</label>
-                <input type="date" required value={date} onChange={(e) => setDate(e.target.value)}
+                <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} title="Pick the calendar date of this holiday"
                   style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </div>
               <div>
@@ -458,14 +458,14 @@ export const Holidays: React.FC = () => {
                   Applicable States <span style={{ fontWeight: 400 }}>(at least one — matching ignores case, so branch data spelled differently still matches)</span>
                 </label>
                 <input
-                  type="text" placeholder="Search states…" value={stateSearch} onChange={(e) => setStateSearch(e.target.value)}
+                  type="text" placeholder="Search states…" value={stateSearch} onChange={(e) => setStateSearch(e.target.value)} title="Type to filter the state list below"
                   style={{ width: '100%', padding: '7px 9px', marginBottom: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-xs)' }}
                 />
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '150px', overflowY: 'auto', padding: '8px', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                   {filteredStateOptions.map((st) => {
                     const isSelected = selectedStates.includes(st.value);
                     return (
-                      <button type="button" key={st.value} onClick={() => toggleState(st.value)}
+                      <button type="button" key={st.value} onClick={() => toggleState(st.value)} title={isSelected ? `Remove ${st.label} from this holiday` : `Apply this holiday to ${st.label}`}
                         style={{ padding: '4px 8px', borderRadius: '4px', fontSize: 'var(--text-2xs)', border: 'none', cursor: 'pointer', backgroundColor: isSelected ? 'var(--accent)' : 'var(--bg-tertiary)', color: isSelected ? 'var(--on-accent)' : 'var(--text-primary)' }}>
                         {isSelected ? `✓ ${st.label}` : st.label}
                       </button>
@@ -634,8 +634,8 @@ const CopyLastYearModal: React.FC<{
               Creating {progress.done} of {progress.total}…
             </span>
           )}
-          <button type="button" onClick={onClose} className="btn btn-secondary" disabled={!!progress}>Cancel</button>
-          <button type="button" onClick={run} className="btn btn-primary" disabled={!!progress || selected.length === 0}>
+          <button type="button" onClick={onClose} title="Close without copying any holidays" className="btn btn-secondary" disabled={!!progress}>Cancel</button>
+          <button type="button" onClick={run} title={`Create ${selected.length} selected holidays in ${targetYear}`} className="btn btn-primary" disabled={!!progress || selected.length === 0}>
             {progress ? `${progress.done} of ${progress.total}…` : `Create ${selected.length} holiday${selected.length === 1 ? '' : 's'}`}
           </button>
         </div>
@@ -666,10 +666,10 @@ const CopyLastYearModal: React.FC<{
         ) : (
           <>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', fontSize: 'var(--text-xs)' }}>
-              <button type="button" disabled={!!progress}
+              <button type="button" disabled={!!progress} title="Tick every holiday that can be copied"
                 onClick={() => setChosen(new Set(copyable.map((r) => r.source.id)))}
                 className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px' }}>Select all</button>
-              <button type="button" disabled={!!progress}
+              <button type="button" disabled={!!progress} title="Untick every holiday"
                 onClick={() => setChosen(new Set())}
                 className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px' }}>Select none</button>
               <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>

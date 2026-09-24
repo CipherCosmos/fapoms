@@ -9,7 +9,8 @@
  * describes, so a secret in a path has to be taken out before the path is written anywhere.
  *
  * Two kinds of secret are removed:
- *  - path segments that ARE a bearer credential (the registration token, a document download token);
+ *  - path segments that ARE a bearer credential (the registration token, a staff password-setup
+ *    token, a document download token);
  *  - query parameters that carry an identity number or a token (`identifier-check` puts a full PAN
  *    and Aadhaar in its query string).
  *
@@ -19,6 +20,9 @@
 const SECRET_PATH_SEGMENTS: Array<[RegExp, string]> = [
   [/(\/public\/registration\/)[^/?#]+/gi, '$1[token]'],
   [/(\/register\/)[^/?#]+/gi, '$1[token]'],
+  // A staff password-setup/reset link: until spent it IS that person's password. Covers the page
+  // (`/account-setup/<token>`) and the API it calls (`/api/v1/public/account-setup/<token>`).
+  [/(\/account-setup\/)[^/?#]+/gi, '$1[token]'],
 ];
 
 const SECRET_QUERY_KEYS = new Set([

@@ -19,6 +19,7 @@ import { BypassableRule, INACTIVE_BYPASS, DEFAULT_BYPASS_HOURS } from '@fapoms/s
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   useCurrentPermissions: () => ['configuration:view:platform', 'configuration:edit:platform'],
 }));

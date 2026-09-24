@@ -2,6 +2,7 @@ import React from 'react';
 import { Edit2, Trash2, PlayCircle } from 'lucide-react';
 import { isOnboardingStage, nextAssayerLifecycleStates } from '@fapoms/shared';
 import type { RosterPerson } from '../roster-filters';
+import { canDeleteAssayers, useCurrentRoles } from '../../../hooks/useCurrentRoles';
 
 export interface RosterRowActionsProps {
   person: RosterPerson;
@@ -23,7 +24,12 @@ export const RosterRowActions: React.FC<RosterRowActionsProps> = ({
   onDelete,
 }) => {
   const isJoining = isOnboardingStage(person.lifecycleStatus);
-  const legalNextStates = nextAssayerLifecycleStates(person.lifecycleStatus);
+  // `DELETE /assayers/:id` is ADMIN by name (DEVELOPER through the hierarchy) — narrower than
+  // `canManage`, which admits OPERATIONS and custom roles holding assayer:edit. Gating the bin on
+  // `canManage` alone offered them a button whose click could only 403.
+  const roles = useCurrentRoles();
+  const canDelete = canManage && canDeleteAssayers(roles);
+  const legalNextStates = nextAssayerLifecycleStates(person.lifecycleStatus, person.unavailableReason);
 
   return (
     <div
@@ -103,7 +109,7 @@ export const RosterRowActions: React.FC<RosterRowActionsProps> = ({
       )}
 
       {/* Destructive Delete: Capability-gated, visually separated with danger tone */}
-      {canManage && (
+      {canDelete && (
         <button
           type="button"
           aria-label={`Delete ${person.displayName}`}

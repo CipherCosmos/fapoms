@@ -316,7 +316,7 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     `the client line totals up: ${taxable} + GST ${tax} - TDS ${cTds} = ${expectedEntTotal}, stored ${entTotal}`);
 
   // ── 9. segregation of duties ────────────────────────────────────────────────────────────────
-  const bookerApprove = await billingRun(exec, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const bookerApprove = await billingRun(exec, '/billing-engine/payouts/approve', { payableIds: [pay.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   let [p2] = await q(`SELECT status FROM assayer_payables WHERE id=$1`, [pay.id]);
   // The refusal must be ABOUT separation of duties. A payable refused for missing bank details
   // would leave the same PENDING row and read as a pass, which is how this check nearly lied.
@@ -329,13 +329,29 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     `whoever booked the work cannot approve its payout — refused as a duties conflict: "${bookerReason}" `
     + `(${describeJobOutcome(bookerApprove)})`);
 
-  const approve = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const approve = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   [p2] = await q(`SELECT status, approved_by, destination_verified_at, destination_verified_source
                     FROM assayer_payables WHERE id=$1`, [pay.id]);
   record('SOD-02', p2.status === 'APPROVED',
     `a different person can approve it (${describeJobOutcome(approve)}, status ${p2.status})`);
   record('FIN-01', p2.destination_verified_at === null ? p2.destination_verified_source === null : !!p2.destination_verified_source,
     `payout destination evidence is honest: verified_at=${p2.destination_verified_at ? 'set' : 'NULL'}, source=${p2.destination_verified_source ?? 'NULL'}`);
+
+  // ── 9b. the HOD's final approval (2026-09-24) ──────────────────────────────────────────────
+  // Approved by the office is not payable: the payment is refused until the HOD approves. The HOD
+  // here is admin2 — an ADMIN who is not the office approver (admin).
+  const early = await billingRun(admin2, '/billing-engine/payouts/pay',
+    { payableIds: [pay.id], paymentReference: `${PAY_REF}-EARLY`, method: 'NEFT' });
+  let [ph] = await q(`SELECT status, hod_approved_at FROM assayer_payables WHERE id=$1`, [pay.id]);
+  record('HOD-01', ph.status === 'APPROVED' && !ph.hod_approved_at && /Waiting for HOD approval/.test(refusalOf(early)),
+    `an office-approved payout cannot be paid before the HOD approves it: "${refusalOf(early).slice(0, 90)}"`);
+  const selfHod = await call(admin.token, 'POST', `/billing-engine/final-approval/payouts/${pay.id}/approve`, {});
+  record('HOD-02', selfHod.status === 409,
+    `the office approver cannot also give the final approval (HTTP ${selfHod.status})`);
+  const hod = await call(admin2.token, 'POST', `/billing-engine/final-approval/payouts/${pay.id}/approve`, {});
+  [ph] = await q(`SELECT status, hod_approved_at, hod_approved_by FROM assayer_payables WHERE id=$1`, [pay.id]);
+  record('HOD-03', hod.status === 200 && !!ph.hod_approved_at && ph.hod_approved_by === admin2.id,
+    `a different person gives the final approval (HTTP ${hod.status}, hod_approved_by=${ph.hod_approved_by === admin2.id ? 'admin2' : ph.hod_approved_by})`);
 
   const approverPays = await billingRun(admin, '/billing-engine/payouts/pay',
     { payableIds: [pay.id], paymentReference: PAY_REF, method: 'NEFT' });
@@ -362,7 +378,7 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
   record('FIN-02', payments[0].c === 1 && !!dup.result && dup.accepted?.deduplicated === false,
     `the same payment reference twice is one payment, not two (${describeJobOutcome(dup)}, rows=${payments[0].c}, total=${payments[0].total})`);
 
-  const approveAgain = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const approveAgain = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   const [{ c: approvals }] = await q(
     `SELECT count(*)::int c FROM audit_events
       WHERE entity_id=$1 AND event_type='PAYABLE_APPROVED' AND outcome='SUCCESS'`, [pay.id]);

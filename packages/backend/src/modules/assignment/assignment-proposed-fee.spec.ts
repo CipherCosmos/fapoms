@@ -134,16 +134,20 @@ describe('the fee is recorded the same way whichever path created it', () => {
    */
   it('re-prices a reassignment for whoever is now doing the job', () => {
     expect(source).toContain('const repriced = forPricing ? await this.repriceForAssayer(forPricing, newAssayer) : null;');
-    for (const column of ['proposedFee', 'agreedFee', 'quotedBaseFee', 'quotedTravelFee', 'quotedDistanceKm']) {
-      expect(source).toMatch(new RegExp(`assignment\\.${column} = repriced\\.`));
+    // `priced` is the repriced quote, or its base-only twin when the new assayer's day already
+    // carries the journey (travel once per assayer per day, E2).
+    expect(source).toContain('const priced = travelAlreadyCharged && repriced.baseOnly ? repriced.baseOnly : repriced;');
+    for (const column of ['proposedFee', 'agreedFee', 'quotedBaseFee', 'quotedTravelFee']) {
+      expect(source).toMatch(new RegExp(`assignment\\.${column} = priced\\.`));
     }
+    expect(source).toMatch(/assignment\.quotedDistanceKm = repriced\./);
   });
 
   it('prices the reassignment before opening the transaction', () => {
     // The re-price reaches an outside road router. Holding a pooled connection across a network
     // call is how a slow dependency becomes pool exhaustion — create() routes outside one too.
     const priceAt = source.indexOf('const repriced = forPricing');
-    const txAt = source.indexOf('assignment.agreedFee = repriced.total');
+    const txAt = source.indexOf('assignment.agreedFee = priced.total');
     expect(priceAt).toBeGreaterThan(-1);
     expect(priceAt).toBeLessThan(txAt);
   });

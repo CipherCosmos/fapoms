@@ -313,7 +313,6 @@ describe('response envelope boundary — no controller hand-rolls the envelope o
     'src/modules/document/document.controller.ts :: receiveDocument',
     'src/modules/document/document.controller.ts :: sendToExternalOcr',
     'src/modules/document/document.controller.ts :: uploadExcelReport',
-    'src/modules/document/document.controller.ts :: uploadGeneratedBatch',
     'src/modules/feedback/feedback.controller.ts :: queue',
     'src/modules/geo/geo.controller.ts :: autocomplete',
     'src/modules/holiday/holiday.controller.ts :: findAll',

@@ -88,3 +88,55 @@ describe('the phone registration form', () => {
     expect(applicationRef(application.id)).toBe('APP-5854C1C1');
   });
 });
+
+/**
+ * The account number is typed twice on this form. What is already saved counts as confirmed — it
+ * was typed twice when it was saved — so resuming does not demand it again; a number typed now does.
+ */
+describe('the account-number confirmation', () => {
+  const app = (fields: Record<string, string>) => ({ extendedProfile: { fields } }) as never;
+
+  it('treats the number already saved as confirmed', () => {
+    expect(seedRegistrationForm(app({ bankAccountNumber: '123456789012' })).bankAccountNumberConfirm).toBe('123456789012');
+    expect(seedRegistrationForm(app({})).bankAccountNumberConfirm).toBe('');
+  });
+
+  it('speaks the shared rule’s own sentence when it cannot tell which case it is', () => {
+    expect(problemMessage('bankAccountNumberConfirm', { code: 'mismatch', message: 'The two account numbers do not match.' }))
+      .toEqual({ text: 'The two account numbers do not match.' });
+  });
+
+  /** Hindi readers were handed the shared English sentence; the two cases now have their own keys. */
+  it('says "type it again" or "they differ" from the catalogue, in the reader’s language', () => {
+    const mismatch = { code: 'mismatch' as const, message: 'x' };
+    expect(problemMessage('bankAccountNumberConfirm', mismatch, { dateOfBirth: '', bankAccountNumberConfirm: '' }))
+      .toEqual({ key: 'selfRegistration.errors.accountConfirmMissing' });
+    expect(problemMessage('bankAccountNumberConfirm', mismatch, { dateOfBirth: '', bankAccountNumberConfirm: '1234 5678 9' }))
+      .toEqual({ key: 'selfRegistration.errors.accountConfirmMismatch' });
+  });
+
+  /** The API refuses unknown properties: the second typing leaving the phone would fail every step change. */
+  it('never sends the second typing, even when the whole form is saved', () => {
+    const form = seedRegistrationForm(app({ bankAccountNumber: '123456789012' }));
+    const patch = wholeFormPatch(form) as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('bankAccountNumberConfirm');
+    expect(patch.record as Record<string, unknown>).not.toHaveProperty('bankAccountNumberConfirm');
+    expect((patch.record as Record<string, unknown>).bankAccountNumber).toBe('123456789012');
+  });
+});
+
+
+describe('the date of birth, in the reader’s language', () => {
+  it('turns the shared age rule into a catalogue sentence rather than passing its English through', () => {
+    const blank = seedRegistrationForm({ ...application, dateOfBirth: '2020-01-01' });
+    const problem = registrationStepProblems(1, blank).dateOfBirth!;
+    expect(problem.code).toBe('dateOfBirth');
+    const message = problemMessage('dateOfBirth', problem, blank);
+    expect(message).toMatchObject({ key: 'selfRegistration.errors.dobTooYoung' });
+    expect(typeof lookup((message as { key: string }).key)).toBe('string');
+  });
+
+  it('falls back to the shared sentence when no answer is handed over', () => {
+    expect(problemMessage('dateOfBirth', { code: 'dateOfBirth', message: 'From the rule.' })).toEqual({ text: 'From the rule.' });
+  });
+});

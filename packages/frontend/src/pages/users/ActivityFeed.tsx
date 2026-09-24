@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, User as UserIcon, LogIn, KeyRound, ShieldAlert, FileText } from 'lucide-react';
 import { api } from '../../services/api';
+import { canReadAuditLog, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { activityEventLabel, anyStatusLabel } from '@fapoms/shared';
@@ -58,9 +59,12 @@ const label: React.CSSProperties = {
 
 /** A single user's activity — mounted inside the edit panel on the Directory tab. */
 export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
+  const canAudit = canReadAuditLog(useCurrentRoles());
   const activity = useQuery({
     queryKey: ['audit-log', 'user', userId],
     queryFn: () => api.request<AuditEvent[]>(`/audit-log/user?userId=${userId}&limit=15`),
+    // `/audit-log/*` serves ADMIN and AUDITOR only — never ask on behalf of anyone else.
+    enabled: canAudit,
   });
   const { data, isLoading } = activity;
   const events = (Array.isArray(data) ? data : (data as any)?.data) || [];
@@ -97,8 +101,10 @@ export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
 
 /** The full-page global feed — the Activity tab. */
 export const ActivityFeed: React.FC = () => {
+  const canAudit = canReadAuditLog(useCurrentRoles());
   const [category, setCategory] = useState<string>('ALL');
   const feed = useQuery({
+    enabled: canAudit,
     queryKey: ['audit-log', 'recent', category],
     queryFn: () => api.request<AuditEvent[]>(`/audit-log/recent?limit=100${category !== 'ALL' ? `&category=${category}` : ''}`),
   });
@@ -112,6 +118,7 @@ export const ActivityFeed: React.FC = () => {
         <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
           {['ALL', 'USER', 'DATA_ACCESS', 'OPERATIONAL', 'WORKFLOW'].map((c) => (
             <button key={c} onClick={() => setCategory(c)}
+              title={c === 'ALL' ? 'Show activity from every category' : `Show only ${(c.charAt(0) + c.slice(1).toLowerCase()).replace('_', ' ')} activity`}
               style={{
                 padding: '5px 11px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
                 border: `1px solid ${category === c ? 'transparent' : 'var(--border-color)'}`,

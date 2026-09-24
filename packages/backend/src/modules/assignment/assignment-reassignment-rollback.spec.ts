@@ -66,6 +66,8 @@ describe('AssignmentService.reassignAssignment — transactional integrity', () 
         return null;
       }),
       create: jest.fn((_cls: any, dto: any) => ({ id: 'lineage-1', ...dto })),
+      // The outgoing assayer's calendar entry is retired on the same transaction (retireSchedule).
+      getRepository: jest.fn(() => ({ findOne: jest.fn(async () => null), save: jest.fn(async (x: any) => x) })),
       save: jest.fn(async (e: any) => {
         // Closing the outgoing interval: the existing lineage row, given an end timestamp.
         if (e?.id === 'lineage-0') {
@@ -117,6 +119,7 @@ describe('AssignmentService.reassignAssignment — transactional integrity', () 
     };
     (service as any).auditService = auditService;
     (service as any).assayerService = {
+      disableLiveTrackingWhenWorkEnds: jest.fn(async () => undefined),
       findOne: jest.fn(async () => ({
         id: NEW_ASSAYER, status: AssayerStatus.ACTIVE, isActive: true,
         displayName: 'Incoming', assayerCode: 'AS-NEW',

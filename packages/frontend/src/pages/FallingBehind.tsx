@@ -109,7 +109,12 @@ export const FallingBehind: React.FC = () => {
               {counted(items.length, 'item')} to chase
             </span>
           )}
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button
+            onClick={() => refetch()}
+            className="btn btn-secondary"
+            title="Refresh overdue assignments list"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
             <RefreshCw size={14} className={isFetching ? 'spin' : undefined} /> Refresh
           </button>
         </>}
@@ -130,6 +135,11 @@ export const FallingBehind: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {items.map((item) => {
             const ActionIcon = item.nextAction === 'REASSIGN' ? UserX : item.nextAction === 'RESCHEDULE' ? CalendarClock : ArrowRightCircle;
+            const actionTitle = item.nextAction === 'RESCHEDULE'
+              ? 'Open the scheduling calendar to select a new audit visit date'
+              : item.nextAction === 'REASSIGN'
+              ? 'Open the planning workspace for this branch to match a replacement assayer'
+              : 'Open assignment details to view status, issues, and next steps';
             return (
               <div key={item.id} className="glass-card" style={{
                 padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -139,10 +149,13 @@ export const FallingBehind: React.FC = () => {
                   <div style={{ fontSize: 'var(--text-base)', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     {item.branchName || item.assignmentNumber}
                     {item.branchCity && <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>· {item.branchCity}</span>}
-                    <span style={{
-                      fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px',
-                      background: 'var(--status-cancelled-bg)', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: '4px',
-                    }}>
+                    <span
+                      title={`This assignment is ${item.daysOverdue} days past its deadline or scheduled visit date`}
+                      style={{
+                        fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px',
+                        background: 'var(--status-cancelled-bg)', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: '4px',
+                      }}
+                    >
                       <AlertTriangle size={10} /> {overdueText(item.daysOverdue)}
                     </span>
                   </div>
@@ -163,6 +176,7 @@ export const FallingBehind: React.FC = () => {
                   </div>
                 </div>
                 <button onClick={() => goToAction(item)} className="btn btn-primary"
+                  title={actionTitle}
                   style={{ padding: '6px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                   <ActionIcon size={13} /> {ACTION_LABEL[item.nextAction]}
                 </button>

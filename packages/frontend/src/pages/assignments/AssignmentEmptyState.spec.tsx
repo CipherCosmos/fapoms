@@ -17,6 +17,7 @@ import { SystemRole } from '@fapoms/shared';
  * someone changes who may reach /planning, this suite follows them there.
  */
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: jest.fn(() => [] as string[]),
   useCurrentPermissions: jest.fn(() => [] as string[]),
 }));

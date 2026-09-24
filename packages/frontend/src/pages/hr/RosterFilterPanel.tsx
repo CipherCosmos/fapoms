@@ -174,6 +174,7 @@ const FilterBlock: React.FC<{
           {matching.length > SHOWN_BEFORE_MORE && (
             <button
               onClick={() => setExpanded((v) => !v)}
+              title={expanded ? 'Show fewer options' : `Show all ${matching.length} options`}
               style={{
                 background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer',
                 fontSize: FONT.body, fontWeight: 600, color: 'var(--accent)',
@@ -237,6 +238,7 @@ export const RosterFilterPanel: React.FC<{
         <button
           onClick={onClearAll}
           className="btn btn-secondary"
+          title="Remove every filter and show the full roster"
           style={{ fontSize: FONT.body, padding: '5px 10px', marginLeft: 'auto' }}
         >
           Clear every filter
@@ -256,6 +258,7 @@ export const RosterFilterPanel: React.FC<{
             <button
               onClick={() => setOpenGroups((g) => (open ? g.filter((k) => k !== group.key) : [...g, group.key]))}
               aria-expanded={open}
+              title={open ? `Collapse the ${group.label} filters` : `Expand the ${group.label} filters${chosenHere > 0 ? ` — ${chosenHere} chosen` : ''}`}
               style={{
                 display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
                 background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer',

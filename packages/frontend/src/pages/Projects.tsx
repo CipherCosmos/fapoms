@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 /** Collapses the table+detail split to a single column on narrow viewports. */
@@ -15,7 +16,7 @@ const useIsNarrow = (max = 900): boolean => {
   }, [max]);
   return narrow;
 };
-import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown, Zap } from 'lucide-react';
+import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown, MapPin, Plus } from 'lucide-react';
 import { ProjectStatus, Priority, projectStatusLabel, branchStatusLabel, businessTodayDateKey } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
@@ -26,11 +27,16 @@ import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButt
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { localDateKey } from '../utils/statusLabels';
-import { useImportJob } from '../components/import/useImportJob';
-import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
+import { useBranchImport, branchImportBase } from '../hooks/useBranchImport';
+import { BranchImportPanel } from '../components/branch/BranchImportPanel';
+import { uploadJob, applyJobUpdate } from '../services/background-jobs';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 import { fetchWholeBranchDirectory } from '../services/branch-directory';
 import { Page } from '../components/ui/Page';
+import { GeoPrecisionBadge } from '../components/GeoPrecisionBadge';
+import { fetchAllProjectPages } from './project-export';
+import { downloadCsv } from '../utils/csv';
+import { CoordinatePinModal } from '../components/geo/CoordinatePinModal';
 
 interface ClientOption {
   id: string;
@@ -278,14 +284,42 @@ export const Projects: React.FC = () => {
   // can be filled in later on the project. Less typing for the common "just start one" case.
   const [showQuickModal, setShowQuickModal] = useState(false);
   const [quickForm, setQuickForm] = useState<{ name: string; clientId: string; priority: Priority }>({ name: '', clientId: '', priority: Priority.MEDIUM });
+  const [showAdvancedProjectFields, setShowAdvancedProjectFields] = useState(false);
+
+  /**
+   * A branch list chosen in the create form. It is uploaded AFTER the project is created, as that
+   * project's branch import (a background job): the project exists either way, and an upload that
+   * fails is shown on the project with a retry, never as a failed "create".
+   */
+  const [pendingBranchFile, setPendingBranchFile] = useState<File | null>(null);
+  const [pinBranch, setPinBranch] = useState<any | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'branches' | 'settings'>('overview');
   const [form, setForm] = useState<FormData>(getInitialProjectForm());
   const [isSaving, setIsSaving] = useState(false);
-  /** The branch import's lifetime — shared with the Branches page. See `useImportJob`. */
-  const branchImport = useImportJob();
+  const queryClient = useQueryClient();
+  /**
+   * The open project's branch import — a background job read back from the server, so a refresh
+   * shows its progress, or its review waiting, again. See `useBranchImport`.
+   */
+  const projectImport = useBranchImport(
+    detail?.id ? { type: 'PROJECT', id: detail.id } : null,
+    {
+      onCommitted: (job) => {
+        if (job.result?.summary) setMessage({ type: 'success', text: job.result.summary });
+        if (detail?.id) void loadDetail(detail.id);
+      },
+    },
+  );
+  const projectImportBusy = projectImport.jobs.upload.phase === 'uploading'
+    || projectImport.jobs.active.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
+  // `?tab=branches` (the Jobs tray's link to an import) opens the project on its Branches tab.
+  const tabParam = searchParams.get('tab');
+  useEffect(() => {
+    if (tabParam === 'branches' || tabParam === 'settings' || tabParam === 'overview') setActiveTab(tabParam);
+  }, [tabParam, projectIdParam]);
 
   const [projectBranches, setProjectBranches] = useState<any[]>([]);
   const [allClientBranches, setAllClientBranches] = useState<any[]>([]);
@@ -356,19 +390,19 @@ export const Projects: React.FC = () => {
     void loadClients();
     const socket = connectSocket();
     const refresh = () => { void loadProjects(); void loadClients(); };
-    socket?.on('ProjectPlanningStarted', refresh);
-    socket?.on('ProjectSchedulingReady', refresh);
-    socket?.on('ProjectExecutionStarted', refresh);
-    socket?.on('ProjectValidationStarted', refresh);
-    socket?.on('ProjectCompleted', refresh);
-    socket?.on('ProjectCancelled', refresh);
+    socket?.on('ProjectPlanningStartedEvent', refresh);
+    socket?.on('ProjectSchedulingReadyEvent', refresh);
+    socket?.on('ProjectExecutionStartedEvent', refresh);
+    socket?.on('ProjectValidationStartedEvent', refresh);
+    socket?.on('ProjectCompletedEvent', refresh);
+    socket?.on('ProjectCancelledEvent', refresh);
     return () => {
-      socket?.off('ProjectPlanningStarted', refresh);
-      socket?.off('ProjectSchedulingReady', refresh);
-      socket?.off('ProjectExecutionStarted', refresh);
-      socket?.off('ProjectValidationStarted', refresh);
-      socket?.off('ProjectCompleted', refresh);
-      socket?.off('ProjectCancelled', refresh);
+      socket?.off('ProjectPlanningStartedEvent', refresh);
+      socket?.off('ProjectSchedulingReadyEvent', refresh);
+      socket?.off('ProjectExecutionStartedEvent', refresh);
+      socket?.off('ProjectValidationStartedEvent', refresh);
+      socket?.off('ProjectCompletedEvent', refresh);
+      socket?.off('ProjectCancelledEvent', refresh);
     };
   }, []);
 
@@ -565,26 +599,52 @@ export const Projects: React.FC = () => {
     }
     setIsSaving(true);
     try {
-      const response = await api.request<ProjectItem>('/projects', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name,
-          // No number: the server assigns it. The request DTO refuses one, rather than ignoring
-          // it, so a client that still sends one is told rather than left believing it stuck.
-          clientId: form.clientId,
-          priority: form.priority,
-          startDate: form.startDate || undefined,
-          endDate: form.endDate || undefined,
-          budget: form.budget ? Number(form.budget) : undefined,
-          scope: form.scope || undefined,
-          requiredSkills: form.requiredSkills ? form.requiredSkills.split(',').map(s => s.trim()) : undefined,
-          requiredCertifications: form.requiredCertifications ? form.requiredCertifications.split(',').map(s => s.trim()) : undefined,
-          description: form.description || undefined,
-        })
-      });
-      setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
+      const projectData = {
+        name: form.name,
+        // No number: the server assigns it. The request DTO refuses one, rather than ignoring
+        // it, so a client that still sends one is told rather than left believing it stuck.
+        clientId: form.clientId,
+        priority: form.priority,
+        startDate: form.startDate || undefined,
+        endDate: form.endDate || undefined,
+        budget: form.budget ? Number(form.budget) : undefined,
+        scope: form.scope || undefined,
+        requiredSkills: form.requiredSkills ? form.requiredSkills.split(',').map(s => s.trim()) : undefined,
+        requiredCertifications: form.requiredCertifications ? form.requiredCertifications.split(',').map(s => s.trim()) : undefined,
+        description: form.description || undefined,
+      };
+
+      const response = await api.post<ProjectItem>('/projects', projectData);
+      const file = pendingBranchFile;
       setShowCreateModal(false);
       setForm(getInitialProjectForm());
+      setPendingBranchFile(null);
+      if (file) {
+        // The project exists now. The branch list becomes its import job: checked in the
+        // background, then reviewed on the project's Branches tab before anything is saved.
+        setSelectedId(response.id);
+        setActiveTab('branches');
+        try {
+          const accepted = await uploadJob({
+            kind: 'BRANCH_IMPORT',
+            scope: { type: 'PROJECT', id: response.id },
+            file,
+            endpoint: branchImportBase({ type: 'PROJECT', id: response.id }),
+          });
+          applyJobUpdate(queryClient, accepted.job);
+          setMessage({
+            type: 'success',
+            text: `Project "${response.name}" (${response.projectNumber}) created. ${file.name} is being checked in the background — its review opens on the project's Branches tab.`,
+          });
+        } catch (uploadErr) {
+          setMessage({
+            type: 'error',
+            text: `Project "${response.name}" (${response.projectNumber}) was created, but ${file.name} could not be uploaded: ${userMessage(uploadErr)} Upload it again from the project's Branches tab.`,
+          });
+        }
+      } else {
+        setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
+      }
       void loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to create project. ${userMessage(err)}` });
@@ -732,20 +792,8 @@ export const Projects: React.FC = () => {
   const handleUploadBranches = async (file: File) => {
     if (!detail) return;
     setMessage(null);
-    await branchImport.start(`/projects/${detail.id}/branches/upload`, file);
+    await projectImport.start(file);
   };
-
-  /**
-   * Reload the project once an import finishes.
-   *
-   * A queued import completes long after the upload request returned, so refreshing at the end of
-   * the handler — as this page used to — redrew the branch list exactly as it had been before the
-   * file was applied.
-   */
-  useEffect(() => {
-    if (branchImport.state.phase === 'done' && detail?.id) void loadDetail(detail.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branchImport.state.phase, detail?.id]);
 
   const handleDownloadTemplate = async () => {
     if (!detail) return;
@@ -832,20 +880,118 @@ export const Projects: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Budget (INR)</label>
-            <input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value === '' ? '' : Number(e.target.value) }))} placeholder="e.g. 150000" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '2px' }}>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedProjectFields(prev => !prev)}
+              className="btn btn-secondary"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: 'var(--text-xs)',
+                padding: '4px 10px',
+                color: 'var(--accent-primary)',
+              }}
+            >
+              {showAdvancedProjectFields ? '− Hide optional details' : '+ Add budget, description, scope, branches...'}
+            </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Description</label>
-            <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Project description..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
-          </div>
+          {showAdvancedProjectFields && (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Budget (INR)</label>
+                <input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value === '' ? '' : Number(e.target.value) }))} placeholder="e.g. 150000" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+              </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Scope</label>
-            <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Description</label>
+                <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Project description..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Scope</label>
+                <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+              </div>
+
+              {/* Branch Spreadsheet Attachment & Preflight */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--border-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FileSpreadsheet size={15} style={{ color: 'var(--accent-primary)' }} />
+                Audit Branches (Optional)
+              </label>
+            </div>
+
+            <p style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', margin: 0 }}>
+              Upload an Excel file with branch SOL IDs. We'll automatically identify existing master branches and resolve addresses, coordinates, and IFSC details.
+            </p>
+
+            {pendingBranchFile ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+                <div style={{ fontSize: 'var(--text-2xs)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pendingBranchFile.name}</span>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
+                    — checked in the background once the project is created; you review it before anything is saved.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPendingBranchFile(null)}
+                  style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', background: 'transparent', color: 'var(--danger)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div>
+                <input
+                  type="file"
+                  id="project-create-branch-file"
+                  accept=".xlsx,.xls,.csv"
+                  disabled={!form.clientId}
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file) setPendingBranchFile(file);
+                  }}
+                />
+                <label
+                  htmlFor={form.clientId ? "project-create-branch-file" : undefined}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    fontSize: 'var(--text-2xs)',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    cursor: form.clientId ? 'pointer' : 'not-allowed',
+                    background: form.clientId ? 'var(--bg-primary)' : 'var(--bg-surface-2)',
+                    border: '1px solid var(--border-color)',
+                    color: form.clientId ? 'var(--text-primary)' : 'var(--text-muted)',
+                  }}
+                  onClick={() => {
+                    if (!form.clientId) {
+                      setMessage({ type: 'error', text: 'Please select a client first so we can match branches against their database.' });
+                    }
+                  }}
+                >
+                  <FileSpreadsheet size={13} style={{ color: 'var(--accent-primary)' }} />
+                  Attach Excel File (.xlsx)
+                </label>
+                {!form.clientId && (
+                  <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                    Select a client above first
+                  </span>
+                )}
+              </div>
+            )}
           </div>
+          </>
+          )}
 
           {/*
             * Behind a disclosure because these two fields decide who the engine will even
@@ -924,34 +1070,24 @@ export const Projects: React.FC = () => {
         actions={<>
           <button onClick={async () => {
             try {
-              const data = projects.length > 0 ? projects : await api.request<ProjectItem[]>('/projects');
+              // Every page in scope, not only the rows the table has loaded so far.
+              const data = await fetchAllProjectPages<ProjectItem>(api.request.bind(api), scopeQueryRef.current);
               const header = ['Project Number', 'Name', 'Client', 'Status', 'Priority', 'Budget', 'Start Date', 'End Date'];
               const rows = data.map(p => [
                 p.projectNumber, p.name, p.client?.name || '', p.status, p.priority,
                 p.budget || '', p.startDate ? new Date(p.startDate).toLocaleDateString() : '',
                 p.endDate ? new Date(p.endDate).toLocaleDateString() : ''
               ]);
-              const csv = [header.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
-              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a'); a.href = url; a.download = `projects_export_${businessTodayDateKey()}.csv`; a.click();
-              URL.revokeObjectURL(url);
+              // The shared encoder: it neutralises a leading = + - @ TAB/CR so a project or client
+              // name cannot run as a spreadsheet formula when the file is opened.
+              downloadCsv(`projects_export_${businessTodayDateKey()}`, header, rows);
             } catch { setMessage({ type: 'error', text: 'Export failed' }); }
           }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
             <FileSpreadsheet size={15} /> Export
           </button>
           {canManage && (
-            <button
-              onClick={() => { setMessage(null); setQuickForm({ name: '', clientId: clients[0]?.id || '', priority: Priority.MEDIUM }); setShowQuickModal(true); }}
-              className="btn btn-secondary"
-              title="Create a project with just a name and client — add the rest later"
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
-              <Zap size={15} /> Quick create
-            </button>
-          )}
-          {canManage && (
-            <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}>
-              Create Project
+            <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowAdvancedProjectFields(false); setShowCreateModal(true); }}>
+              <Plus size={15} /> Create Project
             </PrimaryButton>
           )}
         </>}
@@ -977,7 +1113,7 @@ export const Projects: React.FC = () => {
                 {i > 0 && <div style={{ alignSelf: 'center', color: 'var(--text-muted)', opacity: 0.4, fontSize: 'var(--text-2xs)' }}>›</div>}
                 <button
                   onClick={() => setStatusFilter(on ? 'ALL' : stage)}
-                  title={`${n} project(s) in ${stage}`}
+                  title={`${projectStatusLabel(stage)}: ${n} project${n === 1 ? '' : 's'}. Click to ${on ? 'show all' : 'filter by this stage'}.`}
                   style={{
                     flex: '1 1 0', minWidth: '92px', padding: '9px 8px', cursor: 'pointer',
                     borderRadius: 'var(--radius-sm)', textAlign: 'left',
@@ -1002,6 +1138,7 @@ export const Projects: React.FC = () => {
               const on = statusFilter === stage;
               return (
                 <button key={stage} onClick={() => setStatusFilter(on ? 'ALL' : stage)}
+                  title={`${projectStatusLabel(stage)}: ${n} project${n === 1 ? '' : 's'}. Click to ${on ? 'show all' : 'filter'}.`}
                   style={{
                     padding: '4px 10px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
                     background: on ? `${STAGE_TONE[stage]}22` : 'transparent',
@@ -1142,11 +1279,13 @@ export const Projects: React.FC = () => {
                       <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                           <button onClick={() => navigate(`/planning?projectId=${p.id}`)}
+                            title="Open project branch allocation and candidate matching in Audit Planning"
                             className="btn btn-primary"
                             style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <Compass size={13} /> Plan
                           </button>
                           <button onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                            title={selectedId === p.id ? 'Close project detail panel' : 'Open project detail inspector'}
                             className="btn btn-secondary"
                             style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <Eye size={13} /> {selectedId === p.id ? 'Close' : 'Detail'}
@@ -1321,13 +1460,13 @@ export const Projects: React.FC = () => {
                             title={branchesLocked ? lockReason : undefined}
                             style={{ display: 'flex', gap: '8px', opacity: branchesLocked ? 0.45 : 1, pointerEvents: branchesLocked ? 'none' : 'auto' }}
                           >
-                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={branchImport.busy} busyLabel="Importing branches…" />
+                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={projectImportBusy || !!projectImport.reviewJob} busyLabel={projectImport.reviewJob ? 'Review waiting…' : 'Importing branches…'} />
                           </div>
                         </div>
                       </div>
 
                       {/* Progress and result sit where the operator acted, not at the top of the page. */}
-                      <ImportProgressPanel state={branchImport.state} onDismiss={branchImport.reset} />
+                      <BranchImportPanel handle={projectImport} reviewTitle={`Reconcile Branches: ${detail.name}`} />
 
                       {/* Dynamic Branch Search Adder Widget */}
                       {(
@@ -1352,18 +1491,14 @@ export const Projects: React.FC = () => {
                               <span>
                                 {branchShortfall.reason ? (
                                   <>
-                                    This client's branches could not be loaded, so the search below will find none
-                                    of them — that is not the same as this project already holding them all.{' '}
-                                    {branchShortfall.reason} Add the branches you need with the Excel upload above
-                                    instead; that does not go through this list.
+                                    Client branches could not be loaded. {branchShortfall.reason} Upload Excel above to add branches.
                                   </>
                                 ) : (
                                   <>
                                     Only {branchShortfall.shown.toLocaleString('en-IN')} of this client's{' '}
                                     {branchShortfall.total.toLocaleString('en-IN')} branches could be loaded, so the
                                     search below cannot find the other {(branchShortfall.total - branchShortfall.shown).toLocaleString('en-IN')}.
-                                    Reload the page to try again. If the same message comes back, add the branches you
-                                    need with the Excel upload above instead — that does not go through this list.
+                                    Upload Excel above to add any branch directly.
                                   </>
                                 )}
                               </span>
@@ -1406,10 +1541,41 @@ export const Projects: React.FC = () => {
                           {projectBranches.map((pb: any) => (
                             <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--text-xs)', padding: '8px 10px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--accent-secondary)' }}>
                               <div>
-                                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</div>
-                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch?.city}, {pb.branch?.state}</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</span>
+                                  {pb.branch?.solId && (
+                                    <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>({pb.branch.solId})</span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                  {pb.branch?.city ? `${pb.branch.city}, ` : ''}{pb.branch?.state}
+                                </div>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <GeoPrecisionBadge source={pb.branch?.geoSource || 'none'} accuracyMeters={pb.branch?.geoAccuracyMeters} />
+                                {canManage && (
+                                  <button
+                                    type="button"
+                                    title="Verify or adjust pin on satellite map"
+                                    onClick={() => setPinBranch(pb.branch)}
+                                    style={{
+                                      background: 'none',
+                                      border: '1px solid var(--border-color)',
+                                      borderRadius: '4px',
+                                      padding: '3px 7px',
+                                      fontSize: 'var(--text-3xs)',
+                                      color: 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    <MapPin size={11} style={{ color: 'var(--accent-primary)' }} />
+                                    Pin
+                                  </button>
+                                )}
                                 <span className="badge" style={{ fontSize: 'var(--text-3xs)', padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{branchStatusLabel(pb.status)}</span>
                                 {canManage && (detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
                                   <button type="button" aria-label="Remove branch" onClick={() => handleRemoveBranch(pb.id)}
@@ -1605,6 +1771,23 @@ export const Projects: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {pinBranch && (
+        <CoordinatePinModal
+          open={Boolean(pinBranch)}
+          onClose={() => setPinBranch(null)}
+          target="branch"
+          id={pinBranch.id}
+          initialLat={pinBranch.latitude}
+          initialLng={pinBranch.longitude}
+          initialAccuracy={pinBranch.geoAccuracyMeters}
+          title={`Pin Location: ${pinBranch.name}`}
+          subtitle={pinBranch.address || `${pinBranch.city || ''}, ${pinBranch.state || ''}`}
+          onConfirmed={() => {
+            if (detail?.id) void loadDetail(detail.id);
+          }}
+        />
+      )}
 
     </Page>
   );

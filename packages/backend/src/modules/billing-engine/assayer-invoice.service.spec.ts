@@ -56,6 +56,27 @@ describe('AssayerInvoiceService', () => {
   let narrowedTotalsRow: any = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, tds_withheld: 0, payable_count: 0 };
   /** Rows behind `SELECT id, invoice_number, status FROM assayer_invoices` (statement labels). */
   let invoiceLabelRows: any[] = [];
+  /**
+   * The assayer's bills as the reveal query sees them — id, status, submitted_at and the
+   * supersession link. Defaults to the label rows (no revision history) when a test sets none.
+   */
+  let invoiceChainRows: any[] | null = null;
+  /** A JS model of `assayerRevealingInvoiceIds`' SQL, so the tests exercise its meaning. */
+  const revealingIds = (): Array<{ id: string }> => {
+    const rows = invoiceChainRows ?? invoiceLabelRows;
+    const byId = new Map(rows.map((r: any) => [r.id, r]));
+    const sent = ['SUBMITTED', 'APPROVED', 'HOD_APPROVED', 'PAID'];
+    const out = new Set<string>();
+    for (const r of rows) {
+      if (sent.includes(r.status)) out.add(r.id);
+      let ancestor = r.supersedes_invoice_id ? byId.get(r.supersedes_invoice_id) : undefined;
+      while (ancestor) {
+        if (ancestor.submitted_at) { out.add(r.id); break; }
+        ancestor = ancestor.supersedes_invoice_id ? byId.get(ancestor.supersedes_invoice_id) : undefined;
+      }
+    }
+    return [...out].map((id) => ({ id }));
+  };
   /** The recompute SUM the engine runs after a detach/re-price. */
   let recomputeRow: any = { n: 0, base: 0, travel: 0, tds: 0, total: 0 };
   /** The bulk round's grouped eligible-assayer query. */
@@ -65,7 +86,8 @@ describe('AssayerInvoiceService', () => {
 
   const defaultManagerQuery = async (sql: string): Promise<any[]> => {
     // Order matters: the narrowed totals SQL also contains the plain-totals markers.
-    if (sql.includes('LEFT JOIN assayer_invoices ai') && sql.includes('awaiting_approval')) return [narrowedTotalsRow];
+    if (sql.includes('WITH RECURSIVE chain')) return revealingIds();
+    if (sql.includes('assayer_invoice_id = ANY($2::uuid[])') && sql.includes('awaiting_approval')) return [narrowedTotalsRow];
     if (sql.includes('FROM assayer_payables') && sql.includes('awaiting_approval')) return [totalsRow];
     if (sql.includes('SELECT id, invoice_number, status FROM assayer_invoices')) return invoiceLabelRows;
     if (sql.includes('GROUP BY p.assayer_id')) return eligibleAssayerRows;
@@ -222,6 +244,7 @@ describe('AssayerInvoiceService', () => {
     createQueryBuilder: jest.fn((target: any, alias: string) => repoForEntity(target).createQueryBuilder(alias)),
     query: jest.fn(async (sql: string, params?: any[]) => managerQuery(sql, params)),
     insert: jest.fn(async (_target: any, rows: any[]) => { stagedOutbox.push(...rows); return { identifiers: rows.map((r) => ({ id: r.id })) }; }),
+    count: jest.fn(async (target: any, opts: any) => (repoForEntity(target).count ? repoForEntity(target).count(opts) : 0)),
   });
 
   const dataSource: any = {
@@ -283,6 +306,7 @@ describe('AssayerInvoiceService', () => {
     totalsRow = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, tds_withheld: 0, payable_count: 0 };
     narrowedTotalsRow = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, tds_withheld: 0, payable_count: 0 };
     invoiceLabelRows = [];
+    invoiceChainRows = null;
     recomputeRow = { n: 0, base: 0, travel: 0, tds: 0, total: 0 };
     eligibleAssayerRows = [];
     awaitingCountRow = { n: 0 };
@@ -319,7 +343,8 @@ describe('AssayerInvoiceService', () => {
           useValue: {
             get: settingsGet,
             getMany: jest.fn(async () => ({})),
-            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            // s.194J threshold 0: the pre-threshold behaviour these tests were written against.
+            getNumber: jest.fn(async (k: string, fb?: number) => (k === 'billing.tds194jThresholdRupees' ? 0 : fb as number)),
             describeAll: jest.fn(async () => []),
             onChange: jest.fn(),
           },
@@ -589,14 +614,17 @@ describe('AssayerInvoiceService', () => {
       expect(inv).toMatchObject({ status: AssayerInvoiceStatus.APPROVED, approvedBy: 'finance-1' });
     });
 
-    it('suppresses the per-payable pushes in favour of ONE count-only invoice notification', async () => {
+    it('suppresses the per-payable pushes; the office approval tells the HOD, not yet the assayer', async () => {
       lockedPayableRows = attachedLines();
       await service.approve('ainv-1', 'finance-1');
       await flush();
+      await flush();
       expect(emitSafe.mock.calls.some(([o]) => o.type === 'PAYABLE_APPROVED')).toBe(false);
-      const call = emitSafe.mock.calls.find(([o]) => o.type === 'ASSAYER_INVOICE_APPROVED')?.[0];
-      expect(call).toMatchObject({ assayerId: 'assayer-1', payload: { count: 2, invoiceNumber: 'AINV-1' } });
-      expect(call.payload.total).toBeUndefined(); // count-only, no ₹ toward the assayer
+      // The assayer's "approved for payment" waits for the HOD's final approval (2026-09-24).
+      expect(emitSafe.mock.calls.some(([o]) => o.type === 'ASSAYER_INVOICE_APPROVED')).toBe(false);
+      const call = emitSafe.mock.calls.find(([o]) => o.type === 'BILLING_FINAL_APPROVAL_NEEDED')?.[0];
+      expect(call).toMatchObject({ entityType: 'ASSAYER_INVOICE', entityId: 'ainv-1' });
+      expect(call.dedupeKey).toMatch(/^BILLING_FINAL_APPROVAL_NEEDED:ASSAYER_INVOICE:ainv-1:\d+$/);
     });
 
     it('an already-APPROVED line rides through untouched (approved-unpaid at invite time)', async () => {
@@ -633,6 +661,62 @@ describe('AssayerInvoiceService', () => {
       expect(committed).toHaveLength(0); // …but nothing survived
     });
 
+    describe('the tax moved at approval — the bill goes back to the assayer, never approved silently', () => {
+      // The fee line was booked with no PAN at 20% (s.206AA): TDS 400, net 1600. The PAN is on file
+      // now, so approval re-withholds at 10%: TDS 200, net 1800 — the bill's net moves 2050 → 2250.
+      const pristine = () => [
+        feeLine({ assayerInvoiceId: 'ainv-1', tdsAmount: '400.00', totalAmount: '1600.00', rateSnapshot: { feeAmount: 2000, tdsRate: 20, tdsPanBasis: 'NO_PAN' } }),
+        expenseLine({ assayerInvoiceId: 'ainv-1' }),
+      ];
+      beforeEach(() => {
+        // Fresh copies on every read, so the rolled-back first transaction's in-memory edits do
+        // not leak into the second, exactly as a real rollback would not.
+        payableRepo.findOne.mockImplementation(async (opts: any) => pristine().find((l) => l.id === opts?.where?.id) ?? null);
+        lockedPayableRows = (() => pristine()) as any;
+        assayerInvoiceRepo.findOne.mockImplementation(async (opts: any) => (opts?.where?.id === 'ainv-1'
+          ? submitted({ tdsAmount: '400.00', totalAmount: '2050.00', revision: 1, confirmedVersion: 1 })
+          : null));
+      });
+
+      it('refuses with BILL_TAX_RECALCULATED and the owner\'s message, and approves nothing', async () => {
+        const err: any = await service.approve('ainv-1', 'finance-1').catch((e) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect(err.message).toContain('The bill amount changed because tax was recalculated — sent back to the assayer to confirm');
+        expect(err.getResponse()).toMatchObject({ code: 'BILL_TAX_RECALCULATED' });
+        expect(committed.some((r) => r.payableNumber && r.status === AssayerPayableStatus.APPROVED)).toBe(false);
+        expect(committed.some((r) => r.status === AssayerInvoiceStatus.APPROVED)).toBe(false);
+        expect(committed.some((r) => r.action === 'ASSAYER_INVOICE_APPROVED')).toBe(false);
+      });
+
+      it('revises the bill (same mechanism as revise): old SUPERSEDED, a new revision INVITED at the new figure', async () => {
+        await service.approve('ainv-1', 'finance-1').catch(() => undefined);
+        expect(committed.find((r) => r.id === 'ainv-1')).toMatchObject({ status: AssayerInvoiceStatus.SUPERSEDED });
+        const rev = committed.find((r) => r.lineCount !== undefined && r.status === AssayerInvoiceStatus.INVITED);
+        expect(rev).toMatchObject({ invoiceNumber: 'AINV-1-R2', revision: 2, supersedesInvoiceId: 'ainv-1', tdsAmount: 200, totalAmount: 2250 });
+        // The line took its new TDS (still Due), with its own history row saying why.
+        expect(committed.find((r) => r.payableNumber === 'PY-FEE-1')).toMatchObject({ status: AssayerPayableStatus.PENDING, tdsAmount: 200, totalAmount: 1800 });
+        expect(committed.find((r) => r.action === 'PAYABLE_TDS_RECOMPUTED')?.reason).toMatch(/s\.206AA/);
+        expect(committed.find((r) => r.action === 'ASSAYER_INVOICE_SUPERSEDED')?.reason).toMatch(/tax was recalculated/);
+      });
+
+      it('asks the assayer to confirm the new amount (no rupee figure on the push), and does not ping the HOD', async () => {
+        await service.approve('ainv-1', 'finance-1').catch(() => undefined);
+        await flush();
+        const push = emitSafe.mock.calls.find(([o]) => o.type === 'ASSAYER_INVOICE_INVITED')?.[0];
+        expect(push).toMatchObject({ assayerId: 'assayer-1', payload: { isRevision: true, revision: 2, reason: 'TAX_RECALCULATED' } });
+        expect(JSON.stringify(push.payload)).not.toMatch(/2250|2050/);
+        expect(emitSafe.mock.calls.some(([o]) => o.type === 'BILLING_FINAL_APPROVAL_NEEDED')).toBe(false);
+      });
+
+      it('approves as normal when the re-decided tax leaves the net where the assayer confirmed it', async () => {
+        payableRepo.findOne.mockImplementation(async (opts: any) => attachedLines().find((l) => l.id === opts?.where?.id) ?? null);
+        lockedPayableRows = (() => attachedLines()) as any;
+        assayerInvoiceRepo.findOne.mockImplementation(async () => submitted());
+        const result = await service.approve('ainv-1', 'finance-1');
+        expect(result.status).toBe(AssayerInvoiceStatus.APPROVED);
+      });
+    });
+
     it('refuses an invoice the assayer has not submitted', async () => {
       assayerInvoiceRepo.findOne.mockImplementation(async () => invoice()); // still INVITED
       await expect(service.approve('ainv-1', 'finance-1')).rejects.toThrow(/not been submitted/);
@@ -640,6 +724,103 @@ describe('AssayerInvoiceService', () => {
   });
 
   // ── Cancel, and the void-detach path ─────────────────────────────────────
+
+  // ── The HOD's final approval of a bill (owner, 2026-09-24) ────────────────
+  describe("hodApprove / hodReject — the HOD's final approval of a bill", () => {
+    const officeApprovedBill = (over: Partial<any> = {}) => invoice({
+      status: AssayerInvoiceStatus.APPROVED, submittedAt: new Date(), submittedRequestId: 'req-uuid-1',
+      approvedAt: new Date('2026-09-02T05:00:00Z'), approvedBy: 'office-1', revision: 1, confirmedVersion: 1,
+      hodApprovedAt: null, hodApprovedBy: null, ...over,
+    });
+    const approvedLines = () => [
+      feeLine({ assayerInvoiceId: 'ainv-1', status: AssayerPayableStatus.APPROVED, approvedBy: 'office-1', approvedAt: new Date(), destinationIfsc: 'HDFC0001234', destinationBankAccountNumber: '1234567890' }),
+      expenseLine({ assayerInvoiceId: 'ainv-1', status: AssayerPayableStatus.APPROVED, approvedBy: 'office-1', approvedAt: new Date() }),
+    ];
+    beforeEach(() => {
+      assayerInvoiceRepo.findOne.mockImplementation(async () => officeApprovedBill());
+      payableRepo.findOne.mockImplementation(async (opts: any) => approvedLines().find((l) => l.id === opts?.where?.id) ?? null);
+      lockedPayableRows = approvedLines();
+    });
+
+    it('APPROVED → HOD_APPROVED, every approved line gets the final approval in the SAME transaction, and the assayer hears', async () => {
+      const out = await service.hodApprove('ainv-1', 'hod-1');
+      expect(out).toMatchObject({ status: AssayerInvoiceStatus.HOD_APPROVED, hodApprovedBy: 'hod-1' });
+      const lines = committed.filter((r) => r.payableNumber);
+      expect(lines.map((l) => [l.id, l.hodApprovedBy])).toEqual([['payable-fee-1', 'hod-1'], ['payable-exp-1', 'hod-1']]);
+      expect(committed).toContainEqual(expect.objectContaining({ action: 'ASSAYER_INVOICE_HOD_APPROVED', toState: AssayerInvoiceStatus.HOD_APPROVED }));
+      expect(committed.filter((r) => r.action === 'PAYABLE_HOD_APPROVED')).toHaveLength(2);
+      await flush();
+      expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'ASSAYER_INVOICE_APPROVED', assayerId: 'assayer-1', payload: { count: 2, invoiceNumber: 'AINV-1' },
+      }));
+    });
+
+    it('refuses the HOD who approved the bill at the office — nothing moves', async () => {
+      await expect(service.hodApprove('ainv-1', 'office-1')).rejects.toThrow(/Segregation of duties/);
+      expect(committed).toHaveLength(0);
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'SEGREGATION_OF_DUTIES_REFUSED', entityType: 'ASSAYER_INVOICE' }));
+    });
+
+    it('refuses a bill the office has not approved; a second press on an HOD-approved bill is a no-op', async () => {
+      assayerInvoiceRepo.findOne.mockImplementation(async () => officeApprovedBill({ status: AssayerInvoiceStatus.SUBMITTED }));
+      await expect(service.hodApprove('ainv-1', 'hod-1')).rejects.toThrow(/not been approved by the office/);
+      assayerInvoiceRepo.findOne.mockImplementation(async () => officeApprovedBill({ status: AssayerInvoiceStatus.HOD_APPROVED }));
+      await service.hodApprove('ainv-1', 'hod-1');
+      expect(committed).toHaveLength(0);
+    });
+
+    it('the office cannot cancel or revise a bill waiting for, or cleared by, the HOD', async () => {
+      await expect(service.cancel('ainv-1', 'office-1', 'Wrong month')).rejects.toThrow(ConflictException);
+      assayerInvoiceRepo.findOne.mockImplementation(async () => officeApprovedBill({ status: AssayerInvoiceStatus.HOD_APPROVED }));
+      await expect(service.cancel('ainv-1', 'office-1', 'Wrong month')).rejects.toThrow(ConflictException);
+      await expect(service.reviseInvoice('ainv-1', 'office-1', 'Wrong month')).rejects.toThrow(/approved/);
+    });
+
+    it('sends the bill back: → SUBMITTED with the reason, the assayer’s confirmation kept, the lines back to Due, the office told', async () => {
+      const out = await service.hodReject('ainv-1', 'hod-1', 'Two of these audits were never completed.');
+      expect(out).toMatchObject({
+        status: AssayerInvoiceStatus.SUBMITTED, approvedBy: null, approvedAt: null,
+        hodRejectedBy: 'hod-1', hodRejectReason: 'Two of these audits were never completed.', confirmedVersion: 1, revision: 1,
+      });
+      const lines = committed.filter((r) => r.payableNumber);
+      expect(lines).toHaveLength(2);
+      for (const l of lines) {
+        expect(l).toMatchObject({
+          status: AssayerPayableStatus.PENDING, approvedBy: null, approvedAt: null, hodApprovedAt: null,
+          destinationBankAccountNumber: null, destinationIfsc: null, destinationVerifiedAt: null, destinationVerifiedSource: null,
+          assayerInvoiceId: 'ainv-1',
+        });
+      }
+      expect(committed).toContainEqual(expect.objectContaining({ action: 'ASSAYER_INVOICE_HOD_REJECTED', fromState: 'APPROVED', toState: 'SUBMITTED' }));
+      await flush(); await flush();
+      expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'BILLING_FINAL_APPROVAL_REJECTED', ownerUserId: 'office-1', payload: expect.objectContaining({ tab: 'bills' }),
+      }));
+      // The bill can then be approved again by the office, on the assayer's standing confirmation.
+      assayerInvoiceRepo.findOne.mockImplementation(async () => ({ ...out, approvedAt: null, approvedBy: null, lineCount: 2, subtotalBase: '2150.00', subtotalTravel: '300.00', tdsAmount: '200.00', totalAmount: '2250.00', revision: 1, confirmedVersion: 1 }));
+      payableRepo.findOne.mockImplementation(async (opts: any) => lines.find((l) => l.id === opts?.where?.id) ?? null);
+      lockedPayableRows = lines;
+      const again = await service.approve('ainv-1', 'office-2');
+      expect(again.status).toBe(AssayerInvoiceStatus.APPROVED);
+    });
+
+    it('needs a reason, and refuses when money has already moved on the bill', async () => {
+      await expect(service.hodReject('ainv-1', 'hod-1', 'short')).rejects.toThrow(BadRequestException);
+      lockedPayableRows = [approvedLines()[0], expenseLine({ assayerInvoiceId: 'ainv-1', status: AssayerPayableStatus.PAID, paidAmount: '450.00' })];
+      await expect(service.hodReject('ainv-1', 'hod-1', 'Two of these audits were never completed.')).rejects.toThrow(/already paid/);
+      expect(committed).toHaveLength(0);
+    });
+
+    it('explains the one-open-bill rule instead of failing with a database error', async () => {
+      assayerInvoiceRepo.save.mockImplementationOnce(async () => {
+        throw Object.assign(new Error('duplicate key value violates unique constraint "UQ_assayer_invoices_one_active_per_assayer"'), {
+          code: '23505', constraint: 'UQ_assayer_invoices_one_active_per_assayer',
+          driverError: { code: '23505', constraint: 'UQ_assayer_invoices_one_active_per_assayer' },
+        });
+      });
+      await expect(service.hodReject('ainv-1', 'hod-1', 'Two of these audits were never completed.')).rejects.toThrow(/another bill out/);
+    });
+  });
 
   describe('cancel — release the lines, keep the record', () => {
     it('cancels a SUBMITTED invoice with a reason and NULLs its lines’ invoice id', async () => {
@@ -704,7 +885,7 @@ describe('AssayerInvoiceService', () => {
     it('per-payable approve refuses an actively-invoiced line by its invoice number', async () => {
       payableRepo.findOne.mockImplementation(async () => feeLine({ assayerInvoiceId: 'ainv-1' }));
       assayerInvoiceRepo.findOne.mockImplementation(async () => invoice({ status: AssayerInvoiceStatus.SUBMITTED }));
-      const result = await engine.approvePayouts(['payable-fee-1'], 'finance-1');
+      const result = await engine.approvePayouts(['payable-fee-1'], 'finance-1', undefined, 'Assayer confirmed the amounts by phone');
       expect(result.done).toEqual([]);
       expect(result.refused[0].reason).toContain('awaiting assayer invoice AINV-1');
     });
@@ -792,13 +973,76 @@ describe('AssayerInvoiceService', () => {
       expect(s.payables.find((p: any) => p.id === 'p-inv').preInvoicingEra).toBe(false);
     });
 
+    /**
+     * Owner decision 2026-09-24: "amounts appear in Money as soon as the assayer sends the bill".
+     * Sent = SUBMITTED, APPROVED or PAID. INVITED (not yet sent) stays hidden. PAID matters on its
+     * own: under the approved-only gate a bill's lines vanished from Money the moment it was paid.
+     */
+    it.each([
+      ['SUBMITTED', true],
+      ['APPROVED', true],
+      ['PAID', true],
+      ['INVITED', false],
+      ['CANCELLED', false],
+      ['SUPERSEDED', false],
+    ])('assayer shape: a line on a %s bill is visible = %s', async (status, visible) => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9', status }];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.some((p: any) => p.id === 'p-inv')).toBe(visible);
+      // Never the unbilled or the voided line, whatever the bill's state.
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-new');
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-void');
+    });
+
+    /**
+     * Owner decision 2026-09-24: when the office revises a bill the assayer already SENT, the
+     * revision starts unsent (it asks them to check and send again) — but the amounts they already
+     * saw stay in Money meanwhile. A bill never sent reveals nothing at any revision.
+     */
+    it('sent → revised: the line stays visible on the unsent revision', async () => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9-R2', status: 'INVITED' }];
+      invoiceChainRows = [
+        { id: 'ainv-1', status: 'SUPERSEDED', submitted_at: '2026-09-20T10:00:00Z', supersedes_invoice_id: null },
+        { id: 'ainv-9', status: 'INVITED', submitted_at: null, supersedes_invoice_id: 'ainv-1' },
+      ];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.map((p: any) => p.id)).toContain('p-inv');
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-new');
+    });
+
+    it('sent → revised → revised again: still visible through the whole chain', async () => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9-R3', status: 'INVITED' }];
+      invoiceChainRows = [
+        { id: 'ainv-1', status: 'SUPERSEDED', submitted_at: '2026-09-20T10:00:00Z', supersedes_invoice_id: null },
+        { id: 'ainv-2', status: 'SUPERSEDED', submitted_at: null, supersedes_invoice_id: 'ainv-1' },
+        { id: 'ainv-9', status: 'INVITED', submitted_at: null, supersedes_invoice_id: 'ainv-2' },
+      ];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.map((p: any) => p.id)).toContain('p-inv');
+    });
+
+    it('never sent → revised: still hidden', async () => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9-R2', status: 'INVITED' }];
+      invoiceChainRows = [
+        { id: 'ainv-1', status: 'SUPERSEDED', submitted_at: null, supersedes_invoice_id: null },
+        { id: 'ainv-9', status: 'INVITED', submitted_at: null, supersedes_invoice_id: 'ainv-1' },
+      ];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-inv');
+    });
+
     it('assayer totals come from the narrowed SUM — same expressions, narrower WHERE', async () => {
       narrowedTotalsRow = { earned: 2700, paid: 1800, outstanding: 900, awaiting_approval: 0, on_hold: 0, tds_withheld: 300, payable_count: 2 };
       const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
       expect(s.totals).toMatchObject({ earned: 2700, paid: 1800, outstanding: 900, payableCount: 2 });
-      const narrowedSql = managerQuery.mock.calls.find(([sql]) => sql.includes('LEFT JOIN assayer_invoices ai'))?.[0];
-      expect(narrowedSql).toContain(`p.status <> 'VOIDED'`);
-      expect(narrowedSql).toContain(`(p.pre_invoicing_era = true OR ai.status = 'APPROVED')`);
+      const narrowed = managerQuery.mock.calls.find(([sql]) => sql.includes('assayer_invoice_id = ANY($2::uuid[])'));
+      expect(narrowed?.[0]).toContain(`p.status <> 'VOIDED'`);
+      // The totals read the same revealing-bill set as the rows (a sent bill, or a revision of one).
+      expect(narrowed?.[0]).toContain(`(p.pre_invoicing_era = true OR p.assayer_invoice_id = ANY($2::uuid[]))`);
+      expect(narrowed?.[1]?.[1]).toEqual(['ainv-9']);
+      const reveal = managerQuery.mock.calls.find(([sql]) => sql.includes('WITH RECURSIVE chain'));
+      expect(reveal?.[1]?.[1]).toEqual(['SUBMITTED', 'APPROVED', 'HOD_APPROVED', 'PAID']);
+      expect(reveal?.[0]).toContain('submitted_at IS NOT NULL');
     });
 
     it('assayer payments are filtered to visible payables and carry NO balanceAfter', async () => {
@@ -903,6 +1147,118 @@ describe('AssayerInvoiceService', () => {
   });
 
   // ── The rollout gate ──────────────────────────────────────────────────────
+
+  // ── The 2026-09-24 money audit ──────────────────────────────────────────
+  describe('2026-09-24 audit', () => {
+    describe('F5 — staff confirming for the assayer is recorded as staff, with a reason', () => {
+      it('records the staff member as the actor, and why', async () => {
+        assayerInvoiceRepo.findOne.mockImplementation(async () => invoice());
+        await service.submit('assayer-1', 'req-uuid-1', { staffId: 'ops-7', reason: 'Assayer confirmed the amounts by phone' });
+        const inv = committed.find((r) => r.lineCount !== undefined);
+        expect(inv).toMatchObject({ status: AssayerInvoiceStatus.SUBMITTED, updatedBy: 'ops-7' });
+        const h = committed.find((r) => r.action === 'ASSAYER_INVOICE_SUBMITTED');
+        expect(h.createdBy).toBe('ops-7');
+        expect(h.newValue).toMatchObject({ submittedBy: 'STAFF_ON_BEHALF', onBehalfOfAssayerId: 'assayer-1', staffId: 'ops-7' });
+        expect(h.reason).toMatch(/by phone/);
+        expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'ASSAYER_INVOICE_SUBMITTED', userId: 'ops-7' }), expect.anything());
+      });
+
+      it("the assayer's own submission is recorded as theirs", async () => {
+        assayerInvoiceRepo.findOne.mockImplementation(async () => invoice());
+        await service.submit('assayer-1', 'req-uuid-1');
+        const h = committed.find((r) => r.action === 'ASSAYER_INVOICE_SUBMITTED');
+        expect(h.createdBy).toBe('assayer-1');
+        expect(h.newValue).toMatchObject({ submittedBy: 'ASSAYER' });
+      });
+
+      it('refuses a staff submission without a real reason, and writes nothing', async () => {
+        assayerInvoiceRepo.findOne.mockImplementation(async () => invoice());
+        await expect(service.submit('assayer-1', 'req-uuid-1', { staffId: 'ops-7', reason: 'ok' })).rejects.toThrow(BadRequestException);
+        expect(committed).toHaveLength(0);
+      });
+    });
+
+    describe('F10 — a bill whose lines were all paid before approval is settled by it', () => {
+      const paidLines = () => [
+        feeLine({ assayerInvoiceId: 'ainv-1', status: AssayerPayableStatus.PAID, paidAmount: '1800.00' }),
+        expenseLine({ assayerInvoiceId: 'ainv-1', status: AssayerPayableStatus.PAID, paidAmount: '450.00' }),
+      ];
+      const countByStatus = () => {
+        payableRepo.count = jest.fn(async (opts: any) => (opts?.where?.status === AssayerPayableStatus.PAID ? 2 : 0));
+      };
+      afterEach(() => { delete payableRepo.count; });
+
+      it('office approval → PAID, not "approved" with nothing to pay', async () => {
+        const inv = invoice({ status: AssayerInvoiceStatus.SUBMITTED, submittedAt: new Date(), submittedRequestId: 'r', revision: 1, confirmedVersion: 1 });
+        assayerInvoiceRepo.findOne.mockImplementation(async () => inv);
+        lockedPayableRows = paidLines();
+        countByStatus();
+        const out = await service.approve('ainv-1', 'finance-1');
+        expect(out.status).toBe(AssayerInvoiceStatus.PAID);
+        expect(committed.find((r) => r.action === 'ASSAYER_INVOICE_PAID')).toMatchObject({ fromState: AssayerInvoiceStatus.APPROVED });
+      });
+
+      it('HOD approval → PAID too', async () => {
+        const inv = invoice({ status: AssayerInvoiceStatus.APPROVED, approvedBy: 'office-1', approvedAt: new Date(), revision: 1, confirmedVersion: 1 });
+        assayerInvoiceRepo.findOne.mockImplementation(async () => inv);
+        lockedPayableRows = paidLines();
+        countByStatus();
+        const out = await service.hodApprove('ainv-1', 'hod-1');
+        expect(out.status).toBe(AssayerInvoiceStatus.PAID);
+        expect(committed.find((r) => r.action === 'ASSAYER_INVOICE_PAID')).toMatchObject({ fromState: AssayerInvoiceStatus.HOD_APPROVED });
+      });
+
+      it('a bill with money still owed stays approved', async () => {
+        const inv = invoice({ status: AssayerInvoiceStatus.SUBMITTED, submittedAt: new Date(), submittedRequestId: 'r', revision: 1, confirmedVersion: 1 });
+        assayerInvoiceRepo.findOne.mockImplementation(async () => inv);
+        const owed = [feeLine({ assayerInvoiceId: 'ainv-1' }), expenseLine({ assayerInvoiceId: 'ainv-1' })];
+        lockedPayableRows = owed;
+        payableRepo.findOne.mockImplementation(async (opts: any) => owed.find((l: any) => l.id === opts?.where?.id) ?? null);
+        payableRepo.count = jest.fn(async (opts: any) => (opts?.where?.status === AssayerPayableStatus.PAID ? 0 : 2));
+        const out = await service.approve('ainv-1', 'finance-1');
+        expect(out.status).toBe(AssayerInvoiceStatus.APPROVED);
+      });
+    });
+
+    describe('F12 — the bills list is region-narrowed on the assayer', () => {
+      it('narrows a region-scoped caller to assayers in their regions (and those with none)', async () => {
+        await service.list({ status: AssayerInvoiceStatus.SUBMITTED }, { regions: ['WEST'] as any });
+        const where = assayerInvoiceRepo.findAndCount.mock.calls[0][0].where;
+        expect(where.status).toBe(AssayerInvoiceStatus.SUBMITTED);
+        const op = where.assayerId;
+        expect(op?.type).toBe('raw');
+        const sql = op.getSql('"assayerId"');
+        expect(sql).toContain('s.region IS NULL OR s.region = ANY(CAST(:regions AS text[]))');
+        expect(op.objectLiteralParameters).toEqual({ regions: ['WEST'] });
+      });
+
+      it('keeps an assayer filter inside the ceiling', async () => {
+        await service.list({ assayerId: 'assayer-9' }, { regions: ['WEST'] as any });
+        const op = assayerInvoiceRepo.findAndCount.mock.calls[0][0].where.assayerId;
+        expect(op.getSql('x')).toMatch(/^x = :assayerId AND x IN/);
+        expect(op.objectLiteralParameters).toEqual({ assayerId: 'assayer-9', regions: ['WEST'] });
+      });
+
+      it('an unrestricted caller sees every bill', async () => {
+        await service.list({});
+        expect(assayerInvoiceRepo.findAndCount.mock.calls[0][0].where).toEqual({ isActive: true });
+      });
+    });
+
+    describe('F13 — the revision push carries no rupee figure', () => {
+      it('sends count and number, never the total', async () => {
+        const inv = invoice({ id: 'ainv-1', status: AssayerInvoiceStatus.SUBMITTED, revision: 1 });
+        assayerInvoiceRepo.findOne.mockImplementation(async (opts: any) => (opts?.where?.id === 'ainv-1' ? inv : null));
+        lockedPayableRows = [feeLine({ assayerInvoiceId: 'ainv-1' })];
+        await service.reviseInvoice('ainv-1', 'ops-1', 'Disputed travel amount');
+        await flush();
+        const call = emitSafe.mock.calls.find(([o]) => o.dedupeKey?.startsWith('ASSAYER_INVOICE_REVISED'))?.[0];
+        expect(call.payload).toMatchObject({ count: 1, isRevision: true });
+        expect(call.payload).not.toHaveProperty('total');
+        expect(JSON.stringify(call.payload)).not.toMatch(/1800|₹/);
+      });
+    });
+  });
 
   describe('assertEnabled — the rollout gate', () => {
     it('404s while the flag is off or unreadable', async () => {

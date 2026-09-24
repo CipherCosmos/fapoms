@@ -321,11 +321,28 @@ export async function bootstrapRoles(
           EXECUTE format('ALTER FUNCTION %s OWNER TO ${MIGRATION_ROLE}', r.ident);
           moved := moved + 1;
         END LOOP;
+        -- Enum and domain types. Moving a table does not move the enum types its columns use, so
+        -- a deployment that predates the role split kept every enum owned by the old role — and
+        -- the first migration to ALTER TYPE … ADD VALUE died on "must be owner of type
+        -- assayers_lifecycle_status_enum", taking the API down with it (homeserver, 2026-09-23).
+        FOR r IN
+          SELECT t.oid::regtype AS ident
+            FROM pg_type t
+            JOIN pg_namespace n ON n.oid = t.typnamespace
+           WHERE n.nspname = 'public'
+             AND t.typtype IN ('e', 'd')
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.oid AND d.deptype = 'e')
+             AND pg_get_userbyid(t.typowner) NOT IN ('${MIGRATION_ROLE}', '${AUDIT_OWNER_ROLE}')
+        LOOP
+          EXECUTE format('ALTER TYPE %s OWNER TO ${MIGRATION_ROLE}', r.ident);
+          moved := moved + 1;
+        END LOOP;
         IF moved > 0 THEN
           RAISE NOTICE 'reassigned % object(s) to ${MIGRATION_ROLE}', moved;
         END IF;
       END $$;
-      SELECT count(*)::int AS remaining
+      SELECT (
+      SELECT count(*)::int
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
        WHERE n.nspname = 'public'
          AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
@@ -335,6 +352,14 @@ export async function bootstrapRoles(
            AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'a')
          )
          AND pg_get_userbyid(c.relowner) NOT IN ('${MIGRATION_ROLE}', '${AUDIT_OWNER_ROLE}')
+      ) + (
+      SELECT count(*)::int
+        FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+       WHERE n.nspname = 'public'
+         AND t.typtype IN ('e', 'd')
+         AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.oid AND d.deptype = 'e')
+         AND pg_get_userbyid(t.typowner) NOT IN ('${MIGRATION_ROLE}', '${AUDIT_OWNER_ROLE}')
+      ) AS remaining
     `);
     const remaining = Number(reassigned?.[0]?.remaining ?? 0);
     if (remaining > 0) {

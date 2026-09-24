@@ -2,8 +2,9 @@ import { AssayerLifecycleStatus } from './enums';
 import {
   ONBOARDING_STAGES, ONBOARDING_NEXT_STEP,
   isOnboardingStage, onboardingNextStep, nextOnboardingStep,
-  nextAssayerLifecycleStates, canTransitionAssayerLifecycle,
+  nextAssayerLifecycleStates, canTransitionAssayerLifecycle, hasPassedFinalApproval,
 } from './assayer-lifecycle';
+import { AssayerUnavailableReason } from './assayer-roster-vocabulary';
 
 /**
  * ONE HOME FOR "WHAT BLOCKS ACTIVATION".
@@ -21,11 +22,12 @@ import {
  */
 
 describe('the joining stages', () => {
-  it('are the four an assayer walks before they may be given work', () => {
+  it('are the five an assayer walks before they may be given work', () => {
     expect(ONBOARDING_STAGES).toEqual([
       AssayerLifecycleStatus.INVITED,
       AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
       AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+      AssayerLifecycleStatus.FINAL_APPROVAL,
       AssayerLifecycleStatus.TRAINING,
     ]);
   });
@@ -95,11 +97,16 @@ describe('the forward step', () => {
   it('walks the chain one stage at a time, and ends at Active', () => {
     expect(nextOnboardingStep(AssayerLifecycleStatus.INVITED)).toBe(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
     expect(nextOnboardingStep(AssayerLifecycleStatus.DOCUMENT_VERIFICATION)).toBe(AssayerLifecycleStatus.BACKGROUND_VERIFICATION);
-    expect(nextOnboardingStep(AssayerLifecycleStatus.BACKGROUND_VERIFICATION)).toBe(AssayerLifecycleStatus.TRAINING);
+    expect(nextOnboardingStep(AssayerLifecycleStatus.BACKGROUND_VERIFICATION)).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
     expect(nextOnboardingStep(AssayerLifecycleStatus.TRAINING)).toBe(AssayerLifecycleStatus.ACTIVE);
   });
 
-  it('never skips a stage — four decisions stay four decisions', () => {
+  /** Approval → training is the approver's decision, taken on the approval — never a stage button. */
+  it('offers no stage button out of approval', () => {
+    expect(nextOnboardingStep(AssayerLifecycleStatus.FINAL_APPROVAL)).toBeNull();
+  });
+
+  it('never skips a stage — each decision stays its own', () => {
     // The button is a shortcut for a judgement somebody in HR makes about a real person; a single
     // press that walked INVITED to ACTIVE would have made three of those four judgements up.
     let at: string = AssayerLifecycleStatus.INVITED;
@@ -110,7 +117,11 @@ describe('the forward step', () => {
       walked.push(next);
       at = next;
     }
-    expect(walked).toEqual([...ONBOARDING_STAGES, AssayerLifecycleStatus.ACTIVE]);
+    // The walk stops at approval: the rest belongs to the approver.
+    expect(walked).toEqual([
+      AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+      AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.FINAL_APPROVAL,
+    ]);
   });
 
   it('is nothing for anybody who is not joining', () => {
@@ -137,5 +148,29 @@ describe('the forward step', () => {
       expect(nextAssayerLifecycleStates(stage)).toContain(forward);
       expect(canTransitionAssayerLifecycle(stage, forward)).toBe(true);
     }
+  });
+});
+
+describe('hasPassedFinalApproval', () => {
+  it('is false for every stage up to and including FINAL_APPROVAL, and for no status at all', () => {
+    for (const s of [
+      AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+      AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.FINAL_APPROVAL,
+    ]) expect(hasPassedFinalApproval(s)).toBe(false);
+    expect(hasPassedFinalApproval(null)).toBe(false);
+  });
+
+  it('is true from TRAINING (entered only by the approval) onwards', () => {
+    for (const s of [
+      AssayerLifecycleStatus.TRAINING, AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ON_LEAVE,
+      AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.RESIGNED, AssayerLifecycleStatus.TERMINATED,
+      AssayerLifecycleStatus.ARCHIVED,
+    ]) expect(hasPassedFinalApproval(s)).toBe(true);
+  });
+
+  it('splits INACTIVE by why the person was parked', () => {
+    expect(hasPassedFinalApproval(AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.BGV_FAILED)).toBe(false);
+    expect(hasPassedFinalApproval(AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.APPROVAL_REJECTED)).toBe(false);
+    expect(hasPassedFinalApproval(AssayerLifecycleStatus.INACTIVE, null)).toBe(true);
   });
 });

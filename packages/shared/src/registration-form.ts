@@ -2,6 +2,7 @@ import { ApplicationStatus } from './assayer-application';
 import { dateOfBirthProblem } from './assayer-record';
 import { EmploymentCategory } from './assayer-roster-vocabulary';
 import { identifierFormatIssue, mobileNumberLooksWrong } from './identifier-entry';
+import { isBankAccountNumber, normaliseBankAccountNumber } from './identity-validation';
 
 /**
  * THE CANDIDATE'S REGISTRATION FORM, AS EVERY SURFACE ASKS IT.
@@ -65,6 +66,12 @@ export interface RegistrationFormValues {
   panNumber: string;
   aadhaarNumber: string;
   bankAccountNumber: string;
+  /**
+   * The account number typed a second time. Only on forms that ask for it; when present, step 3
+   * refuses to continue until it agrees with `bankAccountNumber`. A form seeds it with the number
+   * already on file, so only a number typed NOW has to be typed twice.
+   */
+  bankAccountNumberConfirm?: string;
   ifscCode: string;
   bankName: string;
   qualification: string;
@@ -82,6 +89,8 @@ export type RegistrationProblem =
   | { code: 'tooShort' }
   | { code: 'tooLong'; max: number; length: number }
   | { code: 'invalid' }
+  /** Typed twice and the two disagree, or the second has not been typed. */
+  | { code: 'mismatch'; message: string }
   | { code: 'outOfRange'; min: number; max: number }
   /** The shared age-and-calendar rule, which already speaks in full sentences the server also uses. */
   | { code: 'dateOfBirth'; message: string };
@@ -94,9 +103,30 @@ export function isSixDigitPincode(value: string): boolean {
   return /^\d{6}$/.test((value || '').trim());
 }
 
-export function isBankAccountNumber(value: string): boolean {
-  return /^\d{9,18}$/.test((value || '').trim());
+
+/**
+ * Whether the account number was typed the same way twice — or why not.
+ *
+ * The check that actually catches a slip: nothing about a wrong digit makes the number invalid, so
+ * the only defence short of asking a bank is having it typed a second time, from the passbook,
+ * not pasted. Null when they agree or when there is no account number to confirm.
+ */
+export function bankAccountConfirmProblem(account: string, confirm: string): string | null {
+  const a = normaliseBankAccountNumber(account);
+  if (!a) return null;
+  const c = normaliseBankAccountNumber(confirm);
+  if (!c) return 'Type the account number a second time to confirm it.';
+  return a === c ? null : 'The two account numbers do not match — check each digit against the passbook.';
 }
+
+/**
+ * Documents a candidate cannot submit without. The server refuses the submit; both forms mark
+ * these and stop at the documents step first, so all three say the same thing.
+ *
+ * The passbook is here because it is the one evidence of the account a payout goes to: a number
+ * with nothing to check it against is a number nobody can say is theirs.
+ */
+export const REGISTRATION_REQUIRED_DOCUMENTS: readonly string[] = ['BANK_PASSBOOK'];
 
 export function registrationLengthProblem(key: string, value: string): RegistrationProblem | null {
   const max = REGISTRATION_FIELD_LIMITS[key];
@@ -151,6 +181,9 @@ export function registrationStepProblems(step: number, f: RegistrationFormValues
     });
     if (f.bankAccountNumber.trim() && !isBankAccountNumber(f.bankAccountNumber)) {
       set('bankAccountNumber', { code: 'invalid' });
+    } else if (f.bankAccountNumberConfirm !== undefined) {
+      const mismatch = bankAccountConfirmProblem(f.bankAccountNumber, f.bankAccountNumberConfirm);
+      if (mismatch) set('bankAccountNumberConfirm', { code: 'mismatch', message: mismatch });
     }
     (['alternatePhone', 'emergencyContactPhone'] as const).forEach((key) => {
       if (mobileNumberLooksWrong(f[key])) set(key, { code: 'invalid' });

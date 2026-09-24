@@ -27,6 +27,40 @@ export { canonicalState };
 
 /** A working day an assayer can actually sell, in hours. */
 const WORKING_HOURS_PER_DAY = 10;
+
+/**
+ * CAPACITY IS HEADCOUNT (F11, owner decision 2026-09-25).
+ *
+ * One available assayer supplies ONE assayer-day per working day. Demand is already in assayer-days
+ * (audit hours ÷ a working day), so the two are compared in the same unit over a stated window:
+ *
+ *   capacity (assayer-days) = active assayers in the territory × CAPACITY_WINDOW_WORKING_DAYS
+ *   loadRatio              = demand (assayer-days) ÷ capacity (assayer-days)
+ *
+ * The window is one working week — the horizon the rest of planning already measures workload over
+ * (weekly workload caps, the engine's weekly workload window). A ratio above 1 means the local
+ * workforce cannot clear the outstanding work in a week; the posture thresholds read it as before.
+ *
+ * This used to sum the per-assayer "most jobs per day" setting — branch-slots per day, default 3 on every row and set
+ * deliberately on almost none — and divide assayer-DAYS by it, two different units. The setting is
+ * gone (an assayer may take several branches a day, with no cap).
+ */
+export const CAPACITY_WINDOW_WORKING_DAYS = 5;
+
+/** The capacity figures for a territory (or the whole book) from its headcount and demand. */
+export function headcountCapacity(headcount: number, demandAssayerDays: number): {
+  dailyCapacity: number;
+  capacityAssayerDays: number;
+  loadRatio: number | null;
+} {
+  const people = Math.max(0, Math.floor(Number(headcount) || 0));
+  const capacityAssayerDays = people * CAPACITY_WINDOW_WORKING_DAYS;
+  return {
+    dailyCapacity: people,
+    capacityAssayerDays,
+    loadRatio: capacityAssayerDays > 0 ? Math.round((demandAssayerDays / capacityAssayerDays) * 100) / 100 : null,
+  };
+}
 /**
  * Fallback serviceable radius, for a client that has not contracted one.
  *
@@ -353,7 +387,7 @@ export class CommandCenterService {
     const assayers = await this.dataSource.query(
       `WITH roster AS (
          SELECT a.id, a.display_name, a.assayer_code, a.district, a.state,
-                a.latitude, a.longitude, a.max_daily_workload
+                a.latitude, a.longitude
            FROM assayers a
           WHERE ${assayerWhere.join(' AND ')}
        ),
@@ -511,7 +545,6 @@ export class CommandCenterService {
       state: canonicalState(a.state),
       latitude: a.latitude === null ? null : Number(a.latitude),
       longitude: a.longitude === null ? null : Number(a.longitude),
-      maxDailyWorkload: n(a.max_daily_workload) || 3,
       baseFee: n(a.base_fee),
       openAssignments: n(a.open_assignments),
     }));
@@ -525,7 +558,7 @@ export class CommandCenterService {
       if (!territories.has(state)) {
         territories.set(state, {
           state, branches: 0, packets: 0, auditHours: 0,
-          assayers: 0, dailyCapacity: 0,
+          assayers: 0,
           assignedBranches: 0, unassignedBranches: 0, isolatedBranches: 0,
           realisedRevenue: 0, pipelineValue: 0,
           // Internal only — the running total and divisor behind `avgNearestAssayerKm`.
@@ -578,7 +611,6 @@ export class CommandCenterService {
     for (const a of assayerPoints) {
       const t = territory(a.state);
       t.assayers += 1;
-      t.dailyCapacity += a.maxDailyWorkload;
       const dKey = a.district || 'UNKNOWN';
       if (t.districts.has(dKey)) t.districts.get(dKey).assayers += 1;
     }
@@ -592,7 +624,8 @@ export class CommandCenterService {
 
     const territoryList = [...territories.values()].map((t) => {
       const demandDays = t.auditHours / WORKING_HOURS_PER_DAY;
-      const capacityDays = t.dailyCapacity; // branch-slots per day ≈ days of capacity per day
+      // Headcount-based — see CAPACITY_WINDOW_WORKING_DAYS.
+      const capacity = headcountCapacity(t.assayers, demandDays);
       const unassignedShare = t.branches ? t.unassignedBranches / t.branches : 0;
       // Kept out of the spread below rather than overwritten by it: these are the running
       // float total and its divisor, not outputs. See where they are initialised.
@@ -607,24 +640,27 @@ export class CommandCenterService {
           .sort((a: any, b: any) => b.packets - a.packets),
         auditHours: Math.round(t.auditHours * 10) / 10,
         demandAssayerDays: Math.round(demandDays * 10) / 10,
-        dailyCapacity: t.dailyCapacity,
-        // >1 means more work than local people can absorb in a day's cycle.
-        loadRatio: capacityDays > 0 ? Math.round((demandDays / capacityDays) * 100) / 100 : null,
+        // Assayer-days the local workforce supplies per working day (= headcount), and over the
+        // capacity window; >1 load means more work than they can clear in that window.
+        dailyCapacity: capacity.dailyCapacity,
+        capacityAssayerDays: capacity.capacityAssayerDays,
+        capacityWindowDays: CAPACITY_WINDOW_WORKING_DAYS,
+        loadRatio: capacity.loadRatio,
         avgNearestAssayerKm: nearestKmCount ? Math.round((nearestKmSum / nearestKmCount) * 10) / 10 : null,
         pipelineValue: Math.round(t.branches * avgFee),
         unassignedShare: Math.round(unassignedShare * 100),
         // The headline judgement for this territory.
         posture:
           t.assayers === 0 ? 'NO_COVERAGE'
-          : capacityDays > 0 && demandDays / capacityDays > 1.5 ? 'UNDER_RESOURCED'
-          : capacityDays > 0 && demandDays / capacityDays < 0.35 ? 'UNDER_UTILISED'
+          : capacity.loadRatio !== null && capacity.loadRatio > 1.5 ? 'UNDER_RESOURCED'
+          : capacity.loadRatio !== null && capacity.loadRatio < 0.35 ? 'UNDER_UTILISED'
           : 'BALANCED',
       };
     }).sort((a: any, b: any) => b.packets - a.packets);
 
     const totalPackets = branchPoints.reduce((sum: number, b: any) => sum + b.packets, 0);
     const totalHours = branchPoints.reduce((sum: number, b: any) => sum + b.auditHours, 0);
-    const totalCapacity = assayerPoints.reduce((sum: number, a: any) => sum + a.maxDailyWorkload, 0);
+    const totalCapacity = headcountCapacity(assayerPoints.length, totalHours / WORKING_HOURS_PER_DAY);
 
     /**
      * Pin arrays, bounded. Sorted by what the map is for — unreachable branches, then
@@ -689,7 +725,9 @@ export class CommandCenterService {
         packets: totalPackets,
         auditHours: Math.round(totalHours * 10) / 10,
         demandAssayerDays: Math.round((totalHours / WORKING_HOURS_PER_DAY) * 10) / 10,
-        dailyCapacity: totalCapacity,
+        dailyCapacity: totalCapacity.dailyCapacity,
+        capacityAssayerDays: totalCapacity.capacityAssayerDays,
+        capacityWindowDays: CAPACITY_WINDOW_WORKING_DAYS,
         // A project-less branch has no assignment, so it counts as unassigned here.
         unassignedBranches: branchPoints.filter((b: any) => !b.assigned).length + extraBranchPoints.length,
         isolatedBranches: branchPoints.filter((b: any) => b.isolated).length,

@@ -136,12 +136,28 @@ describe('EventsGateway — territorial rooms', () => {
     expect((gw as any).server.to).toHaveBeenCalledWith('staff');
   });
 
-  it('does not drop an event when region resolution throws', async () => {
+  it('fails CLOSED to the national desk when region resolution throws — never the staff firehose', async () => {
     const { gw } = makeGateway(null, null);
     (gw as any).regionGuard.resolveEventRegion = jest.fn().mockRejectedValue(new Error('db down'));
-    (gw as any).emitOperational('branch:updated', { branchId: 'b1' });
+    (gw as any).emitOperational('branch:updated', { branchId: 'b1', organizationId: 'o1' });
     await new Promise((r) => setImmediate(r));
-    expect((gw as any).server.to).toHaveBeenCalledWith('staff');
+    expect((gw as any).server.to).toHaveBeenCalledWith('staff:national');
+    expect((gw as any).server.to).not.toHaveBeenCalledWith('staff');
+    expect((gw as any).server.to).not.toHaveBeenCalledWith('org:o1');
+  });
+
+  it('sends a regional record whose region is unknown (null) to the national desk only', async () => {
+    const { gw } = makeGateway(null, null);
+    (gw as any).emitOperational('assignment:status-changed', { assignmentId: 'a1' });
+    await new Promise((r) => setImmediate(r));
+    expect((gw as any).server.to.mock.calls.map((c: any[]) => c[0])).toEqual(['staff:national']);
+  });
+
+  it('sends non-regional traffic naming an organisation to that organisation\'s STAFF room, not org:', async () => {
+    const { gw } = makeGateway(null, null);
+    (gw as any).emitOperational('client:updated', { clientId: 'c1', organizationId: 'o1' });
+    await new Promise((r) => setImmediate(r));
+    expect((gw as any).server.to.mock.calls.map((c: any[]) => c[0])).toEqual(['staff:org:o1']);
   });
 });
 

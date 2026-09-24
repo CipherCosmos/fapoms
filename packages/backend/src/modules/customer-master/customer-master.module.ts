@@ -7,8 +7,7 @@ import { ProjectEntity } from '../project/project.entity';
 import { CustomerMasterService } from './customer-master.service';
 import { CustomerMasterController } from './customer-master.controller';
 import { StorageModule } from '../../infrastructure/storage/storage.module';
-import { ImportModule } from '../import/import.module';
-import { CustomerMasterImportWorker } from './customer-master-import.worker';
+import { CustomerMasterImportJob } from './customer-master-import.job';
 
 @Module({
   imports: [
@@ -17,11 +16,12 @@ import { CustomerMasterImportWorker } from './customer-master-import.worker';
     TypeOrmModule.forFeature([CustomerMasterVersionEntity, CustomerRecordEntity, BranchEntity, ProjectEntity]),
     // StorageModule provides the 'StorageEngine' token for customer master Excel uploads.
     StorageModule,
-    // The shared import queue: reconciliation runs on the queue, not in the upload request.
-    ImportModule,
   ],
   controllers: [CustomerMasterController],
-  providers: [CustomerMasterService, CustomerMasterImportWorker],
+  // CustomerMasterImportJob registers the CUSTOMER_MASTER_IMPORT background-job kind: the upload
+  // route stores the file and answers 202, and the reconciliation runs in the worker. The foundation
+  // (BackgroundJobsModule) is global, so nothing else needs importing for it.
+  providers: [CustomerMasterService, CustomerMasterImportJob],
   exports: [CustomerMasterService],
 })
 export class CustomerMasterModule {}

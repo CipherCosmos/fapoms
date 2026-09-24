@@ -22,7 +22,7 @@ describe('GeoController#autocomplete — tells "no match" apart from "not config
   // with none provided rather than standing up a full Nest TestingModule for one method.
   const controller = new GeoController(
     undefined as any, undefined as any, undefined as any, undefined as any,
-    undefined as any, undefined as any, undefined as any,
+    undefined as any, undefined as any,
   );
 
   afterEach(() => jest.restoreAllMocks());

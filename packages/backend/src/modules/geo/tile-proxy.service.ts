@@ -37,21 +37,34 @@ import { resolveGeoCacheDir } from './geo-cache-store';
  */
 
 /**
- * The upstream tile source. Single named constant on purpose: repointing this at a paid provider
- * or a self-hosted renderer (Thunderforest, MapTiler, a local tileserver-gl) is the entire change
- * needed — nothing else in the backend or the app knows where tiles come from.
+ * The upstream tile source: our own renderer, never a public tile server.
+ *
+ * OpenStreetMap's standard tiles draw India's borders as they are administered on the ground — the
+ * Line of Control, Aksai Chin outside India. Indian law requires maps shown in India to depict the
+ * boundary the Survey of India publishes, and an application map audit fails on the former. The
+ * `india-tiles` service (deploy/maps/) renders OpenStreetMap data with every international border
+ * taken from Natural Earth's India point-of-view dataset instead, and nothing of the de-facto
+ * administration drawn inside Jammu & Kashmir and Ladakh. Nothing else in the backend or the apps
+ * knows where tiles come from, so this is the only place that changes if the source ever does.
  */
-const UPSTREAM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const UPSTREAM_TILE_URL =
+  process.env.MAP_TILE_UPSTREAM_URL || 'http://india-tiles:8080/styles/india/{z}/{x}/{y}.png';
 
 /**
- * OSM's policy requires a real, identifying User-Agent naming the application and a way to reach
- * its operator. A generic or absent UA is grounds for being blocked outright.
+ * Bumped whenever the map's look or boundary data changes, so the cache (and every device's own
+ * cache, through the route's URL) never mixes tiles drawn from two different maps.
  */
+export const TILE_STYLE_VERSION = 'india-1';
+
+/** Identifies us to the renderer's logs; kept from when the upstream was OSM's servers. */
 const TILE_USER_AGENT = 'FAPOMS-Orbit/1.0 (+it@sumeruglobal.in)';
 
-/** Matches MapPicker's exported MIN_ZOOM/MAX_ZOOM. Anything outside is a malformed request. */
-const MIN_ZOOM = 3;
-const MAX_ZOOM = 18;
+/**
+ * The zooms any map in the apps asks for: a whole-country view at the bottom, street level at the
+ * top (the renderer draws past its data's zoom 15 by scaling vectors, which stays sharp).
+ */
+const MIN_ZOOM = 2;
+const MAX_ZOOM = 19;
 
 /** Map tiles are effectively immutable; a month between re-fetches is conservative. */
 const TILE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -101,7 +114,7 @@ export function parseTileCoords(z: string, x: string, y: string): TileRequest {
 @Injectable()
 export class TileProxyService {
   private readonly logger = new Logger(TileProxyService.name);
-  private readonly dir = path.join(resolveGeoCacheDir(), 'tiles');
+  private readonly dir = path.join(resolveGeoCacheDir(), 'tiles', TILE_STYLE_VERSION);
 
   /**
    * Bytes currently on disk, counted once on first use. Kept in memory so the common path (a hit,

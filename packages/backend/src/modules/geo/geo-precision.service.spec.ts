@@ -114,6 +114,36 @@ describe('GeoPrecisionService', () => {
       expect(report.movedKm[0].km).toBeGreaterThan(10);
     });
 
+    /**
+     * A new pin is announced, like every other write to the row — the maps refresh on it. Without
+     * this, somebody created and then placed by the address lookup never appeared on an open map.
+     */
+    it('announces the moved pin so open maps show it', async () => {
+      const events = { publish: jest.fn() };
+      const announcing = new GeoPrecisionService(
+        branchRepo as any, assayerRepo as any, { findOne: jest.fn() } as any, { recordEventSafe: jest.fn() } as any,
+        queue as any, events as any,
+      );
+      assayerRepo.createQueryBuilder = jest.fn(() => {
+        const c = chain();
+        c.getMany.mockResolvedValue([{
+          ...coarseRow(), id: 'a-1', displayName: 'Ravi Kumar', organizationId: 'org-1',
+          address: '14 Temple Street, Near Bus Stand, Thenkurissi',
+        }]);
+        return c;
+      });
+      mockResolve.mockResolvedValue({
+        latitude: 10.78, longitude: 76.65, location: { type: 'Point', coordinates: [76.65, 10.78] },
+        geoSource: 'osm_locality', geoAccuracyMeters: 900, geoMatchedName: 'Thenkurissi', geoResolvedAt: new Date(),
+      });
+
+      await announcing.backfill('assayer', 10);
+
+      expect(events.publish).toHaveBeenCalledWith('assayer:updated', expect.objectContaining({
+        aggregateId: 'a-1', organizationId: 'org-1',
+      }));
+    });
+
     it('leaves a row alone when the free chain cannot do better — no churn for no gain', async () => {
       branchRepo.createQueryBuilder = jest.fn(() => { const c = chain(); c.getMany.mockResolvedValue([coarseRow()]); return c; });
       // Same tier back: no improvement.

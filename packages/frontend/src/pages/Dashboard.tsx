@@ -43,7 +43,8 @@ interface Snapshot {
   roles: string[];
   focus: string;
   sections: string[];
-  attention: Attention[];
+  /** Null (or absent) when the caller's roles do not include it — like every other section. */
+  attention?: Attention[] | null;
   funnel: Array<{ key: string; label: string; count: number; packets: number }> | null;
   due: DueItem[] | null;
   documents: { packetsUnsent: number; awaitingReturn: number; awaitingOcr: number; inOcr: number } | null;
@@ -294,11 +295,13 @@ export const Dashboard: React.FC = () => {
             </span>
           )}
           <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all })}
+            title="Reload latest operational metrics and status counters"
             className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} className={isFetching ? 'dash-spin' : undefined} /> Refresh
           </button>
           {canSeeCommandCenter && (
             <button onClick={() => navigate('/executive-map')} className="btn btn-primary"
+              title="Open interactive national coverage map showing branch density and client distribution"
               style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
               <Map size={14} /> Coverage map <ArrowRight size={13} />
             </button>
@@ -337,7 +340,7 @@ export const Dashboard: React.FC = () => {
             your account has not been given that. Ask an administrator if you need it.
           </span>
           {landing !== '/dashboard' && (
-            <button onClick={() => navigate(landing)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
+            <button onClick={() => navigate(landing)} className="btn btn-secondary" title="Go to your assigned start page" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
               Go to my start page
             </button>
           )}
@@ -345,7 +348,7 @@ export const Dashboard: React.FC = () => {
       ) : (
         <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><AlertTriangle size={15} /> Could not load the operational snapshot.</span>
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)' }}>Retry</button>
+          <button onClick={() => refetch()} className="btn btn-secondary" title="Try loading the dashboard figures again" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)' }}>Retry</button>
         </div>
       ))}
 
@@ -358,7 +361,10 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
-          {/* 1. Needs attention — the only section that should change hour to hour. */}
+          {/* 1. Needs attention — the only section that should change hour to hour.
+              Absent for a role that does not get it: no block at all, rather than a
+              "Nothing blocked" that would be a claim about work this person cannot see. */}
+          {Array.isArray(data.attention) && (
           <div>
             <SectionLabel icon={<AlertTriangle size={13} />}>Needs attention</SectionLabel>
             {data.attention.length === 0 ? (
@@ -372,6 +378,7 @@ export const Dashboard: React.FC = () => {
                   return (
                     <button key={a.key} onClick={() => navigate(a.link)}
                       className={`dash-attention${a.severity === 'critical' ? ' dash-attention--critical' : ''}`}
+                      title={`${a.label} (${a.severity.toUpperCase()} priority) — ${a.detail}. Click to resolve.`}
                       style={{
                         textAlign: 'left', cursor: 'pointer',
                         background: `linear-gradient(135deg, color-mix(in srgb, ${c} 7%, var(--bg-secondary)), var(--bg-secondary) 70%)`,
@@ -395,6 +402,7 @@ export const Dashboard: React.FC = () => {
               </div>
             )}
           </div>
+          )}
 
           {/* 2. The week ahead + where the book is piling up. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>
@@ -513,7 +521,7 @@ export const Dashboard: React.FC = () => {
               <div className="glass-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14, marginTop: 12 }}>
                 {data.projects.length === 0 && <EmptyLine>No active projects.</EmptyLine>}
                 {data.projects.map((p) => (
-                  <button type="button" key={p.id} className="dash-project" style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer', borderRadius: 'var(--radius-sm)' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
+                  <button type="button" key={p.id} className="dash-project" title={`${p.name} (${p.projectNumber}) — ${p.clientName}, ${p.progressPct}% audited, ${p.totalBranches} branches. Click to open in Planning.`} style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer', borderRadius: 'var(--radius-sm)' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>
                         {p.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-2xs)' }}>{p.projectNumber}</span>
@@ -575,6 +583,7 @@ const KpiTile: React.FC<{ kpi: Kpi }> = ({ kpi }) => {
     <button
       onClick={kpi.onClick}
       className="dash-kpi"
+      title={`${kpi.label}: ${kpi.value} (${kpi.sub})${kpi.onClick ? ' — Click to view details' : ''}`}
       style={{
         textAlign: 'left', cursor: kpi.onClick ? 'pointer' : 'default',
         background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)',
@@ -616,7 +625,9 @@ const ChartCard: React.FC<{ title: string; icon?: React.ReactNode; action?: Reac
 );
 
 const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?: string; color: string; onClick?: () => void }> = ({ icon, label, value, sub, color, onClick }) => (
-  <button onClick={onClick} className="dash-stat" style={{
+  <button onClick={onClick} className="dash-stat"
+    title={`${label}: ${value}${sub ? ` · ${sub}` : ''}${onClick ? ' — Click to view' : ''}`}
+    style={{
     textAlign: 'left', cursor: onClick ? 'pointer' : 'default', background: 'var(--bg-secondary)',
     border: '1px solid var(--border-hair)', borderLeft: `3px solid ${color}`,
     borderRadius: 'var(--radius-md)', padding: '13px 15px', color: 'var(--text-primary)',

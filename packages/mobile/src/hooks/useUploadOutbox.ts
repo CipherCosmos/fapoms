@@ -38,12 +38,22 @@ export interface UploadOutbox {
  * Native streams the packet off disk with the resumable uploader — the one that asks the server
  * which chunks survived and resends only the gaps. Web has no file path to stream, so it keeps
  * the single-shot path (which retries the whole file on its own).
+ *
+ * Exported for the rebuilt app's background sync (`src/next/background`), which drains the same
+ * outbox with no screen mounted and must send exactly what this hook would.
  */
-async function sendOne(
+export async function sendOne(
   entry: OutboxUpload,
   onProgress: (percent: number) => void,
-): Promise<{ success: boolean; error?: string; code?: string }> {
+): Promise<{ success: boolean; error?: string; code?: string; status?: number }> {
   if (entry.target.kind === 'REGISTRATION_DOCUMENT') {
+    // The route writes to whoever is signed in, not to the person the scan was taken for. A scan
+    // of one person's ID card left on a shared phone must never land on the next person's record,
+    // so it is refused (403: a permanent refusal, parked for attention) rather than sent.
+    const signedIn = MobileApiService.getCurrentUserId();
+    if (entry.target.assayerId && signedIn && entry.target.assayerId !== signedIn) {
+      return { success: false, error: 'This paper was scanned for a different account.', status: 403 };
+    }
     // Not chunked. These are single photographs of a card or a signed form — a few hundred
     // kilobytes against an audit packet's tens of megabytes — so the session handshake the
     // resumable uploader needs would cost more round trips than the file itself. A failure

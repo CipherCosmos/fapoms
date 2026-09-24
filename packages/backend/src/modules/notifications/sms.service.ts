@@ -89,6 +89,27 @@ export class SmsService {
         error: 'The text could not be prepared. Hand the details over another way.',
       };
     }
+    /*
+      Refused NOW when it can never go, instead of queued to fail later. A caller reads QUEUED as
+      "on its way" and counts the channel — so a text doomed by a missing DLT id was reported as sent
+      to the person and to HR alike. The refusal is still written to the ledger, as a FAILED row with
+      its reason, so the outbox shows what was attempted and why it stopped.
+    */
+    const refused = this.transport.preflight({ to: request.to, dltTemplateId: rendered.dltTemplateId });
+    if (refused) {
+      const reason = this.transport.isEnabled() ? refused : SMS_NOT_SET_UP_REASON;
+      return this.outbound.recordImmediate({
+        channel: 'SMS',
+        kind: request.kind,
+        to: request.to,
+        subject: rendered.label,
+        entityType: request.entityType,
+        entityId: request.entityId,
+        requestedBy: request.requestedBy,
+        sent: false,
+        error: reason,
+      });
+    }
     return this.outbound.enqueue({
       channel: 'SMS',
       kind: request.kind,

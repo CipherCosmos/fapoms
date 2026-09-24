@@ -2,11 +2,14 @@ import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams, Link, useLocation } from 'react-router-dom';
 import {
   Users, MapPin, ClipboardList, Wallet, AlertTriangle, Plus, UserPlus,
+  ShieldCheck, BadgeCheck,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
-import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, useCurrentPermissions, canManageAssayers } from '../../hooks/useCurrentRoles';
+import { canAccessRoute } from '../../config/route-permissions';
+import { useApprovalCount } from './approvals/approval-queue';
 import { PageHeader } from '../../components/ui';
 import { useImportIssues } from './useImportIssues';
 import { usePendingApplicationCount } from './applications/usePendingApplications';
@@ -88,8 +91,8 @@ export function useHr(): HrContext {
 const PAGES: readonly {
   to: string; end?: boolean; label: string; icon: React.ElementType;
   tone: 'count' | 'alert';
-  badge: (d: HrWorkforceOverview, openIssues: number | null, pendingApplications: number | null) => number | null;
-  hint: (d: HrWorkforceOverview, openIssues: number | null, pendingApplications: number | null) => string;
+  badge: (d: HrWorkforceOverview, openIssues: number | null, pendingApplications: number | null, approvals: number | null) => number | null;
+  hint: (d: HrWorkforceOverview, openIssues: number | null, pendingApplications: number | null, approvals: number | null) => string;
 }[] = [
   { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count', hint: () => 'Everything that needs attention today, in one list' },
   {
@@ -119,6 +122,26 @@ const PAGES: readonly {
   },
   { to: '/hr/pay', label: 'Pay & terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms, side by side' },
   { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count', hint: () => 'Who is busy, which states are covered, and what changed recently' },
+  {
+    /*
+      The approver's list: joiners waiting for a senior's approval before training. Shown only to
+      somebody the route admits (see the filter where these render), and badged with the decisions
+      waiting on THIS reader — not everybody's queue, which would be a number they cannot clear.
+    */
+    to: '/hr/approvals', label: 'Approvals', icon: BadgeCheck, tone: 'alert',
+    badge: (_d, _i, _p, approvals) => approvals,
+    hint: (_d: HrWorkforceOverview, _i: number | null, _p: number | null, approvals: number | null) => (
+      approvals === null
+        ? 'Joiners waiting for a senior’s approval before training'
+        : approvals === 0
+          ? 'Nothing is waiting for your approval'
+          : `${approvals} ${approvals === 1 ? 'joiner is' : 'joiners are'} waiting for your approval`
+    ),
+  },
+  {
+    to: '/hr/rechecks', label: 'Re-checks', icon: ShieldCheck, badge: () => null, tone: 'alert',
+    hint: () => 'Background, police, credit and identity re-checks that are due, overdue, or awaiting a decision',
+  },
   {
     to: '/hr/issues', label: 'Review queue', icon: AlertTriangle, tone: 'alert',
     badge: (_d: HrWorkforceOverview, openIssues: number | null) => openIssues,
@@ -165,6 +188,8 @@ export const HrLayout: React.FC = () => {
   const issues = useImportIssues();
   const openIssues = issues.loading || issues.failed ? null : issues.openCount;
   const pendingApplications = usePendingApplicationCount();
+  const approvals = useApprovalCount();
+  const permissions = useCurrentPermissions();
 
   // Links to ?tab=compliance are in notification payloads and people's bookmarks; forward them
   // to the page that concern now lives on rather than dropping them on the overview.
@@ -271,6 +296,7 @@ export const HrLayout: React.FC = () => {
               <Link
                 to="/hr/hiring"
                 className="btn btn-primary"
+                title="Start onboarding a new assayer or review pending registration applications"
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}
               >
                 <Plus size={14} /> Add assayer
@@ -282,6 +308,7 @@ export const HrLayout: React.FC = () => {
             <Link
               to="/hr/roster"
               className="btn btn-secondary"
+              title="Open full assayer workforce directory to view profiles, rates, and active assignments"
               style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}
             >
               <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}
@@ -313,15 +340,16 @@ export const HrLayout: React.FC = () => {
           scrollbarWidth: 'none',
         }}
       >
-        {PAGES.map((p) => {
+        {/* A tab only for somebody its page admits — the same rule the sidebar and the router use. */}
+        {PAGES.filter((p) => canAccessRoute(roles, permissions, p.to)).map((p) => {
           const Icon = p.icon;
-          const badge = p.badge(d, openIssues, pendingApplications);
+          const badge = p.badge(d, openIssues, pendingApplications, approvals);
           /*
            * A bare red number beside a tab name is a puzzle: "Paperwork 34" says a quantity but
            * not of what, and not whether 34 is a workload or a warning. The hint spells the
            * number out in a sentence on hover, in the same words the destination screen uses.
            */
-          const hint = p.hint(d, openIssues, pendingApplications);
+          const hint = p.hint(d, openIssues, pendingApplications, approvals);
           // Red means "there is something here for you to do", never "this number is large" —
           // see the badge rule above.
           const alarming = p.tone === 'alert' && badge !== null && badge > 0;

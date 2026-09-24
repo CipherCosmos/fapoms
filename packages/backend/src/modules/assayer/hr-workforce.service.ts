@@ -83,6 +83,7 @@ const ONBOARDING_STAGES = [
   { key: 'INVITED', label: 'Invited' },
   { key: 'DOCUMENT_VERIFICATION', label: 'Document check' },
   { key: 'BACKGROUND_VERIFICATION', label: 'Background check' },
+  { key: 'FINAL_APPROVAL', label: 'Awaiting approval' },
   { key: 'TRAINING', label: 'Training' },
   { key: 'ACTIVE', label: 'Active' },
 ];
@@ -324,7 +325,7 @@ export class HrWorkforceService implements OnModuleInit {
       SELECT
         COUNT(*)::int                                                              AS total,
         COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int                   AS active,
-        COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
+        COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','FINAL_APPROVAL','TRAINING')
                            AND ${ON_ROSTER})::int AS onboarding,
         -- Lifecycle status first, dates second. Active and onboarding are both counted from
         -- lifecycle_status; counting departures from the dates alone meant a resigned assayer
@@ -1043,10 +1044,12 @@ export class HrWorkforceService implements OnModuleInit {
         ROUND(AVG(NULLIF(average_rating, 0))::numeric, 2)                       AS "avgRating",
         COUNT(*) FILTER (WHERE average_rating > 0)::int                         AS rated,
         COUNT(*) FILTER (WHERE average_rating > 0 AND average_rating < 3)::int   AS "belowPar",
-        SUM(total_assignments)::int                                             AS "totalAssignments",
-        SUM(completed_assignments)::int                                         AS "completedAssignments",
-        SUM(cancelled_assignments)::int                                         AS "cancelledAssignments",
-        SUM(on_time_completions)::int                                           AS "onTimeCompletions"
+        -- COALESCE: SUM over no rows (an empty or fully out-of-scope roster) is NULL, not 0, and the
+        -- page's "nobody has been given work yet" check compares against 0.
+        COALESCE(SUM(total_assignments), 0)::int                                AS "totalAssignments",
+        COALESCE(SUM(completed_assignments), 0)::int                            AS "completedAssignments",
+        COALESCE(SUM(cancelled_assignments), 0)::int                            AS "cancelledAssignments",
+        COALESCE(SUM(on_time_completions), 0)::int                              AS "onTimeCompletions"
       FROM assayers
       WHERE ${ON_ROSTER}${performanceScope}
     `, performanceParams);
@@ -1326,7 +1329,7 @@ export class HrWorkforceService implements OnModuleInit {
         COUNT(DISTINCT a.id)::int AS "all",
         COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'ACTIVE')::int AS "active",
         COUNT(DISTINCT a.id) FILTER (
-          WHERE a.lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
+          WHERE a.lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','FINAL_APPROVAL','TRAINING')
         )::int AS "onboarding",
         COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'DOCUMENT_VERIFICATION')::int AS "to-verify",
         COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'BACKGROUND_VERIFICATION')::int AS "background-due",

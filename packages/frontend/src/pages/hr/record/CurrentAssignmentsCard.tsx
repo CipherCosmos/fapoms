@@ -24,7 +24,7 @@ interface CurrentAssignmentsCardProps {
   loading?: boolean;
 }
 
-const statusBadgeStyle = (status: string): React.CSSProperties => {
+export const statusBadgeStyle = (status: string): React.CSSProperties => {
   switch (status) {
     case 'IN_PROGRESS':
     case 'CHECKED_IN':

@@ -1,3 +1,5 @@
+import { SLA_SCANNER_QUEUE, SLA_SCANNER_QUEUE_SETTINGS } from '../../infrastructure/scheduler/sla-scanner.constants';
+import { AssignmentRefreshPushService } from './assignment-refresh-push.service';
 import { Module, OnModuleInit, Logger } from '@nestjs/common';
 import { BullModule, InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -51,12 +53,14 @@ import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-
     // The admin screen's "run the digest now" enqueues onto the scanner's queue. Registering
     // the queue here (rather than importing SlaScannerModule, which imports this one) keeps
     // the two modules acyclic.
-    BullModule.registerQueue({ name: 'sla-scanner' }),
+    BullModule.registerQueue({ name: SLA_SCANNER_QUEUE, settings: SLA_SCANNER_QUEUE_SETTINGS }),
     AuditModule,
   ],
   controllers: [NotificationController, NotificationAdminController, OutboundMessageController],
   providers: [
     NotificationService, PushNotificationService, NotificationDispatchService,
+    // The silent "your jobs changed" push — see its own comment.
+    AssignmentRefreshPushService,
     NotificationDeliveryWorker, NotificationSweeper, FcmProvider, EmailProvider, SmsProvider, NotificationSettingsService,
     EmailTemplateLoader, EmailTemplateRenderer, MessageTokensService,
     // Emails an action asks for leave the request here; see OutboundMessageService.
@@ -78,8 +82,10 @@ import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-
     injection outright.
   */
   exports: [
+    // The queues registered above — `SlaScannerModule` takes its queue from here (registered once).
+    BullModule,
     NotificationService, PushNotificationService, NotificationDispatchService, NotificationSettingsService,
-    EmailService, SmsService,
+    EmailService, SmsService, AssignmentRefreshPushService,
   ],
 })
 export class NotificationsModule implements OnModuleInit {

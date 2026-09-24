@@ -45,8 +45,9 @@ export enum BypassableRule {
   DISTANCE_POLICY = 'DISTANCE_POLICY',
   /** Audits may not be scheduled on a registered public holiday or non-working day. */
   HOLIDAY_CALENDAR = 'HOLIDAY_CALENDAR',
-  /** One assayer, one audit per day. */
-  DOUBLE_BOOKING = 'DOUBLE_BOOKING',
+  // DOUBLE_BOOKING ("one assayer, one audit per day") was retired 2026-09-24: an assayer may now
+  // hold several branches on one day, so there is no rule left to suspend. A stored window that
+  // still names it is simply ignored by the readers (unknown rules have no catalogue entry).
   /** An assayer on recorded leave is not available. */
   ASSAYER_LEAVE = 'ASSAYER_LEAVE',
   /** The audit date must fall inside the project's start and end dates. */
@@ -117,13 +118,6 @@ export const BYPASSABLE_RULES: BypassableRuleInfo[] = [
     label: 'Holiday and working-day calendar',
     blocks: 'Scheduling onto a public holiday or a non-working day.',
     protects: 'That someone is actually at the branch to receive the auditor.',
-    evidential: false,
-  },
-  {
-    rule: BypassableRule.DOUBLE_BOOKING,
-    label: 'Double-booking guard',
-    blocks: 'Giving one assayer two audits on the same day.',
-    protects: 'A plan that can physically be delivered.',
     evidential: false,
   },
   {

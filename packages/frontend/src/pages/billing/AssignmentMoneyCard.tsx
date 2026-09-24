@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Wallet, PauseCircle, PlayCircle, SlidersHorizontal } from 'lucide-react';
-import { AssignmentStatus, BillingState } from '@fapoms/shared';
+import { AssignmentStatus, BillingState, roundMoney } from '@fapoms/shared';
 import type { AssayerPayable } from '@fapoms/shared';
 import { Modal, Select, useToast } from '../../components/ui';
 import { useAssignmentMoney, useEditClientLine, useAssayerInvoiceLookup } from '../../hooks/useBilling';
@@ -90,7 +90,7 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
       <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr' : '1fr 1fr', gap: 8 }}>
         {p && (
           <div style={box}>
-            <div style={boxHead}><span>Assayer payout</span><PayoutStatusPill status={p.status} onHold={p.onHold} holdReason={p.holdReason} /></div>
+            <div style={boxHead}><span>Assayer payout</span><PayoutStatusPill status={p.status} onHold={p.onHold} holdReason={p.holdReason} hodApproved={p.hodApprovedAt != null} /></div>
             <Row k="Fee" v={money(p.baseAmount)} />
             {Number(p.travelAmount) > 0 && <Row k="Travel" v={money(p.travelAmount)} />}
             {Number(p.tdsAmount) > 0 && <Row k="TDS withheld" v={`−${money(p.tdsAmount)}`} />}
@@ -141,8 +141,11 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
   );
 };
 
-/** Local mirror of `assignment-money.ts`'s `round2` — money arithmetic rounded once, no epsilon variants. */
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+/**
+ * The server's `round2` — the shared `roundMoney`, so this preview rounds a half paisa the way the
+ * stored line will (`Math.round(n * 100) / 100` turned ₹1.005 into ₹1.00).
+ */
+const round2 = (n: number): number => roundMoney(n);
 
 const ClientLineModal: React.FC<{ assignmentId: string; entry: any; onClose: () => void }> = ({ assignmentId, entry, onClose }) => {
   const { toast } = useToast();

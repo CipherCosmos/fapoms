@@ -41,12 +41,12 @@ describe('OperationalIntegrityService.scan', () => {
   let query: jest.Mock;
 
   /**
-   * Routes each of the ten statements by a fragment unique to it, so a test can answer one rule
-   * and leave the other nine empty. Keyed on the distinguishing clause rather than on call order:
+   * Routes each of the nine statements by a fragment unique to it, so a test can answer one rule
+   * and leave the other eight empty. (There were ten until 2026-09-24: the per-assayer-per-day rule
+   * was retired when the owner allowed several branches per assayer per day.) Keyed on the distinguishing clause rather than on call order:
    * order is an implementation detail, and a test that depends on it breaks when a rule is added.
    */
   const RULE_MATCH: Array<[string, string]> = [
-    ['doubleBooking', 'GROUP BY assayer_id, scheduled_date'],
     ['branchSlot', 'GROUP BY project_branch_id'],
     ['cancelledWithAttendance', "status = 'CANCELLED'"],
     ['completedWithoutAttendance', 'checked_in_at IS NULL'],
@@ -86,16 +86,16 @@ describe('OperationalIntegrityService.scan', () => {
   });
 
   describe('a clean database', () => {
-    it('reports ten rules scanned, no violations, and an empty summary', async () => {
+    it('reports nine rules scanned, no violations, and an empty summary', async () => {
       serve({});
 
       const report = await service.scan();
 
-      expect(report.scannedRules).toBe(10);
+      expect(report.scannedRules).toBe(9);
       expect(report.totalViolations).toBe(0);
       expect(report.violations).toEqual([]);
       expect(report.summary).toEqual({});
-      // The half of "all clear" that used to be missing. Ten rules asked, ten rules answered —
+      // The half of "all clear" that used to be missing. Nine rules asked, nine rules answered —
       // without this, `totalViolations: 0` is only ever a claim about the queries that ran.
       expect(report.failedRules).toEqual([]);
       expect(Date.parse(report.timestamp)).not.toBeNaN();
@@ -106,7 +106,9 @@ describe('OperationalIntegrityService.scan', () => {
 
       await service.scan();
 
-      expect(query).toHaveBeenCalledTimes(10);
+      expect(query).toHaveBeenCalledTimes(9);
+      // The retired rule is not asked any more: several branches per assayer per day are allowed.
+      expect(query.mock.calls.some(([sql]) => String(sql).includes('GROUP BY assayer_id, scheduled_date'))).toBe(false);
       // "Read-only" is in the method's own description and is the reason an AUDITOR may call it.
       // A scanner that repaired what it found would be a scanner nobody could safely run twice.
       const statements = query.mock.calls.map(([sql]) => String(sql).toUpperCase());
@@ -138,7 +140,7 @@ describe('OperationalIntegrityService.scan', () => {
       expect(v!.description).toContain('ASG-001, ASG-002');
     });
 
-    it('flags an active assignment held by an assayer who is no longer eligible', async () => {
+    it('flags an active assignment held by an assayer who has left the workforce', async () => {
       serve({
         ineligibleAssayer: [{
           id: 'as-9',
@@ -146,30 +148,73 @@ describe('OperationalIntegrityService.scan', () => {
           assignment_status: 'ACCEPTED',
           assayer_id: 'a-9',
           assayer_code: 'AS0009',
-          assayer_status: 'SUSPENDED',
-          assayer_is_active: false,
+          assayer_status: 'INACTIVE',
+          assayer_is_active: true,
+          assayer_lifecycle_status: 'RESIGNED',
+          assayer_unavailable_reason: null,
         }],
       });
 
       const report = await service.scan();
 
       const v = report.violations.find((x) => x.rule === 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER');
+      // A departed person holding live field work at a client's branch. Its severity is the whole
+      // signal — demoted to P1 it sorts in with date typos.
       expect(v!.severity).toBe('P0');
-      // This is the rule that says a suspended person is currently holding live field work at a
-      // client's branch. Its severity is the whole signal — demoted to P1 it sorts in with date
-      // typos, which is where it would stop being acted on the same day.
       expect(v!.entityId).toBe('as-9');
       expect(v!.description).toContain('AS0009');
-      expect(v!.description).toContain('SUSPENDED');
+      expect(v!.description).toContain('RESIGNED');
+    });
+
+    it('flags a deceased (INACTIVE + DECEASED) assayer and a deactivated record, the other two ways out', async () => {
+      const base = { assignment_status: 'ACCEPTED', assayer_status: 'INACTIVE' };
+      serve({
+        ineligibleAssayer: [
+          { ...base, id: 'as-d', assignment_number: 'ASG-D', assayer_code: 'ASD', assayer_is_active: true,
+            assayer_lifecycle_status: 'INACTIVE', assayer_unavailable_reason: 'DECEASED' },
+          { ...base, id: 'as-x', assignment_number: 'ASG-X', assayer_code: 'ASX', assayer_is_active: false,
+            assayer_lifecycle_status: 'ACTIVE', assayer_unavailable_reason: null },
+        ],
+      });
+
+      const report = await service.scan();
+
+      expect(report.violations.filter((x) => x.rule === 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER').map((v) => v.entityId))
+        .toEqual(['as-d', 'as-x']);
+    });
+
+    it.each(['ON_LEAVE', 'SUSPENDED', 'INACTIVE'])(
+      'does NOT flag an assayer whose standing is temporary (%s) — the job is re-planned, not an integrity breach',
+      async (lifecycle) => {
+        serve({
+          ineligibleAssayer: [{
+            id: 'as-t', assignment_number: 'ASG-T', assignment_status: 'ACCEPTED', assayer_id: 'a-t',
+            assayer_code: 'AST', assayer_status: 'INACTIVE', assayer_is_active: true,
+            assayer_lifecycle_status: lifecycle, assayer_unavailable_reason: 'MEDICAL',
+          }],
+        });
+
+        const report = await service.scan();
+
+        expect(report.violations.filter((x) => x.rule === 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER')).toEqual([]);
+      },
+    );
+
+    it('pre-filters in SQL on the shared departed states, not on the old status != ACTIVE', async () => {
+      serve({});
+      await service.scan();
+      const sql = String(query.mock.calls.map(([q]) => q).find((q) => String(q).includes('INNER JOIN assayers')));
+      expect(sql).toContain("'RESIGNED', 'TERMINATED', 'ARCHIVED'");
+      expect(sql).not.toContain("ass.status != 'ACTIVE'");
     });
   });
 
   describe('the P1 rules — assignments whose recorded history contradicts itself', () => {
-    it('flags a cancelled assignment that nonetheless carries attendance evidence', async () => {
+    it('flags a cancelled assignment with attendance and NO stated reason at P1', async () => {
       serve({
         cancelledWithAttendance: [{
           id: 'as-2', assignment_number: 'ASG-002', status: 'CANCELLED',
-          checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: 'client withdrew',
+          checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: null,
         }],
       });
 
@@ -181,6 +226,37 @@ describe('OperationalIntegrityService.scan', () => {
       // may still be paid for. The check-in timestamp belongs in the description because it is the
       // fact that decides whether this is a stale marker or a real visit that was cancelled after.
       expect(v!.description).toContain('2026-02-01T09:00:00Z');
+      expect(v!.description).toContain('No cancellation reason');
+    });
+
+    it.each([[''], ['   '], ['Cancelled']])(
+      'treats a blank or placeholder cancel_reason (%j) as unexplained — P1',
+      async (reason) => {
+        serve({
+          cancelledWithAttendance: [{
+            id: 'as-2', assignment_number: 'ASG-002', status: 'CANCELLED',
+            checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: reason,
+          }],
+        });
+        const report = await service.scan();
+        expect(report.violations.find((x) => x.rule === 'CANCELLED_ASSIGNMENT_WITH_ATTENDANCE')!.severity).toBe('P1');
+      },
+    );
+
+    it('reports an EXPLAINED cancellation after a visit as informational P2, with the reason', async () => {
+      serve({
+        cancelledWithAttendance: [{
+          id: 'as-2', assignment_number: 'ASG-002', status: 'CANCELLED',
+          checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: 'Branch closed on arrival',
+        }],
+      });
+
+      const report = await service.scan();
+      const v = report.violations.find((x) => x.rule === 'CANCELLED_ASSIGNMENT_WITH_ATTENDANCE');
+
+      // Still listed (the visit may be payable) but no longer an anomaly alongside real contradictions.
+      expect(v!.severity).toBe('P2');
+      expect(v!.description).toContain('Branch closed on arrival');
     });
 
     it('flags a completed assignment with no attendance at all', async () => {
@@ -262,9 +338,9 @@ describe('OperationalIntegrityService.scan', () => {
   describe('the summary', () => {
     it('counts violations by rule across several rules at once', async () => {
       serve({
-        doubleBooking: [
-          { assayer_id: 'a-1', scheduled_date: '2026-02-01', count: '2', assignment_numbers: ['ASG-1', 'ASG-2'] },
-          { assayer_id: 'a-2', scheduled_date: '2026-02-01', count: '3', assignment_numbers: ['ASG-3', 'ASG-4', 'ASG-5'] },
+        branchSlot: [
+          { project_branch_id: 'pb-1', count: '2', assignment_numbers: ['ASG-1', 'ASG-2'] },
+          { project_branch_id: 'pb-2', count: '3', assignment_numbers: ['ASG-3', 'ASG-4', 'ASG-5'] },
         ],
         invalidEmploymentDates: [
           { id: 'a-7', assayer_code: 'AS0007', display_name: 'X', joining_date: '2025-01-01', exit_date: '2024-01-01' },
@@ -275,14 +351,14 @@ describe('OperationalIntegrityService.scan', () => {
 
       expect(report.totalViolations).toBe(3);
       expect(report.summary).toEqual({
-        MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY: 2,
+        MULTIPLE_ACTIVE_ASSIGNMENTS_PER_BRANCH: 2,
         INVALID_EMPLOYMENT_DATES: 1,
       });
     });
 
     it('carries the raw row through as details, so a reader is not limited to the sentence', async () => {
-      const row = { assayer_id: 'a-1', scheduled_date: '2026-02-01', count: '2', assignment_ids: ['x', 'y'] };
-      serve({ doubleBooking: [row] });
+      const row = { project_branch_id: 'pb-1', count: '2', assignment_ids: ['x', 'y'] };
+      serve({ branchSlot: [row] });
 
       const report = await service.scan();
 
@@ -325,8 +401,8 @@ describe('OperationalIntegrityService.scan', () => {
 
       const report = await service.scan();
 
-      // Nine, not ten. The number is the honest one: this scan looked at nine of the invariants.
-      expect(report.scannedRules).toBe(9);
+      // Eight, not nine. The number is the honest one: this scan looked at eight of the invariants.
+      expect(report.scannedRules).toBe(8);
       expect(report.failedRules).toEqual([
         {
           rule: 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER',
@@ -350,7 +426,7 @@ describe('OperationalIntegrityService.scan', () => {
 
       expect(report.scannedRules).toBe(0);
       expect(report.totalViolations).toBe(0);
-      expect(report.failedRules).toHaveLength(10);
+      expect(report.failedRules).toHaveLength(9);
       expect(report.failedRules.every((f) => f.error === 'connection terminated')).toBe(true);
       // Every rule accounted for by its own id — a call site tagged with the wrong or a duplicated
       // name would leave one of these unnamed, and that rule could then fail without ever being
@@ -363,7 +439,6 @@ describe('OperationalIntegrityService.scan', () => {
         'COMPLETED_ASSIGNMENT_WITHOUT_CHECK_OUT',
         'INVALID_EMPLOYMENT_DATES',
         'INVALID_LIFECYCLE_COMBINATION',
-        'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY',
         'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_BRANCH',
         'STALE_ORPHAN_WORKFLOW_RECORD',
       ]);

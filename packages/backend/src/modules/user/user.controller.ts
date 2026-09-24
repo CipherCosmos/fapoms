@@ -227,7 +227,7 @@ export class UserController {
   @PasswordChangeExempt()
   @ApiOperation({ summary: 'Get current user profile' })
   getMe(@Req() req: any) {
-    return this.sanitizeUser(req.user);
+    return this.sanitizeSelf(req.user);
   }
 
   @Put('me')
@@ -235,7 +235,7 @@ export class UserController {
   @ApiOperation({ summary: 'Self update personal details (first name, last name, phone)' })
   async updateMe(@Body() dto: SelfUpdateProfileDto, @Req() req: any) {
     const updated = await this.userService.updateUser(req.user.id, dto, req.user.id);
-    return this.sanitizeUser(updated);
+    return this.sanitizeSelf(updated);
   }
 
   @Post('me/change-password')
@@ -513,7 +513,22 @@ export class UserController {
    * the lock state (see UserService.resetPassword).
    */
   private sanitizeUser(user: any) {
-    const { passwordHash, ...safe } = user;
+    // The set-password link fields go too: the hash is a credential until the link is spent, and
+    // neither is anything a screen shows.
+    const {
+      passwordHash: _hash, passwordSetupTokenHash: _setupHash, passwordSetupExpiresAt: _setupExpiry,
+      ...safe
+    } = user ?? {};
+    return safe;
+  }
+
+  /**
+   * A person's own profile (`/users/me`). The lockout counters are for the administrator looking
+   * at the directory (above); the account holder's browser caches this response for the session
+   * and has no use for how many wrong passwords were typed against their account.
+   */
+  private sanitizeSelf(user: any) {
+    const { failedLoginAttempts: _failed, lockedUntil: _locked, ...safe } = this.sanitizeUser(user);
     return safe;
   }
 }

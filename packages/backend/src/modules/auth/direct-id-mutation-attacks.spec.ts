@@ -287,7 +287,7 @@ describe('Direct-ID Mutation Attacks & State Invariance Spec', () => {
       // Simulate admin revoking permissions in Request B
       await mockCache.del(key);
 
-      expect(mockCache.del).toHaveBeenCalledWith('rbac:principal:revoked-user-uuid');
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('revoked-user-uuid'));
     });
   });
 });

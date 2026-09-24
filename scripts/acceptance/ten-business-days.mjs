@@ -780,18 +780,26 @@ async function main() {
 
   // Segregation of duties, in both directions.
   // A duties refusal is a per-row outcome: it is in the finished run's `refused`, not an HTTP status.
-  const selfApprove = await billingRun('ops', '/billing-engine/payouts/approve', { payableIds: [p1.id] });
+  const selfApprove = await billingRun('ops', '/billing-engine/payouts/approve', { payableIds: [p1.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   let ps = await one(`SELECT status, approved_by FROM assayer_payables WHERE id=$1`, [p1.id]);
   const refusal1 = short(selfApprove.result?.refused?.[0]?.reason ?? msg(selfApprove.r), 110);
   check('whoever booked the work cannot approve the payout for it',
     ps.status === 'PENDING' && /segregation|duti/i.test(refusal1),
     `approve as the booker -> ${describeJobOutcome(selfApprove)}, refused: "${refusal1}"; payable still ${ps.status}`);
 
-  const app1 = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: [p1.id] });
+  const app1 = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: [p1.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   ps = await one(`SELECT status, approved_by, approved_at FROM assayer_payables WHERE id=$1`, [p1.id]);
   check('a second person approves it',
     app1.status < 400 && ps.status === 'APPROVED' && ps.approved_by === cast.admin.user?.id,
     `${describeJobOutcome(app1)}; assayer_payables.status=${ps.status}, approved_by ${ps.approved_by === cast.admin.user?.id ? 'the approver' : ps.approved_by}`);
+
+  // The HOD's final approval (2026-09-24), before any payment. 'finance' (a DEVELOPER, who holds the
+  // final billing approval through the business grants) is the HOD here — never the office approver.
+  const hod1 = await POST(`/billing-engine/final-approval/payouts/${p1.id}/approve`, cast.finance.token, {});
+  ps = await one(`SELECT status, hod_approved_at FROM assayer_payables WHERE id=$1`, [p1.id]);
+  check('the HOD gives the office-approved payout its final approval',
+    hod1.status === 200 && ps.status === 'APPROVED' && !!ps.hod_approved_at,
+    `POST final-approval -> ${hod1.status}; hod_approved_at ${ps.hod_approved_at ? 'set' : 'NULL'}`);
 
   const REF1 = `${TAG}-S1-${STAMP}`;
   const selfPay = await billingRun('admin', '/billing-engine/payouts/pay', { payableIds: [p1.id], paymentReference: REF1, method: 'NEFT' });
@@ -1219,7 +1227,7 @@ async function main() {
     `POST /assignments/:id/reopen -> ${voidedVia.status}; assayer_payables.status=${voidRow?.status} (there is no direct "void a payout" route)`);
 
   // Held and voided are per-row refusals: the batch is accepted (202) and they are in its `refused`.
-  const tryHeld = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: [jHold.payable.id, jVoid.payable.id] });
+  const tryHeld = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: [jHold.payable.id, jVoid.payable.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   const heldAfter = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [jHold.payable.id]);
   const voidAfter = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [jVoid.payable.id]);
   const refusedIds = (tryHeld.result?.refused ?? []).map((x) => x.id);
@@ -1228,11 +1236,19 @@ async function main() {
     `approve -> ${describeJobOutcome(tryHeld)}; refused ${(tryHeld.result?.refused ?? []).map((x) => `"${short(x.reason, 50)}"`).join(', ')}; `
     + `held now ${heldAfter?.status}, voided now ${voidAfter?.status}`);
 
-  const appBatch = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: batch });
+  const appBatch = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: batch, reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   const approved = await sql(`SELECT id, status FROM assayer_payables WHERE id = ANY($1)`, [batch]);
   check('the rest are approved in one batch',
     appBatch.status < 400 && approved.every((p) => p.status === 'APPROVED'),
     `approve ${batch.length} -> ${describeJobOutcome(appBatch)}; done ${appBatch.result?.done?.length ?? 0}, refused ${appBatch.result?.refused?.length ?? 0}; statuses ${approved.map((p) => p.status).join(',')}`);
+
+  // The HOD approves the batch in one queued run (2026-09-24) before it can be paid.
+  const hodBatch = await billingRun('finance', '/billing-engine/final-approval/approve',
+    { items: batch.map((id) => ({ kind: 'DIRECT_PAYOUT', id })) });
+  const hodRows = await sql(`SELECT id, hod_approved_at FROM assayer_payables WHERE id = ANY($1)`, [batch]);
+  check('the HOD gives the batch its final approval in one run',
+    hodBatch.status < 400 && hodRows.every((p) => !!p.hod_approved_at),
+    `final approve ${batch.length} -> ${describeJobOutcome(hodBatch)}; done ${hodBatch.result?.done?.length ?? 0}, refused ${hodBatch.result?.refused?.length ?? 0}`);
 
   const REF8 = `${TAG}-PAYRUN-${STAMP}`;
   const paid = await billingRun('finance', '/billing-engine/payouts/pay', { payableIds: batch, paymentReference: REF8, method: 'NEFT' });
@@ -1365,10 +1381,10 @@ async function main() {
     ['reopen the job', await POST(`/assignments/${A1}/reopen`, cast.auditor.token, { reason: 'auditor probe on a completed job' })],
     // Still refused IN the request (role gate, nothing queued). Sent through billingRun so that if
     // either were wrongly accepted, the after-state below is read once its run has finished.
-    ['approve a payout', (await billingRun('auditor', '/billing-engine/payouts/approve', { payableIds: [p1.id] })).r],
+    ['approve a payout', (await billingRun('auditor', '/billing-engine/payouts/approve', { payableIds: [p1.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' })).r],
     ['pay a payout', (await billingRun('auditor', '/billing-engine/payouts/pay', { payableIds: [p1.id], paymentReference: `${TAG}-AUD`, method: 'NEFT' })).r],
     ['change a panel standing', await PUT_(`/assayers/${a1.id}/empanelment/${b1.clientId}`, cast.auditor.token, { status: 'REJECTED', statusReason: 'auditor probe' })],
-    ['suspend a platform rule', await POST('/admin/rule-bypass', cast.auditor.token, { rules: ['DOUBLE_BOOKING'], reason: 'auditor probe of the bypass control' })],
+    ['suspend a platform rule', await POST('/admin/rule-bypass', cast.auditor.token, { rules: ['HOLIDAY_CALENDAR'], reason: 'auditor probe of the bypass control' })],
   ];
   const classified = attempts.map(([what, r]) => ({ what, ...denial(r, 403), status: r.status }));
   check('every write the auditor attempts is refused, and refused as a forbidden action rather than a missing one',

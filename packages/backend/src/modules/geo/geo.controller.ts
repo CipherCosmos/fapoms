@@ -1,8 +1,7 @@
 import {
-  Controller, Get, Post, Param, Body, Query, Req, Res, UseGuards,
-  BadRequestException, Logger, HttpException, HttpStatus,
+  Controller, Get, Post, Param, Body, Query, Req, UseGuards,
+  BadRequestException, Logger,
 } from '@nestjs/common';
-import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsNotEmpty, IsNumber, IsString, IsArray, ValidateNested, IsBoolean, IsOptional } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -12,11 +11,12 @@ import { RoutingService, DestinationCoords } from './routing.provider';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
 import { autocompleteIndia, isPlaceLookupConfigured } from './india-autocomplete.helper';
 import { lookupIfsc } from './ifsc-lookup.helper';
+import { lookupPincode } from './pincode-lookup.helper';
+import { parseLocationInput } from './coordinate-resolution';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { GeoPrecisionService, GeoTarget } from './geo-precision.service';
-import { TileProxyService, parseTileCoords, InvalidTileError } from './tile-proxy.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /** Geo reference data is effectively static (seeded once), so a long TTL is safe. */
@@ -125,53 +125,9 @@ export class GeoController {
     private readonly cityRepo: Repository<GeoCityEntity>,
     private readonly cache: CacheService,
     private readonly geoPrecision: GeoPrecisionService,
-    private readonly tiles: TileProxyService,
   ) {}
 
   private readonly logger = new Logger(GeoController.name);
-
-  /**
-   * Map tiles for the mobile picker, proxied and cached (see tile-proxy.service.ts for why:
-   * OSM began returning 403 to the app's own device traffic).
-   *
-   * Authenticated like every other endpoint here, and that is not incidental. An unauthenticated
-   * tile proxy is an open proxy — anyone could launder traffic through this server — and the
-   * strict z/x/y validation below is the other half of that: only integers in MapPicker's actual
-   * zoom range ever reach an outbound fetch, so this can never be steered at an arbitrary host.
-   */
-  @Get('tiles/:z/:x/:y')
-  @AnyAuthenticated()
-  @ApiOperation({ summary: 'Cached OpenStreetMap raster tile (PNG) for the in-app map picker' })
-  async tile(
-    @Param('z') z: string,
-    @Param('x') x: string,
-    @Param('y') y: string,
-    @Res() res: Response,
-  ) {
-    let coords: ReturnType<typeof parseTileCoords>;
-    try {
-      coords = parseTileCoords(z, x, y);
-    } catch (err) {
-      if (err instanceof InvalidTileError) throw new BadRequestException(err.message);
-      throw err;
-    }
-
-    let png: Buffer;
-    try {
-      png = await this.tiles.getTile(coords);
-    } catch (err) {
-      // Upstream being unreachable is not this API failing. A 502 lets the app's existing
-      // per-tile onError handler drop that one square to the surfaceAlt background, which is
-      // already how it behaves for any tile it cannot load.
-      this.logger.warn(`tile ${coords.z}/${coords.x}/${coords.y} upstream failed: ${(err as Error).message}`);
-      throw new HttpException('Tile source unavailable', HttpStatus.BAD_GATEWAY);
-    }
-
-    // Tiles are immutable, so the device's own image cache should never re-ask for one.
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
-    res.send(png);
-  }
 
   @Get('autocomplete')
   @AnyAuthenticated()
@@ -198,6 +154,21 @@ export class GeoController {
     // normal, expected outcome for a form field, not an error — so it is a 200 with null data,
     // not a 404. The caller decides what "we couldn't find that" looks like in the UI.
     return result;
+  }
+
+  @Get('pincode/:pincode')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Pincode → state/district lookup' })
+  async pincodeLookup(@Param('pincode') pincode: string) {
+    const result = await lookupPincode(pincode);
+    return result;
+  }
+
+  @Get('parse-location')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Parse Google Maps URL, DMS, or coordinate string into lat/lng' })
+  parseLocation(@Query('input') input: string) {
+    return parseLocationInput(input);
   }
 
   @Get('states')

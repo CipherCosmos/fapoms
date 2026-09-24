@@ -6,6 +6,9 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
 import { QueryMessageAuthor, ValidationQueryMessageEntity } from '../validation-query/validation-query-message.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { ValidationQueryService } from '../validation-query/validation-query.service';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
 /**
  * Voice calls between the assayer on a clarification and the data-entry desk.
@@ -30,8 +33,18 @@ export interface ActiveCall {
   callerUserId: string;
   callerName: string;
   callerIsAssayer: boolean;
-  /** User ids that were rung and may answer. */
+  /**
+   * User ids that were rung and may answer. An EMPTY list means nobody is named — it grants
+   * nothing. It used to mean "everyone": any authenticated caller could answer, decline or hang
+   * up a desk-wide ring. The desk-wide case is now the explicit `openToDesk` flag below.
+   */
   calleeUserIds: string[];
+  /**
+   * An assayer's ring with no resolvable desk callee, sent to the staff room. Any member of
+   * staff who may reach this clarification (role + region ceiling) may pick it up; the first
+   * one to answer becomes the named callee and the ring stops being open.
+   */
+  openToDesk: boolean;
   startedAt: number;
   answeredAt: number | null;
   missedTimer: NodeJS.Timeout | null;
@@ -39,6 +52,14 @@ export interface ActiveCall {
 
 /** How long a call rings before it is recorded as missed and the caller told to give up. */
 const RING_TIMEOUT_MS = 40_000;
+/** Who is acting on a call. `scope` is the staff caller's region ceiling (absent = unrestricted). */
+export interface CallActor {
+  id: string;
+  name?: string;
+  isAssayer: boolean;
+  scope?: Partial<GlobalScope>;
+}
+
 /** Tokens outlive the longest plausible answer delay, not the call — LiveKit keeps a joined participant connected after expiry. */
 const TOKEN_TTL_SECONDS = 10 * 60;
 
@@ -54,6 +75,8 @@ export class CallsService {
     private readonly messageRepository: Repository<ValidationQueryMessageEntity>,
     private readonly events: DomainEventPublisher,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly validationQueries: ValidationQueryService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   /**
@@ -76,29 +99,41 @@ export class CallsService {
    * user who raised the query (with the whole staff room as fallback when the raiser is
    * unknown — an unanswerable call is worse than a broad ring to the desk).
    */
-  async initiate(user: { id: string; name?: string; isAssayer: boolean }, queryId: string) {
+  async initiate(user: CallActor, queryId: string) {
     const query = await this.queryRepository.findOne({ where: { id: queryId, isActive: true } });
     if (!query) throw new NotFoundException('Clarification not found.');
 
     if (user.isAssayer && query.assayerId !== user.id) {
       throw new ForbiddenException('You can only call about your own clarifications.');
     }
+    // Staff are held to the same region ceiling the clarification's own thread routes apply.
+    await this.assertStaffMayReachQuery(user, queryId, 'calls:initiate');
+
+    // One live call per query. A second initiate while one rings is almost always a
+    // double-tap; joining the existing ring keeps both parties in the same room — but only
+    // for someone who is already ON that call. It used to hand a room token to anyone who
+    // could initiate at all, so any desk user could silently join someone else's live call.
+    const existing = [...this.active.values()].find((c) => c.queryId === queryId);
+    if (existing) {
+      const member = this.isMember(existing, user.id);
+      const deskPickup = !member && existing.openToDesk && !user.isAssayer;
+      if (!member && !deskPickup) {
+        throw new ForbiddenException('A call about this clarification is already in progress.');
+      }
+      // A desk member pressing "call" while the assayer rings the whole desk is picking it up.
+      const joined = deskPickup
+        ? await this.answer(user, existing.roomName)
+        : {
+            roomName: existing.roomName,
+            url: this.config().url,
+            token: await this.mintToken(existing.roomName, user.id, user.name),
+          };
+      return { ...joined, rejoined: true };
+    }
 
     const calleeUserIds = user.isAssayer
       ? await this.resolveDeskCallee(query)
       : [query.assayerId];
-
-    // One live call per query. A second initiate while one rings is almost always a
-    // double-tap; joining the existing ring keeps both parties in the same room.
-    const existing = [...this.active.values()].find((c) => c.queryId === queryId);
-    if (existing) {
-      return {
-        roomName: existing.roomName,
-        url: this.config().url,
-        token: await this.mintToken(existing.roomName, user.id, user.name),
-        rejoined: true,
-      };
-    }
 
     const roomName = `query-${queryId}-${Date.now()}`;
     const call: ActiveCall = {
@@ -108,6 +143,7 @@ export class CallsService {
       callerName: user.name || (user.isAssayer ? 'Field assayer' : 'Data entry desk'),
       callerIsAssayer: user.isAssayer,
       calleeUserIds,
+      openToDesk: user.isAssayer && calleeUserIds.length === 0,
       startedAt: Date.now(),
       answeredAt: null,
       missedTimer: setTimeout(() => this.expireUnanswered(roomName), RING_TIMEOUT_MS),
@@ -124,7 +160,7 @@ export class CallsService {
       callerUserId: call.callerUserId,
       callerName: call.callerName,
       targetUserIds: calleeUserIds,
-      ringStaffRoom: !user.isAssayer ? false : calleeUserIds.length === 0,
+      ringStaffRoom: call.openToDesk,
       queryText: query.queryText?.slice(0, 120) ?? null,
     });
 
@@ -160,8 +196,16 @@ export class CallsService {
   }
 
   /** Callee accepts: cancel the missed-call clock, tell both sides, hand back a token. */
-  async answer(user: { id: string; name?: string }, roomName: string) {
-    const call = this.mustBeParty(roomName, user.id, /* calleeOnly */ true);
+  async answer(user: CallActor, roomName: string) {
+    const { call, deskPickup } = await this.mustBeCallee(user, roomName, 'calls:answer');
+    if (deskPickup) {
+      // Re-read after the awaited region check: two desk members can race for the same ring.
+      if (!call.openToDesk || !this.active.has(roomName)) {
+        throw new ForbiddenException('Someone else has already answered this call.');
+      }
+      call.openToDesk = false;
+      call.calleeUserIds = [user.id];
+    }
     if (call.missedTimer) { clearTimeout(call.missedTimer); call.missedTimer = null; }
     call.answeredAt = call.answeredAt ?? Date.now();
 
@@ -181,15 +225,15 @@ export class CallsService {
   }
 
   /** Callee declines the ring. Logged in the thread — a refused call is an event, not a non-event. */
-  async decline(user: { id: string }, roomName: string) {
-    const call = this.mustBeParty(roomName, user.id, true);
+  async decline(user: CallActor, roomName: string) {
+    const { call } = await this.mustBeCallee(user, roomName, 'calls:decline');
     await this.close(call, 'declined', `Call declined`);
     return { ok: true };
   }
 
   /** Either side hangs up. Before answer this is a cancel; after, a completed call with duration. */
   async hangup(user: { id: string }, roomName: string) {
-    const call = this.mustBeParty(roomName, user.id, false);
+    const call = this.mustBeParty(roomName, user.id);
     if (call.answeredAt) {
       const seconds = Math.max(1, Math.round((Date.now() - call.answeredAt) / 1000));
       const mins = Math.floor(seconds / 60);
@@ -271,15 +315,52 @@ export class CallsService {
     }
   }
 
-  private mustBeParty(roomName: string, userId: string, calleeOnly: boolean): ActiveCall {
+  /** On the call: its caller, or a callee named on it. An empty callee list names nobody. */
+  private isMember(call: ActiveCall, userId: string): boolean {
+    return call.callerUserId === userId || call.calleeUserIds.includes(userId);
+  }
+
+  /** Hang-up: the caller or a named callee, nobody else. */
+  private mustBeParty(roomName: string, userId: string): ActiveCall {
     const call = this.active.get(roomName);
     if (!call) throw new NotFoundException('This call has already ended.');
-    const isCaller = call.callerUserId === userId;
-    const isCallee = call.calleeUserIds.includes(userId) || call.calleeUserIds.length === 0;
-    if (calleeOnly ? !isCallee : !(isCaller || isCallee)) {
+    if (!this.isMember(call, userId)) {
       throw new ForbiddenException('You are not a participant in this call.');
     }
     return call;
+  }
+
+  /**
+   * Answer/decline: a named callee, or — for an open desk-wide ring only — a member of staff
+   * (not the caller) who passes the clarification's region ceiling.
+   */
+  private async mustBeCallee(
+    user: CallActor,
+    roomName: string,
+    context: string,
+  ): Promise<{ call: ActiveCall; deskPickup: boolean }> {
+    const call = this.active.get(roomName);
+    if (!call) throw new NotFoundException('This call has already ended.');
+    const named = call.calleeUserIds.includes(user.id);
+    const deskPickup = !named && call.openToDesk && !user.isAssayer && user.id !== call.callerUserId;
+    if (!named && !deskPickup) {
+      throw new ForbiddenException('You are not a participant in this call.');
+    }
+    if (deskPickup) await this.assertStaffMayReachQuery(user, call.queryId, context);
+    return { call, deskPickup };
+  }
+
+  /**
+   * The staged region ceiling for a staff caller, on the clarification's own region (query →
+   * case → project branch → branch, via `ValidationQueryService.resolveRegion`). Skipped for an
+   * assayer (object-scoped by ownership instead) and for an unrestricted account — the same
+   * shape `ValidationQueryController` applies on the thread's detail routes.
+   */
+  private async assertStaffMayReachQuery(user: CallActor, queryId: string, context: string): Promise<void> {
+    if (!user.isAssayer && user.scope?.regions?.length) {
+      const region = await this.validationQueries.resolveRegion(queryId);
+      await this.regionGuard.assertRegionAllowedStaged(region, user.scope, context);
+    }
   }
 
   /** Audio-only token, one room, short TTL. */

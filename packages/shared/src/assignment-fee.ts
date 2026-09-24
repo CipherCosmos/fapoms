@@ -21,11 +21,13 @@
  */
 
 import { formatRupees } from './utils';
+import { roundMoney } from './billing-money-rules';
 
 /** Beyond this, two rupee figures are genuinely different rather than float noise. */
 const MONEY_EPSILON = 0.01;
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+// The one paise rounding (`billing-money-rules.ts`): `Math.round(n * 100) / 100` rounded ₹1.005 to ₹1.00.
+const round2 = roundMoney;
 
 const num = (v: unknown): number => {
   if (v === null || v === undefined || v === '') return NaN;

@@ -13,6 +13,7 @@ jest.mock('react-router-dom', () => ({
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   canManageAssayers: () => true,
   canDeleteAssayers: () => true,

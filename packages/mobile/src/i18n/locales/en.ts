@@ -19,6 +19,9 @@
  * key union — a mistyped plural branch is then a compile error rather than a sentence that
  * renders as `[missing …]` only when a count happens to be 1.
  */
+import {
+  CANDIDATE_JOURNEY_NEXT_WORDS, CANDIDATE_JOURNEY_STEP_WORDS, CANDIDATE_JOURNEY_WORDS,
+} from '@fapoms/shared';
 import type { CatalogueNode } from '../catalogue';
 
 export const en = {
@@ -40,6 +43,11 @@ export const en = {
     // Shown when a network/timeout failure leaves an action queued for automatic retry, rather
     // than a plain "failed" that implies the assayer must act again themselves.
     willRetry: "Saved. We'll send it automatically once you're back online.",
+    // An offer reply or claim filed with no signal: it is on the phone and will send itself.
+    // Shown as a success, so nobody presses again thinking the first press failed.
+    savedOfflineTitle: 'Saved on your phone',
+    savedOfflineBody: 'It will be sent by itself when you are back online.',
+    showMore: 'Show %{count} more',
   },
 
   login: {
@@ -138,6 +146,8 @@ export const en = {
   },
 
   registration: {
+    /** Sign-out confirmation when registration photos are still waiting to send. */
+    signOutUnsentBody: 'Photos not sent yet: %{count}. Signing out deletes them from this phone.',
     banner: {
       oneFailed: 'One paper did not send',
       manyFailed: '%{count} papers did not send',
@@ -271,7 +281,7 @@ export const en = {
       address: 'Experience & address',
       bank: 'ID & bank',
       documents: 'Documents & submit',
-      continue: 'Continue',
+      continue: 'Next',
       back: 'Back',
       fixOne: 'Fix 1 field to continue — it is marked in red.',
       fixMany: 'Fix %{count} fields to continue — they are marked in red.',
@@ -287,10 +297,11 @@ export const en = {
       versionNote: 'Notice version %{version}. A copy of exactly this is kept with your application.',
       failedTitle: 'Could not record your agreement',
       agreementTitle: 'Your agreement',
-      agreedOn: 'You agreed to the notice on %{date} (version %{version}). A copy of what you read is kept with your application.',
-      agreed: 'Agreed',
+      agreedOn: 'You agreed on %{date}',
+      details: 'Details',
+      agreedCopy: 'Notice version %{version}. A copy of what you read is kept with your application.',
       grievance: 'Questions about your details: %{contact}',
-      withdraw: 'Withdraw and delete what I have given',
+      withdraw: 'Withdraw',
       withdrawTitle: 'Withdraw your application?',
       withdrawBody: 'This stops your application and deletes what you have given us. It cannot be undone.',
       withdrawReason: 'Why? (optional)',
@@ -298,21 +309,25 @@ export const en = {
       withdrawFailedTitle: 'Could not withdraw',
     },
 
+    unlock: {
+      title: 'Confirm it is you to continue',
+      body: 'Your saved details and documents are protected. We will send a 6-digit code to your mobile number ending %{last4}. If that is no longer your number, ask HR to correct it.',
+      continue: 'Continue',
+    },
     otp: {
       title: 'Mobile number',
       verified: 'Verified',
-      body: 'We will send a 6-digit code to your mobile, or to your email if texts are not available. Your mobile number goes on your record.',
+      body: 'We\'ll send you a 6-digit code.',
       yourEmail: 'your email address',
       phoneLabel: 'Your mobile number',
       phonePlaceholder: '10-digit mobile number',
-      phoneHelper: 'No +91 needed — just the 10 digits.',
       checking: 'Checking…',
       conflictFallback: 'That number cannot be used here. Contact the office and they can sort it out.',
       sendCode: 'Send code',
       resendCode: 'Resend code',
-      resendIn: 'Resend in %{seconds}s',
-      sentBody: 'A 6-digit code was emailed to %{email}. It expires in 5 minutes.',
-      sentBodySms: 'A 6-digit code was texted to %{phone}. It expires in 5 minutes.',
+      resendIn: 'Resend code in %{time}',
+      sentBody: 'Code emailed to %{email}. It works for %{minutes} minutes.',
+      sentBodySms: 'Code texted to %{phone}. It works for %{minutes} minutes.',
       sentFor: 'Code sent for +91 %{phone}',
       numberChanged: 'You changed the number — resend the code for the new one.',
       codeLabel: '6-digit verification code',
@@ -334,8 +349,9 @@ export const en = {
       fullName: 'Full name (as on ID)',
       fullNamePlaceholder: 'e.g. Ramesh Kumar Sharma',
       dateOfBirth: 'Date of birth',
-      dateOfBirthPlaceholder: 'YYYY-MM-DD',
-      dateOfBirthHint: 'Year-month-day, for example 1990-04-21.',
+      dobDay: 'Day',
+      dobMonth: 'Month',
+      dobYear: 'Year',
       email: 'Email',
       emailPlaceholder: 'you@example.com',
       gender: 'Gender',
@@ -358,7 +374,7 @@ export const en = {
       availabilityPlaceholder: 'Weekdays, full-time…',
 
       addressTitle: 'Home address',
-      addressNote: 'Type your pincode first — we fill in the district, city and state for you.',
+      addressNote: 'Type pincode — we fill the rest.',
       pincode: 'Pincode',
       pincodePlaceholder: '6-digit pincode',
       pincodeLooking: 'Checking the postal directory…',
@@ -388,6 +404,34 @@ export const en = {
       pinSaved: 'Home location saved. Drag the map to move the pin.',
       pinRemove: 'Remove',
 
+      referencesTitle: 'References',
+      referencesNote: 'At least 1 person, with phone.',
+      referenceName: 'Their name',
+      referenceNamePlaceholder: 'Former employer or colleague',
+      referencePhone: 'Their phone number',
+      referencePhonePlaceholder: '10-digit mobile',
+      referenceRelation: 'How they know you',
+      referenceRelationPlaceholder: 'e.g. Former manager',
+      referenceEmail: 'Their email (optional)',
+      referenceEmailPlaceholder: 'name@example.com',
+      referenceEmailInvalid: 'That email does not look right.',
+      referenceAdd: 'Add reference',
+      referenceRemove: 'Remove',
+      referenceNameNeeded: 'Give a name for this reference.',
+      referenceTooMany: 'Only 3 references are needed.',
+      referenceMaxNote: 'Three references is the most this form takes — remove one to change them.',
+
+      referralTitle: 'Who referred you',
+      referralToggle: 'Someone referred me',
+      referralNote: 'One of our assayers, our staff, a bank branch — give their mobile or email.',
+      referralType: 'Who they are',
+      referralTypePlaceholder: 'Choose',
+      referralName: 'Their name',
+      referralMobile: 'Their mobile',
+      referralEmail: 'Their email',
+      referralClear: 'Clear',
+      referralByHr: '%{who} — recorded by our HR team. Tell them if this is not right.',
+
       categoryTitle: 'How do you work?',
       freelancer: 'Freelancer',
       freelancerDesc: 'You work on your own and take valuation jobs as scheduled.',
@@ -408,6 +452,8 @@ export const en = {
       bankNote: 'Enter your IFSC code first — we fill in the bank name.',
       bankAccountNumber: 'Bank account number',
       bankAccountPlaceholder: '9–18 digits',
+      bankAccountConfirm: 'Re-enter account number',
+      bankAccountConfirmPlaceholder: 'Type it again, from your passbook',
       ifsc: 'IFSC code',
       ifscPlaceholder: 'e.g. SBIN0001234',
       ifscLooking: 'Checking the IFSC code…',
@@ -419,12 +465,12 @@ export const en = {
       bankChecked: 'Checked from the IFSC code.',
       bankEdit: 'Edit anyway',
 
-      qualification: 'Highest qualification',
+      qualification: 'Highest education',
       qualificationPlaceholder: 'e.g. B.Com, Diploma in Gemology',
       qualificationHint: 'As written on your certificate.',
 
       emergencyTitle: 'Emergency contact',
-      emergencyHint: 'A family member we can call if something happens at a branch.',
+      emergencyHint: 'Family member we can call.',
       emergencyName: 'Contact name',
       emergencyNamePlaceholder: 'e.g. Sunita Sharma',
       emergencyPhone: 'Contact phone',
@@ -436,11 +482,34 @@ export const en = {
       alternatePhonePlaceholder: 'Optional second number',
     },
 
+    /** Month names for the date-of-birth picker, January first. */
+    months: {
+      jan: 'January',
+      feb: 'February',
+      mar: 'March',
+      apr: 'April',
+      may: 'May',
+      jun: 'June',
+      jul: 'July',
+      aug: 'August',
+      sep: 'September',
+      oct: 'October',
+      nov: 'November',
+      dec: 'December',
+    },
+
     errors: {
       fullNameRequired: 'Enter your full name exactly as on your Aadhaar or PAN.',
       fullNameTooShort: 'That name looks too short — enter your full name.',
       emailInvalid: 'That email address does not look right.',
-      dateOfBirthRequired: 'Enter your date of birth as printed on your Aadhaar or PAN.',
+      dateOfBirthRequired: 'Choose your date of birth — day, month and year — as on your Aadhaar or PAN.',
+      dobUnreadable: 'Choose the day, the month and the year.',
+      dobFuture: 'A date of birth cannot be in the future — check the year.',
+      dobTooEarly: 'That year is before %{value} — check it against the date on your ID.',
+      dobTooYoung: 'You must be at least %{min} to register — that date makes you %{count}.',
+      dobTooOld: 'That date makes you %{count}, which is past the age we can register — check the year against your ID.',
+      accountConfirmMissing: 'Type the account number a second time to confirm it.',
+      accountConfirmMismatch: 'The two account numbers do not match — check each digit against the passbook.',
       pincodeRequired: 'Enter your 6-digit pincode.',
       pincodeInvalid: 'A pincode is exactly 6 digits.',
       stateRequired: 'Choose your state.',
@@ -461,81 +530,78 @@ export const en = {
       hintAadhaarLength: 'An Aadhaar number is 12 digits.',
       hintAadhaarChecksum: 'These 12 digits are not a real Aadhaar number — check them against the card.',
       hintPincode: 'A pincode is exactly 6 digits.',
+      hintBankAccount: 'A bank account number is 9 to 18 digits — numbers only, exactly as printed in the passbook.',
     },
 
     documents: {
       title: 'Documents',
       titleFreelancer: 'Freelancer documents',
       titleProprietor: 'Proprietor documents',
-      hint: 'Lay each document flat in good light with all four corners showing. JPG, PNG or PDF, up to 10 MB.',
-      photoTitle: 'Photo for your ID card',
-      photoBody: 'This photo is printed on your appraiser ID card. Use a clear photo of your face, looking straight ahead.',
-      badgePhoto: 'Needed for ID card',
-      badgeRequired: 'Required',
-      badgeIfApplicable: 'If applicable',
-      pending: 'Not added yet',
-      photoPending: 'A clear photo of your face',
-      rentAgreementNote: 'Only if your home address is different from your Aadhaar',
-      electricityBillNote: 'Only if your shop is rented',
+      hint: 'Lay flat, good light, all 4 corners.',
+      photoRow: 'Clear face photo, for your ID card.',
+      onlyIfRented: 'Only if your address differs from Aadhaar',
+      onlyIfShopRented: 'Only if your shop is rented',
+      onlyIfApplicable: 'Only if it applies to you',
+      passbookNote: 'The page with your name, account number and IFSC. A cancelled cheque or bank statement is also fine.',
+      missingRequired: 'Add your %{document} before submitting.',
       added: 'Added',
-      addedMany: 'Added (%{count} files)',
-      add: 'Add',
-      replace: 'Replace',
-      check: 'Check scan',
+      takePhoto: 'Take photo',
+      orChooseFile: 'or choose file',
+      orChooseGallery: 'or choose from gallery',
+      chooseFile: 'Choose file',
+      retake: 'Retake',
+      remove: 'Remove',
+      removeTitle: 'Remove this file?',
+      removeBody: 'It is taken off your application. You can add it again.',
+      removeFailedTitle: 'Could not remove that',
+      uploading: 'Uploading…',
+      cameraDenied: 'Camera is off for Orbit.',
+      openSettings: 'Allow camera in Settings',
       previewFile: 'File %{index} of %{count}',
       previewOpen: 'Open file',
       previewNotImage: 'This file is a PDF. Open it to check it.',
       uploadFailedTitle: 'Could not upload that',
       none: 'Choose Freelancer or Proprietor in step 3 to see the documents needed.',
-      nothingCaptured: 'No photo or file was chosen.',
     },
 
     checklist: {
-      title: 'Before you submit',
-      phone: 'Mobile number verified',
-      fullName: 'Full name entered',
-      category: 'Work type chosen',
-      photo: 'ID card photo added',
-      consent: 'Agreement accepted',
-      goStep1: 'Go to step 1',
-      goStep3: 'Go to step 3',
-      goPhoto: 'Add photo',
-      hint: 'Submit turns on when everything above is ticked. You can go back and change anything first.',
+      title: 'Still needed:',
+      phone: 'Verify your mobile number',
+      fullName: 'Your full name',
+      category: 'Freelancer or Proprietor',
+      photo: 'Your face photo',
+      document: '%{document}',
     },
 
     submit: {
-      button: 'Submit for HR review',
+      button: 'Submit',
       failedTitle: 'Could not submit',
     },
 
     status: {
-      pendingTitle: 'Thank you, %{name}',
-      pendingBody: 'Your application has been submitted and is being reviewed by our team.',
-      approvedTitle: 'Congratulations, %{name}',
-      approvedBody:
-        'Your application is approved and your appraiser profile is active. Your coordinator will contact you about work.',
-      rejectedTitle: 'Application not approved',
-      rejectedBody: 'Your application was not approved.',
+      pendingTitle: 'Submitted. HR will call you.',
+      approvedTitle: 'Approved.',
+      rejectedTitle: 'Not approved.',
       reviewNote: 'Review note: %{note}',
-      withdrawnTitle: 'Application withdrawn',
-      withdrawnBody:
-        'You withdrew this application. What you gave us has been deleted, apart from the record that an application was made and withdrawn. If you change your mind, ask the office that invited you for a new link.',
+      withdrawnTitle: 'Withdrawn.',
+      withdrawnBody: 'What you gave us is deleted, apart from a note that you applied and withdrew. Ask HR for a new link to apply again.',
       awaitingInfoTitle: 'HR asked for more information',
       awaitingInfoFallback: 'Please check and update your details.',
-      candidate: 'Candidate',
-      refLabel: 'APPLICATION REF',
-      mobileLabel: 'VERIFIED MOBILE',
-      categoryLabel: 'WORK TYPE',
-      emailLabel: 'EMAIL',
-      nextTitle: 'WHAT HAPPENS NEXT',
-      stage1Title: 'Application submitted',
-      stage1Body: 'Your details, ID numbers, bank details and documents are saved.',
-      stage2Title: 'HR checks your documents',
-      stage2Body: 'The HR team checks your Aadhaar, PAN and bank details.',
-      stage3Title: 'Approval',
-      stage3Body: 'Once checked, your profile is approved and added to the appraiser list.',
+      fixItem: 'Fix',
+      refLabel: 'Your reference',
       help: 'Questions? Contact the HR person who invited you.',
     },
+
+    /**
+     * The road after the form: the steps, the one "what happens next" sentence, the paused line and
+     * the headings of HR's asks. The English is not written out here — it is `candidate-journey.ts`
+     * in @fapoms/shared, which the web link draws the same page from, so the phone and the browser
+     * cannot drift into saying different things. A translation still goes under these keys in its
+     * own locale file, like any other.
+     */
+    journeySteps: CANDIDATE_JOURNEY_STEP_WORDS,
+    journeyNext: CANDIDATE_JOURNEY_NEXT_WORDS,
+    journey: CANDIDATE_JOURNEY_WORDS,
   },
 
   /**
@@ -585,6 +651,42 @@ export const en = {
     fileNotAccepted: 'That file could not be accepted. Choose a clearer photo or PDF and try again.',
     fileTypeNotAllowed: 'That file type is not accepted here. Use a photo or PDF.',
     fileTooLarge: 'That file is too large to send. Use a smaller photo or PDF.',
+    /**
+     * Refusals on a job, chosen by the server's code. These sentences are general on purpose: the
+     * server's own English carries the specifics (the dates, the distance), and in English that
+     * sentence is shown instead — see `server-errors.ts` (`BY_CODE_GENERAL`).
+     */
+    assayerOnLeave: 'You are on leave on the day of this job, so it cannot be accepted. Ask operations to move the date or give it to someone else.',
+    notScheduledToday: 'This job is not for today. Check-in opens on the day of the job. If the visit has moved, ask operations to change the date first.',
+    notYourAssignment: 'This job is no longer assigned to you. Pull down to refresh your list.',
+    assayerNotActive: 'Your account is not active, so you cannot take on or start work. Contact HR.',
+    invalidStateForCheckIn: 'Accept this job before you check in.',
+    complianceBlocked: 'You cannot take on new work until a check on your record is sorted out. Contact HR.',
+    invalidAssignmentTransition: 'This job has already moved on and cannot be changed from here. Pull down to refresh.',
+    tooFarFromBranch: 'You seem to be too far from the branch. Check-in works only at the branch itself. Step outside for a clear GPS fix and try again.',
+    acceptDateUnavailable: 'That date cannot be used for this job. Ask operations for another date.',
+    reassignAfterCheckIn: 'You have already checked in to this job, so it cannot be given to someone else. Speak to operations.',
+    officeCheckInReasonRequired: 'The office must give a reason when it checks someone in.',
+  },
+
+  /**
+   * Actions saved on the phone ("it will send by itself") that the server then refused. They stay
+   * listed until the assayer dismisses them, so a refused check-in or claim never vanishes.
+   */
+  queue: {
+    refusedTitle: 'Not accepted by the office',
+    refusedNotifyTitle: '%{what} was not accepted',
+    refusedLine: '%{what}: %{reason}',
+    refusedFallback: 'The office did not accept it.',
+    dismiss: 'OK',
+    dismissAccessibility: 'Dismiss: %{what}',
+    kinds: {
+      CHECK_IN: 'Your check-in',
+      CHECK_OUT: 'Your check-out',
+      ASSIGNMENT_STATUS: 'Your answer to a job offer',
+      EXPENSE_CLAIM: 'Your expense claim',
+      QUERY_MESSAGE: 'Your reply',
+    },
   },
 
   profile: {
@@ -707,7 +809,6 @@ export const en = {
       languages: 'Languages',
       languagesPlaceholder: 'Search or type to add a language…',
       experienceYears: 'Experience (years)',
-      maxPerDay: 'Max per day',
       maxPerWeek: 'Max per week',
       preferredRegions: 'Preferred regions',
       bankAccount: 'Bank account',
@@ -777,6 +878,7 @@ export const en = {
         WORKFORCE: 'Your record',
         BILLING: 'Payments',
         SYSTEM: 'System',
+        FEEDBACK: 'Feedback',
       },
       categoryHints: {
         ASSIGNMENT: 'New offers, acceptances and cancellations',
@@ -786,6 +888,7 @@ export const en = {
         WORKFORCE: 'Certification expiry and profile changes',
         BILLING: 'Expense decisions and payouts',
         SYSTEM: 'Service notices and app updates',
+        FEEDBACK: 'Replies to problems and ideas you sent us',
       },
     },
     location: {
@@ -836,8 +939,7 @@ export const en = {
     },
     lockReasons: {
       fallback: 'Held by the back office — ask HR to change it.',
-      maxDailyWorkload: 'Set by operations — it decides how much work you can be offered.',
-      maxWeeklyWorkload: 'Set by operations, alongside your daily limit.',
+      maxWeeklyWorkload: 'Set by operations — it decides how much work you can be offered in a week.',
       panNumber: 'Held by HR. Contact your HR coordinator to correct this.',
       bankAccountNumber:
         'Payment details are changed by HR only, so a payout cannot be redirected from a handset.',
@@ -893,7 +995,7 @@ export const en = {
     confirm: 'Confirm',
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
-    mapAttribution: '© OpenStreetMap contributors',
+    mapAttribution: '© OpenStreetMap contributors · Protomaps · Natural Earth',
   },
 
   home: {
@@ -924,6 +1026,12 @@ export const en = {
     navigate: 'Navigate',
     checkOut: 'Check out',
     details: 'Details',
+    /** A job not on today (IST): no Check-in button, just when it is. */
+    jobOnDate: 'Your job is on %{date}',
+    checkInNotAvailable: 'Check-in is not available for this job right now.',
+    acceptNotAvailable: 'This offer cannot be accepted right now.',
+    /** A reopened job with no check-in: only the papers are left to redo. */
+    redoPapers: 'Send the papers again',
   },
 
   schedule: {
@@ -1023,8 +1131,11 @@ export const en = {
     checkInFailedTitle: 'Could not check in',
     checkInFailedBody: 'Check-in failed. Please try again.',
     /** The connection dropped mid-call, so the app genuinely does not know which way it went. */
-    checkInUnconfirmed:
-      'Your check-in was not confirmed — the connection dropped. Move to better signal and tap Check in again; if it already went through, it will show as checked in.',
+    // Check-in taken with no signal: saved on the phone and sent by itself. The server records
+    // the time it ARRIVES (it stamps check-in on receipt), so the sentence says so rather than
+    // letting anybody believe the tap time is what the audit will show.
+    checkInSavedOffline:
+      'Your check-in at %{branch} will be sent when you are back online. The time recorded is when it arrives.',
     serverUnreachableTitle: 'Could not reach the server',
     checkOutConfirmTitle: 'Check out of this branch?',
     checkOutConfirmBody:
@@ -1035,8 +1146,14 @@ export const en = {
     checkedOutBody: 'You have left %{branch}. Upload your paperwork when it is ready.',
     checkOutFailedTitle: 'Could not check out',
     checkOutFailedBody: 'Check-out failed. Please try again.',
-    checkOutUnconfirmed:
-      'Your check-out was not confirmed — the connection dropped. Move to better signal and tap Check out again; if it already went through, it will show as checked out.',
+    checkOutSavedOffline:
+      'Your check-out from %{branch} will be sent when you are back online. The time recorded is when it arrives.',
+    /** Sending the return finishes the job, after which check-out can no longer be recorded. */
+    checkOutBeforeReturnTitle: 'Check out first?',
+    checkOutBeforeReturnBody:
+      'You are still checked in at %{branch}. Sending the papers finishes the job, and your leaving time can no longer be recorded after that.',
+    checkOutBeforeReturnCheckOut: 'Check out, then send',
+    checkOutBeforeReturnSendAnyway: 'Send without checking out',
   },
 
   scan: {
@@ -1104,10 +1221,15 @@ export const en = {
     submit: 'Submit expense',
     noAssignmentTitle: 'No assignment selected',
     noAssignmentBody: 'Open the assignment you are claiming for and file the expense from there.',
+    jobLabel: 'Which job is this for?',
+    /** Claims are only for visits under way or done (checked in, working, completed). */
+    noClaimableJobs: 'You can claim an expense once you have checked in to a job.',
+    chooseJob: 'Choose the job this expense is for.',
     invalidAmountTitle: 'Enter a valid amount',
     invalidAmountBody: 'Use digits only, for example 1000 or 1,000.',
     filedTitle: 'Claim filed',
     filedBody: '%{amount} for %{category} is awaiting approval.',
+    savedOfflineBody: 'Your claim will be sent by itself when you are back online.',
     failedTitle: 'Claim not filed',
     failedBody: 'The expense could not be submitted.',
   },
@@ -1138,6 +1260,24 @@ export const en = {
     sentBody: 'The operations team has been notified and will follow up.',
     failedTitle: 'Not sent',
     failedBody: 'The issue could not be reported. Please try again.',
+  },
+
+  idCard: {
+    title: 'My ID card',
+    open: 'My ID card',
+    openHint: 'Your digital ID — show it at the branch',
+    close: 'Close',
+    loadFailed: 'Your ID card could not be loaded.',
+    notIssuedTitle: 'Your ID card is not issued yet',
+    notIssuedBody: 'It appears here as soon as these are done. Your HR contact can help.',
+    qrLabel: 'Verification QR code',
+    codeLabel: 'Verification code',
+    changesIn: 'New code in %{seconds}s',
+    howToCheck: 'The branch scans the QR, or checks your ID number and this code at %{place}.',
+    loadingCode: 'Getting your live code…',
+    offline: 'Cannot reach the server. The card needs a connection to show a live code — a code that is not live proves nothing.',
+    ifFound: 'If found, please call %{phone}',
+    screenshotWarning: 'A screenshot of your ID card is not valid — its code stops working within two minutes. Always show the live card.',
   },
 
   availability: {
@@ -1234,7 +1374,8 @@ export const en = {
     /** A hold is a flag over any of the three states, not a fourth one — hence the extra key. */
     payableStatus: {
       pending: 'Awaiting approval',
-      approved: 'Approved',
+      approved: 'Approved, awaiting final approval',
+      approvedForPayment: 'Approved for payment',
       paid: 'Paid',
       onHold: 'On hold',
       voided: 'Reversed',
@@ -1253,7 +1394,8 @@ export const en = {
     invoiceStatus: {
       invited: 'Sent to you',
       submitted: 'Submitted',
-      approved: 'Approved',
+      approved: 'Approved, awaiting final approval',
+      hodApproved: 'Approved for payment',
       paid: 'Paid',
       cancelled: 'Cancelled',
       superseded: 'Replaced by a newer invoice',
@@ -1307,6 +1449,7 @@ export const en = {
    * moves between them in a single sitting.
    */
   queries: {
+    replySavedOffline: 'Your reply will be sent when you are back online.',
     tabNeedsAttention: 'Needs attention',
     tabAll: 'All',
     state: {
@@ -1515,8 +1658,6 @@ export const en = {
     tooBigTitle: 'File is too large',
     pickFailedTitle: 'Could not open files',
     pickFailedBody: 'File selection failed.',
-    nameRequiredTitle: 'Name required',
-    nameRequiredBody: 'Give the document a name before saving.',
     /*
       What to do with the paper in front of you, one sentence per kind of document. Keyed by
       `DocumentScanProfile.hintKey` in `@fapoms/shared`, which is the same row the browser scanner
@@ -1533,25 +1674,14 @@ export const en = {
       free: 'Fill the frame with the document and hold steady.',
     },
     close: 'Close scanner',
-    saveTitle: 'Save document',
     scanTitle: 'Scan document',
-    onePage: '1 page',
-    manyPages: '%{count} pages',
     opening: 'Opening scanner…',
-    fileNameLabel: 'File name',
-    fileNamePlaceholder: 'Document name',
-    pagesLabel: 'PAGES',
-    savedAsPdf: 'Saved as a single PDF. Reorder, crop, rotate and filter pages from the scanner screen.',
-    savedAsImages: 'Pages will be saved as images.',
-    notHereTitle: 'Scanner not available here',
-    notHereBody: 'On-device document scanning needs the Android app. Attach an existing file instead.',
-    readyTitle: 'Ready to scan',
-    readyBody: 'Position the document in the frame. Edges are detected automatically.',
-    rescan: 'Rescan',
-    openScanner: 'Open scanner',
-    attachFile: 'Attach file',
-    saveOne: 'Save 1 page',
-    saveMany: 'Save %{count} pages',
+    cameraBody: 'Lay flat, good light, all 4 corners.',
+    takePhoto: 'Take photo',
+    orChooseFile: 'or choose file',
+    chooseFile: 'Choose file',
+    cameraDenied: 'Camera is off for Orbit. Allow camera in Settings, or choose a file.',
+    openSettings: 'Allow camera in Settings',
   },
 
   decline: {

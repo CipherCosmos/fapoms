@@ -14,14 +14,14 @@ export type CsvCell = string | number | null | undefined;
 /**
  * Escape one cell for CSV. Always quoted — simpler and safe — with embedded quotes doubled.
  *
- * A leading `=`, `+`, `-` or `@` is prefixed with an apostrophe so a spreadsheet does not read the
- * cell as a formula. That CSV-injection guard matters here because these files carry bank
+ * A leading `=`, `+`, `-`, `@`, TAB or CR is prefixed with an apostrophe so a spreadsheet does not
+ * read the cell as a formula (Excel also accepts a TAB/CR in front of one). That CSV-injection guard matters here because these files carry bank
  * references and names that a spreadsheet would otherwise try to evaluate.
  */
 function escapeCell(value: CsvCell): string {
   if (value === null || value === undefined) return '""';
   let s = String(value);
-  if (/^[=+\-@]/.test(s)) s = `'${s}`;
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return `"${s.replace(/"/g, '""')}"`;
 }
 

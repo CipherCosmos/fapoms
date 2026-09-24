@@ -10,13 +10,13 @@ import {
   Controller, Get, Post, Body, Param, Query, Req, UseGuards, ParseUUIDPipe, ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsOptional, IsNumber, IsEnum, IsBoolean, IsUUID, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsEnum, IsBoolean, IsUUID, Min, MaxLength } from 'class-validator';
 
 import { ExpenseService } from './expense.service';
 import { ExpenseCategory, ExpenseStatus } from './expense.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole } from '@fapoms/shared';
+import { EXPENSE_APPROVAL_OVERRIDE_ROLES, SystemRole, expandRoles } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 class CreateExpenseRequestDto {
@@ -44,6 +44,26 @@ class ReviewExpenseRequestDto {
 
   @IsOptional() @IsString()
   notes?: string;
+
+  /**
+   * A senior's written reason to approve a claim the approval rules refuse (assignment cancelled,
+   * assayer reassigned away, job's pay on a sent bill). Ignored when the rules allow the approval
+   * and on a rejection; honoured only from a caller holding `EXPENSE_APPROVAL_OVERRIDE_ROLES`.
+   */
+  @IsOptional() @IsString() @MaxLength(1000)
+  overrideReason?: string;
+}
+
+/**
+ * Is this principal a senior for the expense-approval override? Their own roles as the guards
+ * resolved them (never anything in the body), expanded through the role hierarchy so a DEVELOPER
+ * counts as ADMIN — the same match `RolesGuard` makes.
+ */
+export function mayOverrideExpenseApproval(user: any): boolean {
+  const roles: string[] = (user?.roles ?? [])
+    .map((r: any) => (typeof r === 'string' ? r : r?.name))
+    .filter(Boolean);
+  return expandRoles(roles).some((r) => (EXPENSE_APPROVAL_OVERRIDE_ROLES as readonly string[]).includes(r));
 }
 
 /** True when this principal is a field assayer rather than internal staff. */
@@ -142,13 +162,16 @@ export class ExpenseController {
   @Post('expenses/:expenseId/review')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('billing:approve:organization')
-  @ApiOperation({ summary: 'Approve or reject a claim' })
+  @ApiOperation({ summary: 'Approve or reject a claim (a senior may approve over a refusal with overrideReason)' })
   async review(
     @Param('expenseId', ParseUUIDPipe) expenseId: string,
     @Body() dto: ReviewExpenseRequestDto,
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return await this.expenseService.review(expenseId, dto.approve, req.user.userId ?? req.user.id, dto.notes, scope);
+    return await this.expenseService.review(expenseId, dto.approve, req.user.userId ?? req.user.id, dto.notes, scope, {
+      reason: dto.overrideReason,
+      mayOverride: mayOverrideExpenseApproval(req.user),
+    });
   }
 }

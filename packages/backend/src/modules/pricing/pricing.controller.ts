@@ -18,6 +18,7 @@ import { FeePolicyService, FeeRates, FeeBreakdown } from './fee-policy.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
+import { dayTravelAlreadyCharged } from '../assignment/assignment-day-travel';
 
 class QuoteRequestDto {
   @IsUUID()
@@ -64,6 +65,13 @@ class QuoteRequestDto {
 
   @IsOptional() @IsDateString()
   onDate?: string;
+
+  /**
+   * The job being moved on a reassign (or re-dated): it must not count as "travel already paid"
+   * for its own day. Only read together with `onDate`.
+   */
+  @IsOptional() @IsUUID()
+  excludeAssignmentId?: string;
 }
 
 @ApiTags('Pricing')
@@ -91,7 +99,7 @@ export class PricingController {
 
   @Post('quote')
   @ApiOperation({ summary: 'Quote a fee for an assayer/branch pairing using the contracted rates' })
-  async quote(@Body() dto: QuoteRequestDto): Promise<FeeBreakdown> {
+  async quote(@Body() dto: QuoteRequestDto): Promise<FeeBreakdown & { travelAlreadyCharged?: boolean }> {
     const clientId = dto.clientId
       ?? (dto.projectId ? await this.feePolicyService.resolveClientIdForProject(dto.projectId) : null);
 
@@ -105,6 +113,32 @@ export class PricingController {
         .findOne({ where: { id: dto.branchId }, select: ['id', 'state', 'region'] })
         .catch(() => null);
       if (branch) place = { state: branch.state ?? null, region: branch.region ?? null };
+    }
+
+    /**
+     * Travel once per assayer per day (E2), applied to the QUOTE too (B6, 2026-09-24). The assign
+     * form pre-fills its fee box from this answer; quoted without the day, an assayer's second job
+     * showed a travel-inclusive figure, and posting it back charged the journey twice. With
+     * `onDate`, when another of this assayer's jobs that day already carries the travel, the answer
+     * is the base-only price the server will record, flagged `travelAlreadyCharged`.
+     */
+    if (dto.onDate && dto.distanceKm > 0) {
+      const alreadyPaid = await dayTravelAlreadyCharged(
+        this.branchRepository.manager as any, dto.assayerId, dto.onDate.slice(0, 10), dto.excludeAssignmentId ?? null,
+      ).catch(() => false);
+      if (alreadyPaid) {
+        const baseOnly = await this.feePolicyService.quote({
+          assayerId: dto.assayerId,
+          clientId,
+          distanceKm: 0,
+          branchCount: dto.branchCount,
+          onDate: new Date(dto.onDate),
+          place,
+          road: null,
+        });
+        // The distance is still a measurement worth showing; only the charge drops.
+        return { ...baseOnly, distanceKm: dto.distanceKm, travelAlreadyCharged: true };
+      }
     }
 
     return this.feePolicyService.quote({

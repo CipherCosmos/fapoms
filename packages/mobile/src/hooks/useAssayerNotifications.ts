@@ -7,6 +7,7 @@ import {
   triggerAlertNotification,
 } from '../services/notification.service';
 import type { AppNotification } from '../types/mobile-app';
+import { isStampCurrent, stampSession } from '../services/session-epoch';
 
 /**
  * How long after delivery a notification tap may still be treated as the thing that launched
@@ -76,7 +77,10 @@ export function useAssayerNotifications(options: {
       // `unreadCount` comes from the server, over the whole inbox — not derived from `items`,
       // which is only this fetched page. Recomputing it locally by filtering `items` undercounted
       // the badge for any assayer with more unread notifications than fit in one page.
+      // A read in flight at sign-out must not land in the next session (session-epoch.ts).
+      const stamp = stampSession();
       const { items, unreadCount } = await MobileApiService.getNotifications();
+      if (!isStampCurrent(stamp)) return;
       setNotifications(items);
       setUnreadCount(unreadCount);
 
@@ -190,7 +194,19 @@ export function useAssayerNotifications(options: {
    * covers the case listeners cannot, launching fresh from a fully terminated state via a tap.
    */
   useEffect(() => {
-    if (!isAuthenticated) return;
+    /**
+     * Signed out: the inbox goes with the session. It used to stay in memory, so the next person
+     * to sign in on the same phone saw the previous person's notifications (and unread badge)
+     * until their own list arrived. The "already seen" record resets too, so the next session's
+     * opening poll again only records its backlog rather than alerting for all of it.
+     */
+    if (!isAuthenticated) {
+      setNotifications([]);
+      setUnreadCount(0);
+      seenIdsRef.current = new Set();
+      hasPolledRef.current = false;
+      return;
+    }
 
     registerForPushNotificationsAsync();
     void load();

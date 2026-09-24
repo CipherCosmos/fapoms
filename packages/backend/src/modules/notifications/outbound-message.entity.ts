@@ -9,6 +9,8 @@ export type OutboundMessageKind =
   | 'ACCOUNT_SETUP_LINK'
   | 'APPLICATION_APPROVED'
   | 'APPLICATION_REJECTED'
+  | 'APPLICATION_INFO_REQUESTED'
+  | 'REFERENCE_NOTICE'
   | 'APP_ACCESS_CREDENTIALS'
   | 'ROSTER_MESSAGE'
   /** A catalog notification's email leg (`NotificationDeliveryWorker`). */
@@ -105,4 +107,11 @@ export class OutboundMessageEntity {
 
   @Column({ name: 'failed_at', type: 'timestamptz', nullable: true })
   failedAt: Date | null;
+
+  /**
+   * Set when the channel itself failed (credentials refused, server unreachable): the sweep does
+   * not re-queue the row before this. Cleared when it is sent. See `deferForTransport`.
+   */
+  @Column({ name: 'retry_after', type: 'timestamptz', nullable: true })
+  retryAfter: Date | null;
 }

@@ -6,6 +6,8 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
 import { ValidationQueryMessageEntity } from '../validation-query/validation-query-message.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { ValidationQueryService } from '../validation-query/validation-query.service';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 /**
  * The call lifecycle, which is the part of calling this server owns. Media is LiveKit's
@@ -47,6 +49,8 @@ describe('CallsService', () => {
         { provide: getRepositoryToken(ValidationQueryMessageEntity), useValue: messageRepo },
         { provide: DomainEventPublisher, useValue: publisher },
         { provide: NotificationDispatchService, useValue: notificationDispatch },
+        { provide: ValidationQueryService, useValue: { resolveRegion: jest.fn() } },
+        { provide: RegionGuardService, useValue: { assertRegionAllowedStaged: jest.fn() } },
       ],
     }).compile();
 
@@ -213,7 +217,7 @@ describe('CallsService', () => {
   it('a stranger to the call can neither answer nor hang it up', async () => {
     queryRepo.findOne.mockResolvedValue({ ...staffQuery });
     const { roomName } = await service.initiate(staff, 'query-1');
-    await expect(service.answer({ id: 'intruder-1' }, roomName)).rejects.toThrow(ForbiddenException);
+    await expect(service.answer({ id: 'intruder-1', isAssayer: false }, roomName)).rejects.toThrow(ForbiddenException);
     await expect(service.hangup({ id: 'intruder-1' }, roomName)).rejects.toThrow(ForbiddenException);
   });
 });

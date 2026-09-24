@@ -1,11 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { BadRequestException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
-import { AssignmentStatus, Region } from '@fapoms/shared';
+import { BadRequestException, ConflictException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
+import { AssayerPayableStatus, AssignmentStatus, OTHER_CONFLICT_ERROR_CODES, Region } from '@fapoms/shared';
 
 import { ExpenseService } from './expense.service';
 import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { AssayerInvoiceEntity } from '../billing-engine/assayer-invoice.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
@@ -97,7 +98,11 @@ describe('ExpenseService', () => {
       createQueryBuilder: jest.fn(),
     };
     dispatch = { emitSafe: jest.fn(), emit: jest.fn() };
-    billing = { createReimbursementPayable: jest.fn().mockResolvedValue({ id: 'pay-1' }) };
+    billing = {
+      createReimbursementPayable: jest.fn().mockResolvedValue({ id: 'pay-1' }),
+      // No fee payable booked yet — the state every pre-existing create test assumes.
+      liveFeePayable: jest.fn().mockResolvedValue(null),
+    };
     // `findOne` models the FOR UPDATE re-read inside review()'s transaction; by default it returns
     // the same row the outer (unlocked) read did. Tests that model a lost race override it.
     txManager = { save: jest.fn((v: any) => expenseRepo.save(v)), findOne: jest.fn(() => expenseRepo.findOne()) };
@@ -123,6 +128,8 @@ describe('ExpenseService', () => {
         ExpenseService,
         { provide: getRepositoryToken(ExpenseEntity), useValue: expenseRepo },
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
+        // The approval rules read the status of the bill carrying the job's pay; no bill in these tests.
+        { provide: getRepositoryToken(AssayerInvoiceEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         { provide: NotificationDispatchService, useValue: dispatch },
         { provide: BillingEngineService, useValue: billing },
@@ -180,6 +187,68 @@ describe('ExpenseService', () => {
     it('throws when the assignment does not exist', async () => {
       assignmentRepo.findOne.mockResolvedValue(null);
       await expect(service.create('nope', valid, 'u', OWNER)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  /**
+   * Owner decision: "Refuse once on a bill." A claim raised once the job's live fee payable is on
+   * an assayer bill (any bill state) — or approved/paid without one — re-opened settled money as a
+   * separate reimbursement nobody reviewing the bill saw.
+   */
+  describe('create — refused once the job is on a bill', () => {
+    beforeEach(() => {
+      assignmentRepo.findOne.mockResolvedValue(assignment(AssignmentStatus.COMPLETED));
+    });
+
+    it('refuses while the payable rides a bill the assayer has not confirmed yet (PENDING, on a bill)', async () => {
+      billing.liveFeePayable.mockResolvedValue({ id: 'fee-1', status: AssayerPayableStatus.PENDING, expenseId: null, assayerInvoiceId: 'ainv-1' });
+      const err = await service.create('asn-1', valid, 'u', OWNER).catch((e) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect(err.message).toBe('This job is already on a bill. Claims must be made before billing.');
+      expect(err.code ?? err.getResponse?.().code).toBe(OTHER_CONFLICT_ERROR_CODES.EXPENSE_JOB_ALREADY_BILLED);
+      expect(billing.liveFeePayable).toHaveBeenCalledWith('asn-1');
+      expect(expenseRepo.save).not.toHaveBeenCalled();
+    });
+
+    it.each([AssayerPayableStatus.APPROVED, AssayerPayableStatus.PAID])(
+      'refuses a %s payable on a bill with the same message',
+      async (status) => {
+        billing.liveFeePayable.mockResolvedValue({ id: 'fee-1', status, expenseId: null, assayerInvoiceId: 'ainv-1' });
+        await expect(service.create('asn-1', valid, 'u', OWNER)).rejects.toThrow('This job is already on a bill.');
+      },
+    );
+
+    it.each([AssayerPayableStatus.APPROVED, AssayerPayableStatus.PAID])(
+      'refuses a %s payable with no bill (direct approval) with EXPENSE_PAYOUT_ALREADY_APPROVED',
+      async (status) => {
+        billing.liveFeePayable.mockResolvedValue({ id: 'fee-1', status, expenseId: null, assayerInvoiceId: null });
+        const err = await service.create('asn-1', valid, 'u', OWNER).catch((e) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect(err.code ?? err.getResponse?.().code).toBe(OTHER_CONFLICT_ERROR_CODES.EXPENSE_PAYOUT_ALREADY_APPROVED);
+        expect(expenseRepo.save).not.toHaveBeenCalled();
+      },
+    );
+
+    it('refuses a staff-raised claim the same way — the rule is about the money, not the caller', async () => {
+      billing.liveFeePayable.mockResolvedValue({ id: 'fee-1', status: AssayerPayableStatus.PENDING, expenseId: null, assayerInvoiceId: 'ainv-1' });
+      await expect(service.create('asn-1', valid, 'ops-1', null)).rejects.toThrow(ConflictException);
+    });
+
+    it('still accepts a claim while the payable is PENDING and on no bill', async () => {
+      billing.liveFeePayable.mockResolvedValue({ id: 'fee-1', status: AssayerPayableStatus.PENDING, expenseId: null, assayerInvoiceId: null });
+      await expect(service.create('asn-1', valid, 'u', OWNER)).resolves.toMatchObject({ status: ExpenseStatus.PENDING });
+    });
+
+    it('is not blocked by a voided payable (history from a reopened completion), even one that was billed', async () => {
+      billing.liveFeePayable.mockResolvedValue({ id: 'fee-old', status: AssayerPayableStatus.VOIDED, expenseId: null, assayerInvoiceId: 'ainv-old' });
+      await expect(service.create('asn-1', valid, 'u', OWNER)).resolves.toBeDefined();
+    });
+
+    it('still returns the existing claim on an idempotent retry, even once billed', async () => {
+      const existing = { id: 'exp-9', assayerId: OWNER, clientRequestId: 'r-1' };
+      expenseRepo.findOne.mockResolvedValue(existing);
+      billing.liveFeePayable.mockResolvedValue({ id: 'fee-1', status: AssayerPayableStatus.PAID, expenseId: null, assayerInvoiceId: 'ainv-1' });
+      await expect(service.create('asn-1', { ...valid, clientRequestId: 'r-1' }, 'u', OWNER)).resolves.toBe(existing);
     });
   });
 
@@ -438,6 +507,15 @@ describe('ExpenseService', () => {
       expect(result).toEqual([{ id: 'e1' }]);
       expect(expenseRepo.find).toHaveBeenCalled();
       expect(expenseRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it("loads each claim's branch, so the phone can name it", async () => {
+      await buildModule('enforce');
+      expenseRepo.find.mockResolvedValue([]);
+      await service.findForAssayer(OWNER, undefined);
+      expect(expenseRepo.find).toHaveBeenCalledWith(expect.objectContaining({
+        relations: expect.arrayContaining(['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch']),
+      }));
     });
 
     it('enforce mode filters out an assayer claim tied to an assignment outside the scope', async () => {

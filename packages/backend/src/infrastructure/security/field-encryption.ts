@@ -1,3 +1,4 @@
+import { normaliseBankAccountNumber } from '@fapoms/shared';
 import { createCipheriv, createDecipheriv, randomBytes, createHash, createHmac, hkdfSync } from 'crypto';
 import { Logger } from '@nestjs/common';
 import type { ValueTransformer } from 'typeorm';
@@ -97,6 +98,16 @@ export function fieldFingerprint(plain: string | null | undefined): string | nul
   return createHmac('sha256', createHash('sha256').update(key).update('fingerprint-v1').digest())
     .update(normalised)
     .digest('hex');
+}
+
+/**
+ * `fieldFingerprint` of a bank account number, after the one normalisation every writer applies
+ * (`normaliseBankAccountNumber`: spaces, dots and dashes dropped). "1234 5678 9012" and
+ * "123456789012" are one account and must fingerprint as one. Null for nothing, and with no key.
+ */
+export function bankAccountFingerprint(plain: string | null | undefined): string | null {
+  const normalised = normaliseBankAccountNumber(plain);
+  return normalised ? fieldFingerprint(normalised) : null;
 }
 
 /**

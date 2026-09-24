@@ -295,7 +295,7 @@ export const DataResetModal: React.FC<{
             </div>
           )}
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn btn-primary" onClick={onWiped}>Done</button>
+            <button className="btn btn-primary" onClick={onWiped} title="Close and return to the danger zone">Done</button>
           </div>
         </div>
       </Modal>
@@ -329,6 +329,7 @@ export const DataResetModal: React.FC<{
                   key={d.key}
                   type="button"
                   disabled={isExecute}
+                  title={`${checked ? 'Remove' : 'Include'} ${d.label} (${domainRowCount(d).toLocaleString()} rows) in this wipe`}
                   onClick={() => toggleDomain(d.key)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 11px', borderRadius: '16px',
@@ -397,7 +398,7 @@ export const DataResetModal: React.FC<{
                         // request naming everything the wipe now touches.
                         <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>needs a fresh request</span>
                       ) : (
-                        <button type="button" className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }} onClick={() => addDomain(key)}>
+                        <button type="button" className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }} title={`Also include ${domainByKey[key]?.label ?? key} in this wipe`} onClick={() => addDomain(key)}>
                           Add to selection
                         </button>
                       )}
@@ -429,6 +430,7 @@ export const DataResetModal: React.FC<{
             <input
               type="checkbox"
               checked={billingConfirmed}
+              title="Confirm you understand invoices, payments and payable records will be permanently deleted"
               onChange={(e) => setBillingConfirmed(e.target.checked)}
               style={{ marginTop: '2px', cursor: 'pointer' }}
             />
@@ -454,6 +456,7 @@ export const DataResetModal: React.FC<{
             )}
             <input
               type="text" placeholder="Search accounts…" value={userSearch}
+              title="Type a name, username or email to find an account to keep"
               onChange={(e) => setUserSearch(e.target.value)}
               style={{ ...controlStyle, marginBottom: '8px' }}
             />
@@ -469,7 +472,7 @@ export const DataResetModal: React.FC<{
                       key={u.id}
                       style={{ display: 'flex', alignItems: 'center', gap: '9px', padding: '7px 10px', borderBottom: '1px solid var(--border-hair, var(--border-color))', cursor: isSelf ? 'not-allowed' : 'pointer', opacity: isSelf ? 0.75 : 1 }}
                     >
-                      <input type="checkbox" checked={keep} disabled={isSelf} onChange={() => toggleKeepUser(u.id)} style={{ cursor: isSelf ? 'not-allowed' : 'pointer' }} />
+                      <input type="checkbox" checked={keep} disabled={isSelf} title={isSelf ? 'Your own account is always kept' : `${keep ? 'Remove' : 'Keep'} ${u.displayName || u.username} when wiping accounts`} onChange={() => toggleKeepUser(u.id)} style={{ cursor: isSelf ? 'not-allowed' : 'pointer' }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
                           {u.displayName || u.username} {isSelf && <Pill tone="accent">You — always kept</Pill>}
@@ -487,7 +490,7 @@ export const DataResetModal: React.FC<{
         {/* Backup checkbox and typed confirmation — execution only; a request destroys nothing */}
         {isExecute && (
           <label style={{ display: 'flex', gap: '9px', alignItems: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={takeBackupFirst} onChange={(e) => setTakeBackupFirst(e.target.checked)} style={{ cursor: 'pointer' }} />
+            <input type="checkbox" checked={takeBackupFirst} title="Save a backup on the server before deleting anything" onChange={(e) => setTakeBackupFirst(e.target.checked)} style={{ cursor: 'pointer' }} />
             Take a backup before wiping
           </label>
         )}
@@ -499,6 +502,7 @@ export const DataResetModal: React.FC<{
             </div>
             <input
               type="text" value={confirmText} onChange={(e) => setConfirmText(e.target.value)}
+              title={`Type ${CONFIRMATION_PHRASE} exactly as shown to confirm`}
               placeholder={CONFIRMATION_PHRASE} style={controlStyle}
             />
           </div>
@@ -509,7 +513,7 @@ export const DataResetModal: React.FC<{
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '4px' }}>
-          <button className="btn btn-secondary" onClick={onClose} disabled={submitting !== 'idle'}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={submitting !== 'idle'} title="Close without filing or running anything">
             {outcomeUnknown ? 'Close' : 'Cancel'}
           </button>
           {isExecute ? (
@@ -517,6 +521,7 @@ export const DataResetModal: React.FC<{
               className="btn btn-primary"
               disabled={!canSubmit}
               onClick={submit}
+              title="Permanently delete the selected data now"
               style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px' }}
             >
               {submitting === 'running' && <><Loader2 size={13} className="spin" /> {stage}…</>}
@@ -527,6 +532,7 @@ export const DataResetModal: React.FC<{
               className="btn btn-primary"
               disabled={!canRequest}
               onClick={requestApproval}
+              title="File this wipe request for an administrator to approve"
               style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px' }}
             >
               {submitting === 'requesting'

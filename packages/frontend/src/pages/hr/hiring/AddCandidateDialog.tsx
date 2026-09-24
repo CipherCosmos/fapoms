@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { InterviewOutcome, type OutboundMessageReceipt } from '@fapoms/shared';
+import { InterviewOutcome, normalizeSourceReferral, type OutboundMessageReceipt } from '@fapoms/shared';
 
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
@@ -8,6 +8,12 @@ import { queryKeys } from '../../../hooks/queryKeys';
 import { Modal, AlertBanner } from '../../../components/ui';
 import { Field, fieldInput, InviteLinkBox } from '../hr-ui';
 import { DeliveryNote } from '../../../components/DeliveryNote';
+import { ScanOrAttach } from '../../../components/scanner/ScanOrAttach';
+import { uploadInterviewFiles } from './InterviewFiles';
+import {
+  SourceReferralFields, EMPTY_REFERRAL, referralDraftFrom, referralPayload, type SourceReferralDraft,
+} from '../../../components/SourceReferralFields';
+import type { InterviewLike } from './pipeline';
 
 type Route = 'interview' | 'direct';
 
@@ -36,7 +42,12 @@ export const AddCandidateDialog: React.FC<{
   open: boolean;
   onClose: () => void;
   onAdded: () => void;
-}> = ({ open, onClose, onAdded }) => {
+  /**
+   * Interviewing again somebody who did not pass. Their details are carried over, the route is the
+   * interview, and the new interview is recorded as following this one — which stays as it was.
+   */
+  retakeOf?: InterviewLike | null;
+}> = ({ open, onClose, onAdded, retakeOf }) => {
   const queryClient = useQueryClient();
   const [route, setRoute] = useState<Route>('interview');
   const [name, setName] = useState('');
@@ -47,11 +58,26 @@ export const AddCandidateDialog: React.FC<{
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<Sent | null>(null);
+  /** The test papers, kept with the interview once it is recorded — for either outcome. */
+  const [papers, setPapers] = useState<File[]>([]);
+  /** Who referred them — the source reference, asked on both routes. */
+  const [referral, setReferral] = useState<SourceReferralDraft>(EMPTY_REFERRAL);
 
   const reset = () => {
     setName(''); setMobile(''); setEmail(''); setNotes(''); setOutcome(''); setReason('');
-    setSent(null); setBusy(false);
+    setPapers([]); setReferral(EMPTY_REFERRAL); setSent(null); setBusy(false); setRoute('interview');
   };
+
+  // A retake starts from the person already on file, so nobody retypes them — or mistypes them.
+  useEffect(() => {
+    if (open && retakeOf) {
+      setRoute('interview');
+      setName(retakeOf.candidateName);
+      setMobile(retakeOf.mobile);
+      setEmail(retakeOf.email ?? '');
+      setReferral(referralDraftFrom(retakeOf.sourceReferral));
+    }
+  }, [open, retakeOf]);
 
   const close = () => { reset(); onClose(); };
 
@@ -61,12 +87,18 @@ export const AddCandidateDialog: React.FC<{
 
   const submit = async () => {
     if (!canSubmit || busy) return;
+    // The shared rule, asked here first so a half-filled referrer is said before anything is sent.
+    const referralProblem = normalizeSourceReferral(referralPayload(referral), 'HR').error;
+    if (referralProblem) {
+      setSent({ tone: 'err', text: referralProblem });
+      return;
+    }
     setBusy(true);
     setSent(null);
     try {
       if (route === 'interview') {
         const res = await api.request<{
-          candidateName: string; outcome: InterviewOutcome; email: string | null;
+          id: string; candidateName: string; outcome: InterviewOutcome; email: string | null;
           emailDelivery?: OutboundMessageReceipt | null; inviteLink?: string;
         }>('/assayer-interviews', {
           method: 'POST',
@@ -76,11 +108,26 @@ export const AddCandidateDialog: React.FC<{
             email: email.trim() || undefined,
             notes: notes.trim() || undefined,
             outcome,
+            previousInterviewId: retakeOf?.id,
+            sourceReferral: referralPayload(referral) ?? undefined,
           }),
         });
+        // The interview is recorded; its papers follow. A paper that fails to upload is said, and
+        // can be added from the interview afterwards — the decision itself is not undone by it.
+        const kept = papers.length > 0 ? await uploadInterviewFiles(res.id, papers) : { sent: 0, error: null };
         void queryClient.invalidateQueries({ queryKey: queryKeys.hr.interviews });
-        if (res.outcome === InterviewOutcome.FAIL) {
-          setSent({ tone: 'ok', text: `${res.candidateName}'s interview is recorded as not passed. Nothing was sent to them.` });
+        if (kept.error) {
+          setSent({
+            tone: 'err',
+            text: `${res.candidateName}'s interview is recorded (${res.outcome === InterviewOutcome.PASS ? 'passed' : 'not passed'}), `
+              + `but ${kept.error} Open the interview from the list to add it again.`,
+          });
+        } else if (res.outcome === InterviewOutcome.FAIL) {
+          setSent({
+            tone: 'ok',
+            text: `${res.candidateName}'s interview is recorded as not passed`
+              + `${kept.sent > 0 ? `, with ${kept.sent} test paper${kept.sent === 1 ? '' : 's'}` : ''}. Nothing was sent to them.`,
+          });
         } else {
           // Whether the email went is followed on screen, not assumed: an undelivered invite is a
           // stall somebody has to clear by sending the link by hand.
@@ -101,6 +148,7 @@ export const AddCandidateDialog: React.FC<{
               mobile: mobile.trim(),
               email: email.trim() || undefined,
               reason: reason.trim(),
+              sourceReferral: referralPayload(referral) ?? undefined,
             }),
           },
         );
@@ -124,7 +172,7 @@ export const AddCandidateDialog: React.FC<{
     <Modal
       open={open}
       onClose={close}
-      title="Add a candidate"
+      title={retakeOf ? `Interview ${retakeOf.candidateName} again` : 'Add a candidate'}
       width="560px"
       footer={(
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
@@ -144,7 +192,13 @@ export const AddCandidateDialog: React.FC<{
       )}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div role="tablist" style={{ display: 'flex', gap: '6px' }}>
+        {retakeOf && (
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
+            Their earlier interview did not pass. It stays on file with its test papers; this one is
+            recorded as following it, and a pass sends them their registration form.
+          </p>
+        )}
+        {!retakeOf && <div role="tablist" style={{ display: 'flex', gap: '6px' }}>
           {([
             { key: 'interview' as const, label: 'Record an interview' },
             { key: 'direct' as const, label: 'Add without an interview' },
@@ -166,7 +220,7 @@ export const AddCandidateDialog: React.FC<{
               {r.label}
             </button>
           ))}
-        </div>
+        </div>}
 
         {sent?.delivery && (
           <DeliveryNote
@@ -195,6 +249,10 @@ export const AddCandidateDialog: React.FC<{
               </Field>
             </div>
 
+            <Field title="Who referred them (optional)" wide>
+              <SourceReferralFields value={referral} onChange={setReferral} idPrefix="add-referral" />
+            </Field>
+
             {route === 'interview' ? (
               <>
                 <Field title="How did the interview go?" wide>
@@ -218,6 +276,38 @@ export const AddCandidateDialog: React.FC<{
                         {o === InterviewOutcome.PASS ? 'Passed' : 'Did not pass'}
                       </button>
                     ))}
+                  </div>
+                </Field>
+                <Field title="Test papers (optional)" wide>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <ScanOrAttach
+                      documentLabel="Interview test paper"
+                      onFiles={(picked) => setPapers((prev) => [...prev, ...picked])}
+                      multiple
+                      disabled={busy}
+                      attachLabel="Add test paper"
+                      size="sm"
+                    />
+                    {papers.length > 0 && (
+                      <ul style={{ listStyle: 'none', margin: 0, padding: 0, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                        {papers.map((f, i) => (
+                          <li key={`${f.name}-${i}`} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            {f.name}
+                            <button
+                              type="button"
+                              aria-label={`Leave out ${f.name}`}
+                              onClick={() => setPapers((prev) => prev.filter((_, j) => j !== i))}
+                              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-2xs)', padding: 0 }}
+                            >
+                              Leave out
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+                      Kept with the interview whichever way it went, and cannot be removed afterwards.
+                    </span>
                   </div>
                 </Field>
                 <Field title="Notes (optional)" wide>

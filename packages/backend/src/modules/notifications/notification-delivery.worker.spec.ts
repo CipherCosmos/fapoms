@@ -102,9 +102,26 @@ describe('NotificationDeliveryWorker', () => {
     tokenRepo.find.mockResolvedValue([{ id: 't1', token: 'tok-1' }]);
     fcm.sendMulticast.mockResolvedValue([{ success: false, error: 'UNAVAILABLE', errorCode: 'messaging/server-unavailable' }]);
 
-    await expect(run()).rejects.toThrow('UNAVAILABLE');
-    // Not terminal — a later attempt may still succeed.
-    expect(lastStatus()).not.toBe(NotificationStatus.FAILED);
+    await expect(run({ data: { notificationId: 'n-1' }, opts: { attempts: 5 }, attemptsMade: 0 } as any)).rejects.toThrow('UNAVAILABLE');
+    // Not terminal — a later attempt may still succeed — and back to PENDING, so the retry is not
+    // turned away by the terminal-state guard (which now includes SENT).
+    expect(lastStatus()).toBe(NotificationStatus.PENDING);
+  });
+
+  it('settles FAILED on the last attempt instead of leaving the row SENT for ever', async () => {
+    notifRepo.findOne.mockResolvedValue(baseNotification());
+    tokenRepo.find.mockResolvedValue([{ id: 't1', token: 'tok-1' }]);
+    fcm.sendMulticast.mockResolvedValue([{ success: false, error: 'UNAVAILABLE', errorCode: 'messaging/server-unavailable' }]);
+
+    await expect(run({ data: { notificationId: 'n-1' }, opts: { attempts: 5 }, attemptsMade: 4 } as any)).resolves.toBeUndefined();
+    expect(lastStatus()).toBe(NotificationStatus.FAILED);
+  });
+
+  it('does not push a row another job is sending right now (SENT)', async () => {
+    notifRepo.findOne.mockResolvedValue(baseNotification({ status: NotificationStatus.SENT }));
+    tokenRepo.find.mockResolvedValue([{ id: 't1', token: 'tok-1' }]);
+    await run();
+    expect(fcm.sendMulticast).not.toHaveBeenCalled();
   });
 
   it('does not retry when every device token is permanently dead', async () => {
@@ -216,6 +233,27 @@ describe('NotificationDeliveryWorker', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           notificationId: 'n-1', entityType: 'ASSIGNMENT', entityId: 'asn-1', link: '/assignments/asn-1',
+        }),
+      }),
+    );
+  });
+
+  it('adds the ids the app refreshes in the background, beside the keys it already sent', async () => {
+    notifRepo.findOne.mockResolvedValue(baseNotification({
+      type: 'VALIDATION_QUERY_RAISED', entityType: 'VALIDATION_QUERY', entityId: 'q-1',
+      payload: { queryId: 'q-1', assignmentId: 'asn-9' },
+    }));
+    tokenRepo.find.mockResolvedValue([{ id: 't1', token: 'tok' }]);
+    fcm.sendMulticast.mockResolvedValue([{ success: true }]);
+
+    await run();
+
+    expect(fcm.sendMulticast).toHaveBeenCalledWith(
+      ['tok'],
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'VALIDATION_QUERY_RAISED', entityType: 'VALIDATION_QUERY', entityId: 'q-1',
+          queryId: 'q-1', assignmentId: 'asn-9',
         }),
       }),
     );

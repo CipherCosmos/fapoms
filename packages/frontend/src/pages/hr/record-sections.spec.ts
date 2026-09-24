@@ -35,6 +35,9 @@ describe('what ?section= on a record link may name', () => {
     expect(resolveRecordSection('background')).toEqual({ tab: 'vetting' });
     expect(resolveRecordSection('score')).toEqual({ tab: 'qualification' });
     expect(resolveRecordSection('certificates')).toEqual({ tab: 'skills' });
+    expect(resolveRecordSection('work-and-pay')).toEqual({ tab: 'work' });
+    expect(resolveRecordSection('assignments')).toEqual({ tab: 'work' });
+    expect(resolveRecordSection('earnings')).toEqual({ tab: 'work' });
   });
 
   it('opens the ID card window for every name a link to the card has used, including the retired tab key', () => {

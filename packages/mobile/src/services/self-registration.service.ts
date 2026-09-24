@@ -1,5 +1,7 @@
 import { Platform } from 'react-native';
-import { ApplicationStatus, type ConsentNotice, type EmploymentCategory } from '@fapoms/shared';
+import {
+  ApplicationStatus, type ApplicationInfoRequestItem, type ConsentNotice, type EmploymentCategory, type SourceReferral,
+} from '@fapoms/shared';
 import { getApiBaseUrl } from './api.service';
 
 /**
@@ -37,13 +39,32 @@ export interface RegistrationApplication {
   /**
    * The rest of the person, keyed by the assayer record's own field names — identity numbers,
    * bank details, emergency contact, qualification. Same shape the web form and the desk use.
+   * `references` rides beside the fields: people who can vouch for the candidate, replayed
+   * onto the record at approval.
    */
-  extendedProfile: { fields?: Record<string, string | number | null> } | null;
+  extendedProfile: {
+    fields?: Record<string, string | number | null>;
+    references?: RegistrationReference[];
+    /** Who referred them — HR's entry (shown, not changed here) or their own. */
+    sourceReferral?: SourceReferral | null;
+  } | null;
 }
 
 export interface RegistrationDocument {
   requirement: string;
   filePaths: string[];
+  /** HR's verdict on this requirement — `NEEDS_RESUBMIT` flags it until a fresh scan lands. */
+  reviewStatus?: string | null;
+  rejectionReason?: string | null;
+  rejectionNote?: string | null;
+}
+
+/** Somebody who can vouch for the candidate — name plus a number that dials. Email where known. */
+export interface RegistrationReference {
+  fullName: string;
+  phone?: string;
+  relationship?: string;
+  email?: string;
 }
 
 export interface RegistrationHydration {
@@ -52,12 +73,29 @@ export interface RegistrationHydration {
   documentsRequested: string[];
   /** The server's own record that this link's number was confirmed, so a reopen does not ask again. */
   otpVerified?: boolean;
+  /** Exactly what HR asked for — the to-do list this link renders instead of one note. */
+  infoRequests?: ApplicationInfoRequestItem[];
   /**
    * What must be shown, and agreed to, before the form collects anything. Served rather than
    * bundled: the version is stamped on the acceptance, so the words read and the words recorded
    * must be the same ones.
    */
   consentNotice: ConsentNotice & { grievanceContact: string };
+  /**
+   * The link has expired and this is only how the candidate is getting on (2026-09-24): the
+   * application is its id and status, there is no consent notice, and nothing can be changed.
+   */
+  statusOnly?: boolean;
+  /** THIS app proved the contact with a code in this session, so saved answers came back. */
+  sessionVerified?: boolean;
+  /**
+   * Answers or scans are on file and were WITHHELD: this app has not proven the contact with a code
+   * in this session. The screen asks for a code (sent to the number on file) before it shows — or
+   * saves — the form.
+   */
+  sensitiveLocked?: boolean;
+  /** What is on file and being withheld: identity field names and how many scans. */
+  sensitiveOnFile?: { fields: string[]; scans: number };
 }
 
 export interface RegistrationPincodeLookup {
@@ -105,6 +143,13 @@ export interface DraftPatch {
    * package for what the server will keep.
    */
   record?: Record<string, string | number>;
+  /**
+   * People who can vouch for the candidate — up to three. Normalized server-side; submit
+   * refuses an application with nobody ringable on it.
+   */
+  references?: Array<{ fullName?: string; phone?: string; relationship?: string; email?: string }>;
+  /** Who referred them — only while HR has not recorded it. `null` clears their own entry. */
+  sourceReferral?: { type: string; name: string; mobile: string; email: string } | null;
 }
 
 /**
@@ -112,9 +157,12 @@ export interface DraftPatch {
  * address when texts are not available. `sentTo` arrives masked ("••••• 4455", "r•••@example.com").
  */
 export interface OtpDelivery {
-  sent: boolean;
   channel: 'SMS' | 'EMAIL';
   sentTo: string;
+  /** Seconds before another code may be asked for — the server's setting, not a number of ours. */
+  cooldownSeconds?: number;
+  /** Seconds this code stays usable. */
+  expiresInSeconds?: number;
 }
 
 export type SelfRegResult<T> =
@@ -167,9 +215,37 @@ async function call<T>(path: string, options: RequestInit = {}, timeoutMs = TIME
 
 const base = (token: string) => `/public/registration/${encodeURIComponent(token)}`;
 
+/*
+  THE LINK OPENS THE FORM; THE CODE OPENS WHAT IS ALREADY IN IT.
+
+  A verified code answers with a session key. Sent back in this header, it lets the server return
+  the candidate's saved identity numbers and scans, and accept changes to them; without it the link
+  alone shows progress. Same contract as the web page (`public-registration.ts`). Kept in memory
+  only — gone when the app is closed, like the web's per-tab sessionStorage — keyed by the end of
+  the token so two links in one run do not share a key. The server expires it after 30 idle minutes.
+*/
+export const REGISTRATION_SESSION_HEADER = 'x-registration-session';
+const sessions = new Map<string, string>();
+const sessionSlot = (token: string) => token.slice(-16);
+
+export function readRegistrationSession(token: string): string | null {
+  return sessions.get(sessionSlot(token)) ?? null;
+}
+
+export function rememberRegistrationSession(token: string, key: string | null | undefined): void {
+  if (key) sessions.set(sessionSlot(token), key);
+  else sessions.delete(sessionSlot(token));
+}
+
+/** The header that carries this link's session key, or nothing before a code was verified. */
+export function registrationSessionHeaders(token: string): Record<string, string> {
+  const key = readRegistrationSession(token);
+  return key ? { [REGISTRATION_SESSION_HEADER]: key } : {};
+}
+
 export const SelfRegistrationApi = {
   hydrate(token: string): Promise<SelfRegResult<RegistrationHydration>> {
-    return call<RegistrationHydration>(base(token));
+    return call<RegistrationHydration>(base(token), { headers: registrationSessionHeaders(token) });
   },
 
   /**
@@ -201,20 +277,29 @@ export const SelfRegistrationApi = {
   requestOtp(token: string, phone: string): Promise<SelfRegResult<OtpDelivery>> {
     return call<OtpDelivery>(`${base(token)}/otp/request`, {
       method: 'POST',
+      headers: registrationSessionHeaders(token),
       body: JSON.stringify({ phone }),
     });
   },
 
-  verifyOtp(token: string, phone: string, code: string): Promise<SelfRegResult<{ verified: boolean }>> {
-    return call<{ verified: boolean }>(`${base(token)}/otp/verify`, {
+  /** Verifies the code and keeps the session key it mints, so this app can read its saved answers. */
+  async verifyOtp(
+    token: string,
+    phone: string,
+    code: string,
+  ): Promise<SelfRegResult<{ verified: boolean; sessionKey?: string; sessionExpiresInSeconds?: number }>> {
+    const res = await call<{ verified: boolean; sessionKey?: string; sessionExpiresInSeconds?: number }>(`${base(token)}/otp/verify`, {
       method: 'POST',
       body: JSON.stringify({ phone, code }),
     });
+    if (res.success && res.data?.sessionKey) rememberRegistrationSession(token, res.data.sessionKey);
+    return res;
   },
 
   updateDraft(token: string, patch: DraftPatch): Promise<SelfRegResult<RegistrationApplication>> {
     return call<RegistrationApplication>(`${base(token)}/draft`, {
       method: 'PATCH',
+      headers: registrationSessionHeaders(token),
       body: JSON.stringify(patch),
     });
   },
@@ -247,9 +332,25 @@ export const SelfRegistrationApi = {
     return call(`${base(token)}/lookup/ifsc/${encodeURIComponent(code.trim().toUpperCase())}`);
   },
 
-  /** Where one attached scan can be read back from; the token in the path is its only credential. */
+  /**
+   * Where one attached scan can be read back from. The server hands the bytes only to a caller that
+   * unlocked the link with a code this session — send `registrationSessionHeaders(token)` with it.
+   */
   documentFileUrl(token: string, requirement: string, index: number): string {
     return `${linkApiRoot ?? getApiBaseUrl()}${base(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`;
+  },
+
+  /**
+   * An address a PDF viewer can open for one scan. The viewer cannot send the session header, so
+   * the server — which checks the header here — hands back a two-minute link to exactly this page.
+   */
+  async documentOpenUrl(token: string, requirement: string, index: number): Promise<SelfRegResult<string>> {
+    const res = await call<{ path: string }>(
+      `${base(token)}/documents/${encodeURIComponent(requirement)}/file/${index}/link`,
+      { headers: registrationSessionHeaders(token) },
+    );
+    if (!res.success || !res.data?.path) return { success: false, error: res.success ? 'Could not open that file.' : res.error };
+    return { success: true, data: `${linkApiRoot ?? getApiBaseUrl()}${res.data.path}` };
   },
 
   /**
@@ -264,6 +365,11 @@ export const SelfRegistrationApi = {
     token: string,
     requirement: string,
     file: { uri: string; name: string; mimeType?: string },
+    /**
+     * `true` replaces every file this requirement holds (a retake); otherwise the file is added
+     * after them (another page). The server answers with the document as it now stands.
+     */
+    options: { replace?: boolean } = {},
   ): Promise<SelfRegResult<RegistrationDocument>> {
     const form = new FormData();
     if (Platform.OS === 'web') {
@@ -281,9 +387,17 @@ export const SelfRegistrationApi = {
       } as unknown as Blob);
     }
     return call<RegistrationDocument>(
-      `${base(token)}/documents/${encodeURIComponent(requirement)}`,
-      { method: 'POST', body: form },
+      `${base(token)}/documents/${encodeURIComponent(requirement)}${options.replace ? '?replace=true' : ''}`,
+      { method: 'POST', body: form, headers: registrationSessionHeaders(token) },
       60_000,
+    );
+  },
+
+  /** Takes one file off a requirement; the answer is the document with what is left (maybe none). */
+  deleteDocumentFile(token: string, requirement: string, index: number): Promise<SelfRegResult<RegistrationDocument>> {
+    return call<RegistrationDocument>(
+      `${base(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`,
+      { method: 'DELETE', headers: registrationSessionHeaders(token) },
     );
   },
 

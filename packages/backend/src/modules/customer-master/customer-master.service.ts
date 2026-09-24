@@ -60,6 +60,18 @@ export interface CustomerMasterReconciliationReportDto {
   recommendation: string;
 }
 
+/** The progress callback `uploadAndReconcile` reports through: units done, units in this stage, stage. */
+export type ReconcileProgress = (done: number, total: number, stage: string) => void | Promise<void>;
+
+/** The stages a reconciliation reports, in order. */
+export const RECONCILE_STAGE = {
+  MATCHING: 'Matching rows to branches',
+  SAVING: 'Saving the version',
+} as const;
+
+/** Report matching progress every this many rows — often enough to move, rarely enough to cost nothing. */
+const PROGRESS_ROW_CHUNK = 500;
+
 /** Reject the batch above these — the same numbers as before, named so the reason can quote them. */
 const DUPLICATE_ACCOUNT_LIMIT = 50;
 const UNMAPPED_BRANCH_CODE_LIMIT = 10;
@@ -91,7 +103,16 @@ export class CustomerMasterService {
     fileBuffer: Buffer,
     userId: string,
     auditDate?: string,
+    /**
+     * Where the reconciliation has got to, for the background job that runs it (see
+     * `customer-master-import.job.ts`): called per chunk of rows while matching, and per insert
+     * batch while saving. Optional, so a caller that does not watch progress passes nothing.
+     */
+    onProgress?: ReconcileProgress,
   ): Promise<CustomerMasterReconciliationReportDto> {
+    const report = async (done: number, total: number, stage: string) => {
+      if (onProgress) await onProgress(done, total, stage);
+    };
     const existingVersions = await this.versionRepository.find({
       where: { projectId, isActive: true },
       order: { versionNumber: 'DESC' },
@@ -110,6 +131,7 @@ export class CustomerMasterService {
     ]);
 
     const totalRows = rows.length;
+    await report(0, totalRows, RECONCILE_STAGE.MATCHING);
     let duplicateAccounts = 0;
     let unmappedBranchCodes = 0;
     // Every row that could not be tied to a branch — not just the unknown-code case counted above,
@@ -169,7 +191,10 @@ export class CustomerMasterService {
       }
     }
 
-    for (const row of rows) {
+    for (const [rowIndex, row] of rows.entries()) {
+      if (rowIndex > 0 && rowIndex % PROGRESS_ROW_CHUNK === 0) {
+        await report(rowIndex, totalRows, RECONCILE_STAGE.MATCHING);
+      }
       const read = rowReader(row);
       const acc = read(...CUSTOMER_ACCOUNT_NUMBER_ALIASES);
       const solId = read(...CUSTOMER_SOL_ID_ALIASES).toUpperCase();
@@ -260,6 +285,9 @@ export class CustomerMasterService {
         : `Too many exceptions to accept automatically: ${blockReasons.join('; ')}.`
       : null;
     const status = isBlocked ? CustomerMasterStatus.REJECTED : CustomerMasterStatus.RECONCILED;
+    await report(totalRows, totalRows, RECONCILE_STAGE.MATCHING);
+    const recordsToSave = !isBlocked ? recordEntities.length : 0;
+    await report(0, recordsToSave, RECONCILE_STAGE.SAVING);
 
     return this.dataSource.transaction(async (manager) => {
       const versionEntity = manager.create(CustomerMasterVersionEntity, {
@@ -315,6 +343,7 @@ export class CustomerMasterService {
             .into(CustomerRecordEntity)
             .values(batch as any)
             .execute();
+          await report(Math.min(i + batchSize, recordEntities.length), recordsToSave, RECONCILE_STAGE.SAVING);
         }
       }
 
@@ -349,6 +378,22 @@ export class CustomerMasterService {
             : 'Reconciliation passed: version created and records mapped cleanly.',
       };
     });
+  }
+
+  /**
+   * Refuse, in the upload request, a batch that could never be reconciled: the project must exist,
+   * and a client-scoped caller may only send one for their own client (the same `assertClientAllowed`
+   * `dailyRun` and `findByProject` apply). Reads only — it runs before anything is stored.
+   *
+   * No region ceiling, for the reason the upload route gives: one file spans every branch the
+   * client scheduled for the date, so there is no single region to check it against.
+   */
+  async assertUploadTarget(projectId: string, scope?: Partial<GlobalScope>): Promise<void> {
+    const project = await this.projectRepository.findOne({ where: { id: projectId }, select: ['id', 'clientId'] });
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} was not found, so this file has no branches to reconcile against.`);
+    }
+    assertClientAllowed(project.clientId, scope);
   }
 
   /**

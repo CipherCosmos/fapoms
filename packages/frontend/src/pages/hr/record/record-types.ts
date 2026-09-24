@@ -24,6 +24,8 @@ export interface PaperworkDocument {
   requirement: string;
   label: string;
   identity: boolean;
+  /** Read and signed off by a reviewer — the identity documents and the bank passbook. */
+  verifiable?: boolean;
   id: string | null;
   currentVersionId?: string | null;
   docVersion?: number;
@@ -75,10 +77,16 @@ export interface BackgroundCheck {
   riskGrade?: string | null;
   cibilScore?: number | null;
   cibilBand?: string | null;
+  /** A background verification's address and court checks (2026-09-24) — null on older checks. */
+  addressCheckMethod?: string | null;
+  addressCheckResult?: string | null;
+  courtCheckResult?: string | null;
   checkedOn?: string | null;
   checkedByName?: string | null;
   findings?: string | null;
   createdAt: string;
+  /** The report files this check was read from — sent all along, declared now the review reads them. */
+  reportFiles?: Array<{ documentId: string; versionId: string | null; path: string; uploadedAt: string | null }>;
 }
 
 export interface AssayerDossier {
@@ -86,14 +94,26 @@ export interface AssayerDossier {
     id: string;
     fullName: string;
     phone?: string | null;
+    email?: string | null;
     relationship?: string | null;
     checkedAt?: string | null;
     checkedBy?: string | null;
     remarks?: string | null;
+    /** When they were told HR may call, and how (`EMAIL`, `SMS`, `EMAIL,SMS`). Null until something went. */
+    notifiedAt?: string | null;
+    notifiedVia?: string | null;
+    /** Why it did not reach them every way it could — no address, a text with no DLT template. */
+    noticeProblem?: string | null;
   }>;
   empanelments: ClientEmpanelment[];
   backgroundChecks: BackgroundCheck[];
   currentCheck: BackgroundCheck | null;
+  /**
+   * Background verification report files uploaded that no recorded check has been read from yet —
+   * the report for the check about to be recorded. The dossier has always sent it; the vetting tab
+   * reads it, and the joining checklist now does too.
+   */
+  bgvReportPending?: Array<{ documentId: string; versionId: string | null; path: string; uploadedAt: string | null; index?: number }>;
   onboarding: PaperworkDocument[];
   openIssues: any[];
   /**

@@ -47,7 +47,8 @@ import {
   NotificationDispatchService,
   EmitOptions,
 } from '../notifications/notification-dispatch.service';
-import { BillingState, DEAD_BILLING_STATES, DEAD_PAYABLE_STATUSES, isLiveBillingEntry, isLivePayable, liveBillingEntrySql, livePayableSql, andLivePayableSql, InvoiceStatus, PaymentMethod, PaymentDirection, AssayerPayableStatus, AssayerInvoiceStatus, BillingEntityType, AssignmentStatus, BillingAttentionItem, BillingOverview, AssignmentMoneyLine, EventCategory, businessTodayDateKey, BUSINESS_TODAY_SQL, gstinStateCode, gstStateCodeToName, resolveGstStateCode, numberToIndianWords, OnboardingDocument, maskTail, SystemRole, businessDateKey } from '@fapoms/shared';
+import { BillingState, DEAD_BILLING_STATES, DEAD_PAYABLE_STATUSES, isLiveBillingEntry, isLivePayable, liveBillingEntrySql, livePayableSql, andLivePayableSql, InvoiceStatus, PaymentMethod, PaymentDirection, AssayerPayableStatus, AssayerInvoiceStatus, BillingEntityType, AssignmentStatus, BillingAttentionItem, BillingOverview, AssignmentMoneyLine, EventCategory, businessTodayDateKey, BUSINESS_TODAY_SQL, gstinStateCode, gstStateCodeToName, resolveGstStateCode, numberToIndianWords, OnboardingDocument, maskTail, SystemRole, businessDateKey, ASSAYER_SENT_INVOICE_STATUSES, AWAITING_HOD_MESSAGE, hodRejectReasonProblem, FinalApprovalItem, FinalApprovalKind, FinalApprovalQueue, tds194jDeduction, indianFinancialYear, formatClientInvoiceNumber, normaliseBankAccountNumber, PAYOUT_DESTINATION_SHARED_MESSAGE, PAYOUT_DESTINATION_UNVERIFIED_WARNING, payoutDestinationChangedWarning, type PayoutDestinationCheck, type Tds194jBasis } from '@fapoms/shared';
+import { bankAccountFingerprint } from '../../infrastructure/security/field-encryption';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY, SEGREGATION_OF_DUTIES_SETTING_KEY } from '../../infrastructure/settings/settings.registry';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
@@ -62,6 +63,7 @@ import {
   AssignmentMoney,
 } from './assignment-money';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
+import { withCode } from '../../infrastructure/http/api-error';
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -103,6 +105,23 @@ export interface BookingResult {
 export interface PayoutActionResult {
   done: string[];
   refused: Array<{ id: string; reason: string }>;
+  /**
+   * Approved, but with something the approver must know (2026-09-24 audit F3): the bank account is
+   * not backed by a verified passbook or identity. Keyed by payable id; absent when there is none.
+   */
+  warnings?: Array<{ id: string; warning: string }>;
+}
+
+/** How one fee payable's TDS was decided — written onto its rate snapshot so it explains itself. */
+export interface AssayerTdsDecision {
+  tds: number;
+  basis: Tds194jBasis;
+  ratePct: number;
+  thresholdRupees: number;
+  financialYear: string;
+  fyGrossBefore: number;
+  fyTdsBefore: number;
+  fyGrossIncluding: number;
 }
 
 /** A second client line for an assignment was refused by the database. */
@@ -127,6 +146,30 @@ export class DuplicateReimbursementError extends ConflictException {
 }
 
 /**
+ * The one refusal every payment path gives when the HOD has not approved yet (2026-09-24): a 409
+ * with the stable code `AWAITING_HOD_APPROVAL`, and a sentence that starts with the plain words
+ * "Waiting for HOD approval" so the desk reads the reason before the detail.
+ */
+export function awaitingHod(detail: string): ConflictException {
+  return withCode(new ConflictException(`${AWAITING_HOD_MESSAGE} — ${detail}`), 'AWAITING_HOD_APPROVAL');
+}
+
+/**
+ * An assayer bill the office has approved — waiting for the HOD (APPROVED) or cleared by them
+ * (HOD_APPROVED). Both are "approved" to every rule that asks whether a bill is past the point of
+ * change: frozen against re-pricing, left alone by a void, never cancelled or revised.
+ */
+export function isApprovedBill(status: AssayerInvoiceStatus | string | null | undefined): boolean {
+  return status === AssayerInvoiceStatus.APPROVED || status === AssayerInvoiceStatus.HOD_APPROVED;
+}
+
+/** The shortest reason accepted for approving a payout without an approved bill (audit F6). */
+export const DIRECT_APPROVAL_REASON_MIN = 10;
+
+/** Who the HOD's final approval is for — a payable on no active bill, told apart by `expenseId`. */
+export type HodPayableSubject = 'DIRECT_PAYOUT' | 'EXPENSE_REIMBURSEMENT';
+
+/**
  * How often the reconcile reports progress, in assignments. Each report is a Redis round trip.
  */
 const RECONCILE_PROGRESS_INTERVAL = 200;
@@ -143,6 +186,9 @@ const ATTENTION_LIMIT = 25;
  * had, applied to money someone is about to bill.
  */
 const INVOICEABLE_LIMIT = 2000;
+
+/** The most rows of one kind the HOD's queue returns at once. Its counts are always the whole queue. */
+const FINAL_APPROVAL_QUEUE_CAP = 200;
 
 /**
  * The billing engine: the assignment is the ledger line.
@@ -271,13 +317,23 @@ export class BillingEngineService implements OnModuleInit {
         }
 
         const ctx = await this.moneyContextFor(clientId, a.assayerId, a.quotedTravelFee, m);
-        const money = assignmentMoney(a, ctx);
+        let money = assignmentMoney(a, ctx);
         if (money.fee.source === 'NONE') return { booked: false, reason: 'NO_FEE' };
+
+        // The assayer's TDS under s.194J with its annual threshold — only when a payable is about to
+        // be written, so a half-booked assignment's repair reads nothing it does not need.
+        let tdsDecision: AssayerTdsDecision | null = null;
+        if (!livePayable) {
+          tdsDecision = await this.assayerFeeTds(m, {
+            assayerId: a.assayerId, gross: money.assayer.gross, ratePct: ctx.assayerTdsRate, bookedAt: new Date(),
+          });
+          money = this.withAssayerTds(money, tdsDecision.tds);
+        }
 
         // Reuse only a LIVE leg. Where the only row is voided or cancelled, this inserts a new
         // one alongside it — which the partial unique indexes permit precisely because they
         // exclude the dead states. The history stays; the new completion gets its own effect.
-        const payable = livePayable ?? await this.insertFeePayable(m, a, clientId, money, ctx, userId);
+        const payable = livePayable ?? await this.insertFeePayable(m, a, clientId, money, ctx, userId, tdsDecision);
         const entry = liveEntry ?? await this.insertClientLine(m, a, clientId, money, ctx, userId);
 
         emit('billing:booked', {
@@ -386,29 +442,64 @@ export class BillingEngineService implements OnModuleInit {
           where: { id: payable.assayerInvoiceId },
           lock: { mode: 'pessimistic_write' },
         });
-        if (inv && (inv.status === AssayerInvoiceStatus.SUBMITTED || inv.status === AssayerInvoiceStatus.APPROVED)) {
+        if (inv && (inv.status === AssayerInvoiceStatus.SUBMITTED || isApprovedBill(inv.status))) {
           payableFrozenReason = `payout on ${inv.status.toLowerCase()} assayer invoice ${inv.invoiceNumber} — left untouched`;
-          this.logger.warn(
-            `Re-price of assignment ${assignmentId}: ${payableFrozenReason} (cancel the invoice first if the fee edit must reach it).`,
-          );
         } else if (inv && inv.status === AssayerInvoiceStatus.INVITED) {
           payableInvitedInvoice = inv;
         }
       }
-      if (payable && !payableFrozenReason && payable.status !== AssayerPayableStatus.PAID && Number(payable.paidAmount) === 0) {
+      /**
+       * Only a Due (PENDING) payable with nothing paid is re-priced (audit F8, 2026-09-24).
+       *
+       * This used to accept anything not PAID, so an APPROVED payout — one the office had approved,
+       * and possibly the HOD after it — silently took the new figure, and the next payment run paid
+       * an amount nobody had approved. An approval is a record of the figure that was approved, the
+       * same as a payment is of the figure that was paid. The attention list's FEE_CHANGED item
+       * (booked fee vs the assignment's fee now) is where finance sees it; void it and let the
+       * redo book afresh, or send it back through the HOD, if the new fee must reach it.
+       */
+      const payablePaid = payable?.status === AssayerPayableStatus.PAID;
+      if (payable && !payablePaid && !payableFrozenReason
+        && (payable.status !== AssayerPayableStatus.PENDING || Number(payable.paidAmount) > 0)) {
+        payableFrozenReason = payable.hodApprovedAt
+          ? `payout ${payable.payableNumber} has the HOD's final approval — left untouched`
+          : payable.status === AssayerPayableStatus.APPROVED
+            ? `payout ${payable.payableNumber} is already approved — left untouched`
+            : `payout ${payable.payableNumber} is part paid — left untouched`;
+      }
+      if (payable && payableFrozenReason && !payablePaid) {
+        this.logger.warn(`Re-price of assignment ${assignmentId}: ${payableFrozenReason}.`);
+        // Recorded, not just logged: the payable's own trail says the fee moved and why it did not.
+        await this.history(userId, {
+          clientId, projectId: a.projectId, assignmentId, assayerId: a.assayerId,
+          entityType: BillingEntityType.PAYABLE, entityId: payable.id, action: 'PAYABLE_REPRICE_SKIPPED',
+          fromState: payable.status, toState: payable.status,
+          previousValue: { baseAmount: Number(payable.baseAmount), travelAmount: Number(payable.travelAmount), totalAmount: Number(payable.totalAmount) },
+          newValue: { feeAmount: money.fee.amount, baseAmount: money.assayer.base, travelAmount: money.assayer.travel },
+          reason: `Assignment fee changed; ${payableFrozenReason}`,
+        }, m);
+      }
+      // A PAID payout is a record of what was paid; it was never re-priceable and needs no note.
+      if (payable && !payablePaid && !payableFrozenReason) {
         const before = { baseAmount: Number(payable.baseAmount), travelAmount: Number(payable.travelAmount), tdsAmount: Number(payable.tdsAmount), totalAmount: Number(payable.totalAmount) };
-        payable.baseAmount = money.assayer.base;
-        payable.travelAmount = money.assayer.travel;
+        // The re-priced fee's TDS, by the same threshold rule as its booking, in its booking's year.
+        const tds = await this.assayerFeeTds(m, {
+          assayerId: a.assayerId, gross: money.assayer.gross, ratePct: ctx.assayerTdsRate,
+          bookedAt: payable.createdAt ? new Date(payable.createdAt) : new Date(), excludePayableId: payable.id,
+        });
+        const repriced = this.withAssayerTds(money, tds.tds);
+        payable.baseAmount = repriced.assayer.base;
+        payable.travelAmount = repriced.assayer.travel;
         payable.taxAmount = 0;
-        payable.tdsAmount = money.assayer.tds;
-        payable.totalAmount = money.assayer.net;
-        payable.rateSnapshot = this.payableSnapshot(a, money, ctx);
+        payable.tdsAmount = repriced.assayer.tds;
+        payable.totalAmount = repriced.assayer.net;
+        payable.rateSnapshot = this.payableSnapshot(a, repriced, ctx, tds);
         payable.updatedBy = userId;
         await m.save(payable);
         await this.history(userId, {
           clientId, projectId: a.projectId, assignmentId, assayerId: a.assayerId,
           entityType: BillingEntityType.PAYABLE, entityId: payable.id, action: 'PAYABLE_REPRICED',
-          previousValue: before, newValue: { baseAmount: money.assayer.base, travelAmount: money.assayer.travel, tdsAmount: money.assayer.tds, totalAmount: money.assayer.net },
+          previousValue: before, newValue: { baseAmount: repriced.assayer.base, travelAmount: repriced.assayer.travel, tdsAmount: repriced.assayer.tds, totalAmount: repriced.assayer.net },
           reason: 'Assignment fee changed',
         }, m);
         // The invoice's totals are SUMs of its lines and one line just moved.
@@ -635,7 +726,7 @@ export class BillingEngineService implements OnModuleInit {
     quotedTravelFee: unknown,
     m: EntityManager,
     adjustmentAmount = 0,
-  ): Promise<MoneyContext & { paymentTerms: string | null }> {
+  ): Promise<MoneyContext & { paymentTerms: string | null; assayerHasPan: boolean; assayerNormalTdsRate: number; assayerNoPanTdsRate: number }> {
     const needsLegacyTravel = quotedTravelFee === null || quotedTravelFee === undefined;
     const [cfgRows, clientRows, billingRows, assayerTds, gstDefault, tdsDefault, profileRows, panRows, tdsNoPan] = await Promise.all([
       m.query(
@@ -697,11 +788,75 @@ export class BillingEngineService implements OnModuleInit {
         : null,
       adjustmentAmount,
       paymentTerms: billing?.payment_terms ?? null,
+      assayerHasPan: hasPan,
+      assayerNormalTdsRate: Number(assayerTds) || 0,
+      assayerNoPanTdsRate: Math.max(Number(assayerTds) || 0, Number(tdsNoPan) || 20),
     };
   }
 
+  // -----------------------------------------------------------------------
+  // TDS under s.194J, with the annual threshold (2026-09-24 audit F15, owner's decision)
+  // -----------------------------------------------------------------------
+
+  /**
+   * The TDS to withhold from ONE fee payable, on the caller's transaction.
+   *
+   * The rule is `tds194jDeduction` in `@fapoms/shared` (read its comment): nothing is withheld until
+   * the assayer's fees in the financial year pass `billing.tds194jThresholdRupees`; the payable that
+   * takes them past it carries TDS on the whole year; every one after it is withheld at the rate. A
+   * threshold of 0 is the old behaviour — the rate on this payable's own fee, nothing else read.
+   *
+   * "The year" is the Indian financial year of the payable's BOOKING day, the same bucket the TDS
+   * report (the 26Q feed) files it under, over this assayer's other LIVE fee payables — a voided
+   * payable's TDS was never withheld, so the next payable picks up whatever it carried. Reimbursements
+   * are not fees and never count.
+   *
+   * Serialised per assayer with a transaction-scoped advisory lock: two bookings for one assayer in
+   * the same instant would otherwise both read "nothing withheld yet" and both carry the catch-up.
+   */
+  private async assayerFeeTds(
+    m: EntityManager,
+    opts: { assayerId: string; gross: number; ratePct: number; bookedAt: Date; excludePayableId?: string | null },
+  ): Promise<AssayerTdsDecision> {
+    const fallback = Number(SETTING_BY_KEY['billing.tds194jThresholdRupees']?.default ?? 50000);
+    // A read failure falls back to the shipped default, never to 0: 0 would withhold on everything.
+    const threshold = await this.settings.getNumber('billing.tds194jThresholdRupees', fallback).catch(() => fallback);
+    const fy = indianFinancialYear(opts.bookedAt);
+    if (!(Number(threshold) > 0)) {
+      const out = tds194jDeduction({ gross: opts.gross, ratePct: opts.ratePct, thresholdRupees: 0, fyGrossBefore: 0, fyTdsBefore: 0 });
+      return { ...out, ratePct: opts.ratePct, thresholdRupees: 0, financialYear: fy.label, fyGrossBefore: 0, fyTdsBefore: 0 };
+    }
+    await m.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`tds194j:${opts.assayerId}`]);
+    const rows = await m.query(
+      `SELECT COALESCE(SUM(p.base_amount + p.travel_amount), 0) AS gross,
+              COALESCE(SUM(p.tds_amount), 0)                    AS tds
+         FROM assayer_payables p
+        WHERE p.assayer_id = $1
+          AND p.is_active = true
+          AND p.expense_id IS NULL
+          AND ${livePayableSql('p')}
+          AND (p.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $2::date AND $3::date
+          AND ($4::uuid IS NULL OR p.id <> $4::uuid)`,
+      [opts.assayerId, fy.from, fy.to, opts.excludePayableId ?? null],
+    );
+    const fyGrossBefore = round2(Number(rows?.[0]?.gross ?? 0));
+    const fyTdsBefore = round2(Number(rows?.[0]?.tds ?? 0));
+    const out = tds194jDeduction({ gross: opts.gross, ratePct: opts.ratePct, thresholdRupees: Number(threshold), fyGrossBefore, fyTdsBefore });
+    return { ...out, ratePct: opts.ratePct, thresholdRupees: Number(threshold), financialYear: fy.label, fyGrossBefore, fyTdsBefore };
+  }
+
+  /** `money` with the assayer's TDS (and so their net) replaced by the threshold-aware figure. */
+  private withAssayerTds(money: AssignmentMoney, tds: number): AssignmentMoney {
+    return { ...money, assayer: { ...money.assayer, tds, net: round2(money.assayer.gross - tds) } };
+  }
+
   /** The snapshot must justify the amount booked — from the payable alone, forever. */
-  private payableSnapshot(a: AssignmentEntity, money: AssignmentMoney, ctx: MoneyContext): Record<string, unknown> {
+  private payableSnapshot(
+    a: AssignmentEntity,
+    money: AssignmentMoney,
+    ctx: MoneyContext & { assayerHasPan?: boolean },
+    tds: AssayerTdsDecision | null = null,
+  ): Record<string, unknown> {
     return {
       source: 'assignmentMoney',
       feeAmount: money.fee.amount,
@@ -715,7 +870,17 @@ export class BillingEngineService implements OnModuleInit {
       quotedDistanceSource: a.quotedDistanceSource ?? null,
       baseAmount: money.assayer.base,
       travelAmount: money.assayer.travel,
-      tdsRate: ctx.assayerTdsRate,
+      tdsRate: tds?.ratePct ?? ctx.assayerTdsRate,
+      // Which rate that was: the normal one, or s.206AA's for a deductee with no PAN. Read at office
+      // approval, which re-withholds at the normal rate once the PAN is on file (audit F4).
+      tdsPanBasis: ctx.assayerHasPan === false ? 'NO_PAN' : 'PAN',
+      // How the s.194J annual threshold decided the TDS (audit F15). Null for a pre-threshold row.
+      tds194j: tds
+        ? {
+            basis: tds.basis, thresholdRupees: tds.thresholdRupees, financialYear: tds.financialYear,
+            fyGrossBefore: tds.fyGrossBefore, fyTdsBefore: tds.fyTdsBefore, fyGrossIncluding: tds.fyGrossIncluding,
+          }
+        : null,
       legacyTravelReimbursement: ctx.legacyTravelReimbursement ?? null,
       capturedAt: new Date().toISOString(),
     };
@@ -728,6 +893,7 @@ export class BillingEngineService implements OnModuleInit {
     money: AssignmentMoney,
     ctx: MoneyContext,
     userId: string,
+    tds: AssayerTdsDecision | null = null,
   ): Promise<AssayerPayableEntity> {
     return this.insertPayable(m, {
       assayerId: a.assayerId as string,
@@ -739,7 +905,7 @@ export class BillingEngineService implements OnModuleInit {
       travelAmount: money.assayer.travel,
       tdsAmount: money.assayer.tds,
       totalAmount: money.assayer.net,
-      rateSnapshot: this.payableSnapshot(a, money, ctx),
+      rateSnapshot: this.payableSnapshot(a, money, ctx, tds),
       remarks: money.fee.settled
         ? `Fee for ${a.assignmentNumber}`
         : `Fee for ${a.assignmentNumber} — booked from the PROPOSED fee; no fee was agreed`,
@@ -887,6 +1053,34 @@ export class BillingEngineService implements OnModuleInit {
     }
   }
 
+  /**
+   * The assignment's LIVE fee payable, or null — the one row that is "the assayer's pay for this
+   * job" today. Reimbursement payables (`expenseId` set) are not the fee and are excluded; a voided
+   * fee payable from an earlier completion is history, not pay (`DEAD_PAYABLE_STATUSES`). Same
+   * predicate as `bookAssignment`'s own "already booked?" read and the partial unique index.
+   */
+  async liveFeePayable(assignmentId: string): Promise<AssayerPayableEntity | null> {
+    return this.payableRepository.findOne({
+      where: { assignmentId, expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
+    });
+  }
+
+  /**
+   * `liveFeePayable` for many assignments in one read, keyed by assignment id — for the field app's
+   * work list, which asks the expense rule of every job on it and must not ask once per job.
+   * Same predicate as the single form; an assignment with no live fee payable is absent.
+   */
+  async liveFeePayables(assignmentIds: string[]): Promise<Map<string, AssayerPayableEntity>> {
+    const ids = [...new Set(assignmentIds.filter(Boolean))];
+    const out = new Map<string, AssayerPayableEntity>();
+    if (ids.length === 0) return out;
+    const rows = await this.payableRepository.find({
+      where: { assignmentId: In(ids), expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
+    });
+    for (const row of rows) if (row.assignmentId) out.set(row.assignmentId, row);
+    return out;
+  }
+
   // -----------------------------------------------------------------------
   // The client line: adjust and hold, while unbilled
   // -----------------------------------------------------------------------
@@ -992,7 +1186,15 @@ export class BillingEngineService implements OnModuleInit {
     emit: (event: string, payload: Record<string, unknown>) => void,
     payableId: string,
     userId: string,
-    opts: { suppressNotification: boolean; bypassInvoiceGuard?: boolean; reason?: string },
+    opts: {
+      suppressNotification: boolean;
+      bypassInvoiceGuard?: boolean;
+      reason?: string;
+      /** Told what the approver must know but that does not refuse the approval (audit F3). */
+      onWarning?: (warning: string) => void;
+      /** Told how far the TDS re-decided at approval moved this line (audit F4/F15), for its bill. */
+      onTdsChange?: (delta: { tds: number; total: number }) => void;
+    },
   ): Promise<AssayerPayableEntity | null> {
     const p = await this.lockPayable(m, payableId);
     if (p.status === AssayerPayableStatus.APPROVED) return null;
@@ -1012,6 +1214,21 @@ export class BillingEngineService implements OnModuleInit {
           `${p.payableNumber} is awaiting assayer invoice ${inv.invoiceNumber} — approve the invoice instead.`,
         );
       }
+    }
+    /**
+     * A payout approved WITHOUT an approved bill is the exception road, and the exception needs its
+     * reason on the record (audit F6, 2026-09-24). The screen always asked for one; the server did
+     * not, so an API caller — or a screen that lost the field — approved money with nothing written
+     * down. The bill road (`bypassInvoiceGuard`) carries the assayer's own confirmation instead.
+     */
+    if (!opts.bypassInvoiceGuard && (opts.reason?.trim().length ?? 0) < DIRECT_APPROVAL_REASON_MIN) {
+      throw withCode(
+        new BadRequestException(
+          `Say why ${p.payableNumber} is being approved without an approved assayer bill (at least ${DIRECT_APPROVAL_REASON_MIN} characters). `
+          + 'The reason is written to the payout\'s history.',
+        ),
+        'OVERRIDE_REASON_REQUIRED',
+      );
     }
     // Expense-driven payables have no "booking" actor to compare against — only an
     // assignment-completion payable does. Check the mode before the lookup, not inside
@@ -1068,6 +1285,17 @@ export class BillingEngineService implements OnModuleInit {
       // `?? new Date()` on both branches, so an assayer with no passbook and no established
       // identity was stamped "verified, just now" at the moment of approval.
       const snapshot = resolvePayoutDestination(assayer, bankDoc);
+      /**
+       * The owner's decision (audit F3, 2026-09-24): an account that is also on another assayer's
+       * record is REFUSED — it is one person under two codes, or a typo that sends somebody's money
+       * to somebody else, and either way it must be corrected before money is approved to it. The
+       * message names no one: "another assayer" is all the approver needs to go and look.
+       */
+      await this.assertDestinationNotShared(m, p.assayerId, snapshot.destinationBankAccountNumber, snapshot.destinationIfsc, p.payableNumber);
+      // Unverified is ALLOWED (a business decision the approver may take) — but never silently.
+      if (!snapshot.destinationVerifiedSource) {
+        opts.onWarning?.(`${p.payableNumber}: ${PAYOUT_DESTINATION_UNVERIFIED_WARNING}`);
+      }
       p.destinationBankAccountNumber = snapshot.destinationBankAccountNumber;
       p.destinationIfsc = snapshot.destinationIfsc;
       p.destinationBankName = snapshot.destinationBankName;
@@ -1077,9 +1305,23 @@ export class BillingEngineService implements OnModuleInit {
       p.destinationVerifiedSource = snapshot.destinationVerifiedSource;
     }
 
+    // s.206AA no longer applies once the PAN is on file (checked just above), and the s.194J
+    // threshold is judged on the year as it stands now — see `recomputeTdsAtApproval`.
+    if (p.status === AssayerPayableStatus.PENDING) {
+      const tdsBefore = round2(Number(p.tdsAmount));
+      const totalBefore = round2(Number(p.totalAmount));
+      await this.recomputeTdsAtApproval(m, p, userId);
+      const delta = { tds: round2(Number(p.tdsAmount) - tdsBefore), total: round2(Number(p.totalAmount) - totalBefore) };
+      if (delta.tds !== 0 || delta.total !== 0) opts.onTdsChange?.(delta);
+    }
+
     p.status = AssayerPayableStatus.APPROVED;
     p.approvedAt = new Date();
     p.approvedBy = userId;
+    // The office's approval is the first of two (2026-09-24): the HOD's final approval is always
+    // given AFTER it, never carried over from an earlier round.
+    p.hodApprovedAt = null;
+    p.hodApprovedBy = null;
     p.updatedBy = userId;
     const saved = await m.save(p);
     await this.history(userId, {
@@ -1133,30 +1375,322 @@ export class BillingEngineService implements OnModuleInit {
   async approvePayouts(payableIds: string[], userId: string, onProgress?: ProgressCallback, reason?: string): Promise<PayoutActionResult> {
     const done: string[] = [];
     const refused: Array<{ id: string; reason: string }> = [];
+    const warnings: Array<{ id: string; warning: string }> = [];
     const ids = [...new Set(payableIds)];
     for (const [index, id] of ids.entries()) {
       try {
+        const pending: string[] = [];
         const approved = await this.inTx((m, emit) =>
-          this.approvePayableInTx(m, emit, id, userId, { suppressNotification: false, reason }),
+          this.approvePayableInTx(m, emit, id, userId, {
+            suppressNotification: false, reason, onWarning: (w) => pending.push(w),
+          }),
         );
+        // Only an approval that committed has anything to warn about.
+        for (const warning of pending) warnings.push({ id, warning });
         done.push(id);
-        if (approved) {
-          this.notifyWithBranch(approved.assignmentId, (branchName) => ({
-            type: 'PAYABLE_APPROVED',
-            entityType: 'PAYABLE',
-            entityId: approved.id,
-            actorUserId: userId,
-            assayerId: approved.assayerId,
-            dedupeKey: `PAYABLE_APPROVED:${approved.id}`,
-            payload: { payableId: approved.id, amount: Number(approved.totalAmount), branchName },
-          }));
-        }
+        /*
+          The office's approval is no longer the one the assayer hears about (2026-09-24): money
+          still needs the HOD's final approval, and "your payment has been approved" followed by
+          an HOD rejection would be a promise taken back. The assayer's PAYABLE_APPROVED is sent
+          when the HOD approves (`hodApprovePayouts`); here the HOD is told something is waiting.
+        */
+        if (approved) this.notifyAwaitingFinalApproval(approved);
       } catch (err) {
         refused.push({ id, reason: (err as Error).message });
       }
       await onProgress?.(index + 1, ids.length, 'Approving payouts');
     }
-    return { done, refused };
+    return warnings.length ? { done, refused, warnings } : { done, refused };
+  }
+
+  // -----------------------------------------------------------------------
+  // The payout's bank account: shared, unverified, changed (2026-09-24 audit F2/F3)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Is this account number + IFSC also on ANOTHER assayer's record?
+   *
+   * An indexed lookup on `assayers.bank_account_fingerprint` (`BankAccountFingerprint1801300000000`)
+   * — the account column is encrypted with a random IV, so SQL equality on it matches nothing once a
+   * key is set. A deployment with no key stores the column in plain text and has no fingerprint, so
+   * the check compares the column itself there, normalised the same way. Soft-deleted records do
+   * not count; anyone still on the roster, working or not, does.
+   */
+  async destinationSharedWithAnother(
+    m: EntityManager,
+    assayerId: string,
+    accountNumber: string | null | undefined,
+    ifsc: string | null | undefined,
+  ): Promise<boolean> {
+    const account = normaliseBankAccountNumber(accountNumber);
+    const code = (ifsc ?? '').trim().toUpperCase();
+    if (!account || !code) return false;
+    const fingerprint = bankAccountFingerprint(account);
+    const rows: unknown[] = fingerprint
+      ? await m.query(
+          `SELECT 1 FROM assayers
+            WHERE bank_account_fingerprint = $1 AND upper(trim(ifsc_code)) = $2 AND id <> $3 AND is_active = true
+            LIMIT 1`,
+          [fingerprint, code, assayerId],
+        )
+      : await m.query(
+          `SELECT 1 FROM assayers
+            WHERE regexp_replace(COALESCE(bank_account_number, ''), '[[:space:].-]', '', 'g') = $1
+              AND upper(trim(ifsc_code)) = $2 AND id <> $3 AND is_active = true
+            LIMIT 1`,
+          [account, code, assayerId],
+        );
+    return Array.isArray(rows) && rows.length > 0;
+  }
+
+  /** The refusal of `destinationSharedWithAnother`, with the code the screens key off. */
+  private async assertDestinationNotShared(
+    m: EntityManager,
+    assayerId: string,
+    accountNumber: string | null | undefined,
+    ifsc: string | null | undefined,
+    payableNumber: string,
+  ): Promise<void> {
+    if (await this.destinationSharedWithAnother(m, assayerId, accountNumber, ifsc)) {
+      throw withCode(
+        new ConflictException(`Cannot approve payout ${payableNumber}: ${PAYOUT_DESTINATION_SHARED_MESSAGE}`),
+        'PAYOUT_DESTINATION_SHARED',
+      );
+    }
+  }
+
+  /**
+   * Re-decide a Due line's TDS for a bill that is going BACK to its assayer because the approval
+   * found the tax had moved (see `AssayerInvoiceService.approve`). The same re-decision the approval
+   * makes — `recomputeTdsAtApproval`, history row included — but the line stays PENDING: the
+   * assayer confirms the new figure on the bill's next revision, and the approval of that revision
+   * re-decides again and finds nothing left to move (the rule is a fixed point). Returns the line as
+   * it now stands and how far it moved; zero for anything not PENDING.
+   */
+  async reTaxDueLineForRevisionInTx(
+    m: EntityManager,
+    payableId: string,
+    userId: string,
+  ): Promise<{ payable: AssayerPayableEntity; delta: { tds: number; total: number } }> {
+    const p = await this.lockPayable(m, payableId);
+    if (p.status !== AssayerPayableStatus.PENDING) return { payable: p, delta: { tds: 0, total: 0 } };
+    const tdsBefore = round2(Number(p.tdsAmount));
+    const totalBefore = round2(Number(p.totalAmount));
+    await this.recomputeTdsAtApproval(m, p, userId);
+    const delta = { tds: round2(Number(p.tdsAmount) - tdsBefore), total: round2(Number(p.totalAmount) - totalBefore) };
+    if (delta.tds !== 0 || delta.total !== 0) {
+      p.updatedBy = userId;
+      return { payable: await m.save(p), delta };
+    }
+    return { payable: p, delta };
+  }
+
+  /**
+   * Re-withhold a Due payable's TDS at office approval (audit F4 and F15), on the caller's transaction.
+   *
+   *  - s.206AA: a payable booked while the assayer had no PAN was withheld at the higher rate. The
+   *    approval refuses a missing PAN, so by here the PAN is on file and the higher rate no longer
+   *    applies — it is re-withheld at the normal rate. It used to keep the 20% for good.
+   *  - s.194J threshold: the year may have moved since booking (a payable voided, the threshold
+   *    changed), so the figure is taken again from the year as it stands, in the payable's own
+   *    booking year. The rule is a fixed point: re-deciding a payable whose year has not changed
+   *    gives the figure it already has, whatever order payables are approved in.
+   *
+   * Otherwise the booked rate stands — a change to `billing.tdsRate` still never reaches a booked
+   * payable. Reimbursements carry no TDS; a payable whose snapshot does not record its rate (from
+   * before the snapshot did) is left exactly as booked. A change writes a PAYABLE_TDS_RECOMPUTED
+   * history row with both figures; the caller saves the payable.
+   */
+  private async recomputeTdsAtApproval(m: EntityManager, p: AssayerPayableEntity, userId: string): Promise<void> {
+    if (p.expenseId || !p.assayerId) return;
+    const snap = (p.rateSnapshot ?? {}) as Record<string, any>;
+    const bookedRate = Number(snap.tdsRate);
+    if (snap.tdsRate === undefined || snap.tdsRate === null || !Number.isFinite(bookedRate)) return;
+
+    const [normalRate, noPanRate] = await Promise.all([
+      this.settings.getNumber('billing.tdsRate', 10).catch(() => 10),
+      this.settings.getNumber('billing.tdsRateNoPan', 20).catch(() => 20),
+    ]);
+    const bookedWithoutPan = snap.tdsPanBasis === 'NO_PAN'
+      || (snap.tdsPanBasis === undefined && Number(noPanRate) > Number(normalRate) && bookedRate === Number(noPanRate));
+    const ratePct = bookedWithoutPan ? Number(normalRate) : bookedRate;
+
+    const gross = round2(Number(p.baseAmount) + Number(p.travelAmount));
+    const decision = await this.assayerFeeTds(m, {
+      assayerId: p.assayerId, gross, ratePct,
+      bookedAt: p.createdAt ? new Date(p.createdAt) : new Date(), excludePayableId: p.id,
+    });
+    const before = { tdsAmount: round2(Number(p.tdsAmount)), totalAmount: round2(Number(p.totalAmount)), tdsRate: bookedRate, tdsPanBasis: snap.tdsPanBasis ?? null };
+    const after = { tdsAmount: decision.tds, totalAmount: round2(gross - decision.tds), tdsRate: ratePct, tdsPanBasis: bookedWithoutPan ? 'PAN' : (snap.tdsPanBasis ?? 'PAN') };
+    if (Math.abs(before.tdsAmount - after.tdsAmount) <= MONEY_EPSILON / 2 && before.tdsRate === after.tdsRate) return;
+
+    p.tdsAmount = after.tdsAmount;
+    p.totalAmount = after.totalAmount;
+    p.rateSnapshot = {
+      ...snap,
+      tdsRate: ratePct,
+      tdsPanBasis: after.tdsPanBasis,
+      tds194j: {
+        basis: decision.basis, thresholdRupees: decision.thresholdRupees, financialYear: decision.financialYear,
+        fyGrossBefore: decision.fyGrossBefore, fyTdsBefore: decision.fyTdsBefore, fyGrossIncluding: decision.fyGrossIncluding,
+      },
+      tdsRecomputedAt: new Date().toISOString(),
+      tdsAsBooked: { tdsRate: bookedRate, tdsAmount: before.tdsAmount },
+    };
+    const why = [
+      bookedWithoutPan ? `booked without a PAN at ${bookedRate}% (s.206AA); PAN now on file, withheld at ${ratePct}%` : null,
+      decision.basis === 'BELOW_THRESHOLD'
+        ? `the assayer's fees for FY ${decision.financialYear} (₹${decision.fyGrossIncluding}) are within the s.194J threshold of ₹${decision.thresholdRupees}`
+        : decision.basis === 'CROSSED' || decision.basis === 'ABOVE'
+          ? `s.194J on FY ${decision.financialYear} fees of ₹${decision.fyGrossIncluding} less ₹${decision.fyTdsBefore} already withheld`
+          : null,
+    ].filter(Boolean).join('; ');
+    await this.history(userId, {
+      clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+      entityType: BillingEntityType.PAYABLE, entityId: p.id, action: 'PAYABLE_TDS_RECOMPUTED',
+      fromState: p.status, toState: p.status, previousValue: before, newValue: after,
+      reason: `TDS re-decided at approval: ${why || 'the year changed since booking'}`,
+    }, m);
+  }
+
+  /**
+   * Re-freeze an APPROVED payout's bank destination from the assayer's record as it is NOW
+   * (audit F2), under lock, on the caller's transaction — when a hold is released and when an
+   * outbound payment is reversed. Both are the moments somebody has just looked at why money did
+   * not reach the right place; the snapshot frozen at approval would otherwise send the retry to
+   * the same wrong account forever, with no way to change it short of un-approving the payout.
+   *
+   * Nothing happens when there is no snapshot yet (the next approval or payment freezes one), when
+   * the record has no complete account + IFSC to take (the old snapshot stands, and the pay screen
+   * keeps flagging the difference), or when nothing changed. A change is refused — the caller's
+   * whole action with it — if the new account is on another assayer's record (F3). It is written to
+   * the payable's history and the audit trail with both accounts masked to the last four.
+   *
+   * A changed destination also withdraws the HOD's final approval, if given: the HOD cleared a
+   * payment to the OLD account, and money must not leave for a different one on that approval.
+   */
+  private async refreshPayoutDestinationInTx(
+    m: EntityManager,
+    p: AssayerPayableEntity,
+    userId: string,
+    trigger: 'HOLD_RELEASED' | 'PAYMENT_REVERSED',
+  ): Promise<boolean> {
+    if (p.status !== AssayerPayableStatus.APPROVED || !p.assayerId) return false;
+    if (!p.destinationBankAccountNumber || !p.destinationIfsc) return false;
+    const assayer = await m.findOne(AssayerEntity, { where: { id: p.assayerId }, lock: { mode: 'pessimistic_read' } });
+    if (!assayer?.bankAccountNumber?.trim() || !assayer.ifscCode?.trim()) return false;
+    const bankDoc = await m.findOne(AssayerDocumentEntity, {
+      where: { assayerId: p.assayerId, requirement: OnboardingDocument.BANK_PASSBOOK, isActive: true },
+    });
+    const next = resolvePayoutDestination(assayer, bankDoc);
+    const sameAccount = normaliseBankAccountNumber(next.destinationBankAccountNumber) === normaliseBankAccountNumber(p.destinationBankAccountNumber)
+      && next.destinationIfsc === (p.destinationIfsc ?? '').trim().toUpperCase();
+    const sameEvidence = (next.destinationVerifiedSource ?? null) === (p.destinationVerifiedSource ?? null)
+      && (next.payoutEvidenceVersionId ?? null) === (p.payoutEvidenceVersionId ?? null);
+    if (sameAccount && sameEvidence && (next.destinationAccountHolderName ?? null) === (p.destinationAccountHolderName ?? null)
+      && (next.destinationBankName ?? null) === (p.destinationBankName ?? null)) {
+      return false;
+    }
+    if (!sameAccount) {
+      await this.assertDestinationNotShared(m, p.assayerId, next.destinationBankAccountNumber, next.destinationIfsc, p.payableNumber);
+    }
+    const masked = (acct: string | null | undefined, ifsc: string | null | undefined) =>
+      ({ account: maskTail(acct ?? ''), ifsc: ifsc ?? null });
+    const previous = { ...masked(p.destinationBankAccountNumber, p.destinationIfsc), verifiedSource: p.destinationVerifiedSource ?? null };
+    const current = { ...masked(next.destinationBankAccountNumber, next.destinationIfsc), verifiedSource: next.destinationVerifiedSource ?? null };
+    const hodWithdrawn = !sameAccount && !!p.hodApprovedAt;
+
+    p.destinationBankAccountNumber = next.destinationBankAccountNumber;
+    p.destinationIfsc = next.destinationIfsc;
+    p.destinationBankName = next.destinationBankName;
+    p.destinationAccountHolderName = next.destinationAccountHolderName;
+    p.payoutEvidenceVersionId = next.payoutEvidenceVersionId;
+    p.destinationVerifiedAt = next.destinationVerifiedAt;
+    p.destinationVerifiedSource = next.destinationVerifiedSource;
+    if (hodWithdrawn) {
+      p.hodApprovedAt = null;
+      p.hodApprovedBy = null;
+    }
+    const when = trigger === 'HOLD_RELEASED' ? 'hold released' : 'payment reversed';
+    const reason = sameAccount
+      ? `Bank details re-read from the assayer's record (${when}); same account, evidence updated.`
+      : `Bank account re-read from the assayer's record (${when}): ${previous.account} ${previous.ifsc ?? ''} → ${current.account} ${current.ifsc ?? ''}`
+        + (hodWithdrawn ? ". The HOD's final approval was for the old account and has been withdrawn — it needs final approval again." : '.');
+    await this.history(userId, {
+      clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+      entityType: BillingEntityType.PAYABLE, entityId: p.id, action: 'PAYABLE_DESTINATION_REFRESHED',
+      fromState: p.status, toState: p.status, previousValue: previous, newValue: { ...current, hodApprovalWithdrawn: hodWithdrawn }, reason,
+    }, m);
+    const manager = m;
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'PAYABLE_DESTINATION_REFRESHED',
+      entityType: 'PAYABLE',
+      entityId: p.id,
+      previousState: p.status,
+      newState: p.status,
+      userId,
+      remarks: `Payout ${p.payableNumber}: ${reason}`,
+      metadata: { payableId: p.id, payableNumber: p.payableNumber, assayerId: p.assayerId, trigger, previous, current, hodApprovalWithdrawn: hodWithdrawn },
+    }, { manager });
+    return true;
+  }
+
+  /**
+   * What the approve, final-approve and pay screens should say about each payout's bank account
+   * (audit F2/F3). Read-only; masked to the last four. The approval itself re-checks under lock —
+   * this only tells the person before they press the button.
+   */
+  async payoutDestinationChecks(payableIds: string[]): Promise<PayoutDestinationCheck[]> {
+    const ids = [...new Set(payableIds)].filter(Boolean);
+    if (!ids.length) return [];
+    const payables = await this.payableRepository.find({ where: { id: In(ids), isActive: true } });
+    const assayerIds = [...new Set(payables.map((p) => p.assayerId).filter(Boolean))];
+    const [assayers, docs] = await Promise.all([
+      assayerIds.length ? this.assayerRepository.find({ where: { id: In(assayerIds) } }) : Promise.resolve([] as AssayerEntity[]),
+      assayerIds.length
+        ? this.payableRepository.manager.find(AssayerDocumentEntity, {
+            where: { assayerId: In(assayerIds), requirement: OnboardingDocument.BANK_PASSBOOK, isActive: true },
+          })
+        : Promise.resolve([] as AssayerDocumentEntity[]),
+    ]);
+    const byAssayer = new Map(assayers.map((a) => [a.id, a]));
+    const docByAssayer = new Map(docs.map((d) => [d.assayerId, d]));
+    const sharedByAssayer = new Map<string, boolean>();
+    for (const a of assayers) {
+      sharedByAssayer.set(a.id, await this.destinationSharedWithAnother(this.payableRepository.manager, a.id, a.bankAccountNumber, a.ifscCode));
+    }
+    return payables.map((p) => {
+      const a = byAssayer.get(p.assayerId);
+      const record = a ? resolvePayoutDestination(a, docByAssayer.get(a.id) ?? null) : null;
+      const recordAccount = normaliseBankAccountNumber(a?.bankAccountNumber);
+      const snapshotAccount = normaliseBankAccountNumber(p.destinationBankAccountNumber);
+      const snapshotDiffers = !!snapshotAccount
+        && (snapshotAccount !== recordAccount || (p.destinationIfsc ?? '').trim().toUpperCase() !== (a?.ifscCode ?? '').trim().toUpperCase());
+      // What the money will go to: the frozen snapshot once there is one, else the record.
+      const verified = snapshotAccount && !snapshotDiffers ? !!p.destinationVerifiedSource : !!record?.destinationVerifiedSource;
+      const shared = !!sharedByAssayer.get(p.assayerId);
+      const snapshotTail = snapshotAccount ? maskTail(snapshotAccount) : null;
+      const recordTail = recordAccount ? maskTail(recordAccount) : null;
+      const warnings: string[] = [];
+      if (shared) warnings.push(PAYOUT_DESTINATION_SHARED_MESSAGE);
+      if (!verified) warnings.push(PAYOUT_DESTINATION_UNVERIFIED_WARNING);
+      if (snapshotDiffers) warnings.push(payoutDestinationChangedWarning(snapshotTail ?? '', recordTail ?? ''));
+      return {
+        payableId: p.id,
+        payableNumber: p.payableNumber,
+        assayerId: p.assayerId,
+        assayerName: a?.displayName ?? null,
+        assayerCode: a?.assayerCode ?? null,
+        verified,
+        sharedWithAnotherRecord: shared,
+        snapshotDiffersFromRecord: snapshotDiffers,
+        snapshotAccountTail: snapshotTail,
+        recordAccountTail: recordTail,
+        warnings,
+        blocking: shared ? PAYOUT_DESTINATION_SHARED_MESSAGE : null,
+      };
+    });
   }
 
   /**
@@ -1188,6 +1722,230 @@ export class BillingEngineService implements OnModuleInit {
     return { done, refused };
   }
 
+  // -----------------------------------------------------------------------
+  // The HOD's final approval of a payout (owner, 2026-09-24)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Is this payable approved by riding a bill — so the bill, not the payout, is what the HOD
+   * approves? True while it is on a bill that is out with the assayer, confirmed, or office-approved.
+   */
+  private async activeBillFor(m: EntityManager, p: AssayerPayableEntity): Promise<AssayerInvoiceEntity | null> {
+    if (!p.assayerInvoiceId) return null;
+    const inv = await m.findOne(AssayerInvoiceEntity, { where: { id: p.assayerInvoiceId } });
+    if (!inv) return null;
+    return inv.status === AssayerInvoiceStatus.INVITED
+      || inv.status === AssayerInvoiceStatus.SUBMITTED
+      || inv.status === AssayerInvoiceStatus.APPROVED
+      ? inv
+      : null;
+  }
+
+  /**
+   * Give ONE payable the HOD's final approval, on the caller's transaction.
+   *
+   * Shared by the payout path (`hodApprovePayouts`) and the bill path
+   * (`AssayerInvoiceService.hodApprove`, `viaBill: true`), so the check that the HOD is not the
+   * office approver, the history row, the audit row and the event are one act either way.
+   *
+   * Returns the saved payable, or null when it already has the final approval (a no-op — the bulk
+   * button may be pressed twice).
+   */
+  async hodApprovePayableInTx(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    payableId: string,
+    userId: string,
+    opts: { viaBill?: boolean } = {},
+  ): Promise<AssayerPayableEntity | null> {
+    const p = await this.lockPayable(m, payableId);
+    if (p.status === AssayerPayableStatus.PAID) throw new ConflictException(`${p.payableNumber} is already paid.`);
+    if (p.status === AssayerPayableStatus.VOIDED) throw new ConflictException(`${p.payableNumber} is voided.`);
+    if (p.status !== AssayerPayableStatus.APPROVED) {
+      throw new ConflictException(`${p.payableNumber} has not been approved by the office yet — there is nothing for the HOD to approve.`);
+    }
+    if (p.hodApprovedAt) return null;
+    if (p.onHold) throw new ConflictException(`${p.payableNumber} is on hold: ${p.holdReason ?? 'no reason given'}.`);
+    if (!opts.viaBill) {
+      const bill = await this.activeBillFor(m, p);
+      if (bill) {
+        throw new ConflictException(
+          `${p.payableNumber} is on assayer bill ${bill.invoiceNumber} — give the bill its final approval instead.`,
+        );
+      }
+    }
+    await this.assertSegregationOfDuties(
+      userId,
+      p.approvedBy,
+      `approve payout ${p.payableNumber} at the office and also give it the final approval`,
+      { entityType: 'PAYABLE', entityId: p.id, payableNumber: p.payableNumber },
+    );
+    // The same refusal as the office's approval (audit F3), on the account actually frozen for
+    // payment — another record may have taken the account since the office approved.
+    if (p.assayerId && p.destinationBankAccountNumber) {
+      await this.assertDestinationNotShared(m, p.assayerId, p.destinationBankAccountNumber, p.destinationIfsc, p.payableNumber);
+    }
+
+    p.hodApprovedAt = new Date();
+    p.hodApprovedBy = userId;
+    p.updatedBy = userId;
+    const saved = await m.save(p);
+    await this.history(userId, {
+      clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+      entityType: BillingEntityType.PAYABLE, entityId: saved.id, action: 'PAYABLE_HOD_APPROVED',
+      fromState: AssayerPayableStatus.APPROVED, toState: AssayerPayableStatus.APPROVED,
+      newValue: { hodApprovedBy: userId, officeApprovedBy: p.approvedBy, viaBill: !!opts.viaBill },
+    }, m);
+    const manager = m;
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'PAYABLE_HOD_APPROVED',
+      entityType: 'PAYABLE',
+      entityId: saved.id,
+      previousState: AssayerPayableStatus.APPROVED,
+      newState: AssayerPayableStatus.APPROVED,
+      userId,
+      remarks: `Final approval (HOD) of payout ${saved.payableNumber} (₹${Number(saved.totalAmount)}) — cleared for payment`,
+      metadata: {
+        payableId: saved.id, payableNumber: saved.payableNumber, assayerId: saved.assayerId,
+        officeApprovedBy: saved.approvedBy, amount: Number(saved.totalAmount), viaBill: !!opts.viaBill,
+      },
+    }, { manager });
+    emit('billing:payout-changed', { payableId: saved.id, assayerId: saved.assayerId, status: saved.status, onHold: saved.onHold });
+    return saved;
+  }
+
+  /**
+   * The HOD approves payouts the office approved without a bill, or expense reimbursements. Each in
+   * its own transaction, like `approvePayouts`: one refusal does not undo the rest. After each
+   * commit the assayer hears their payment is approved — the first moment that is true.
+   */
+  async hodApprovePayouts(payableIds: string[], userId: string, onProgress?: ProgressCallback): Promise<PayoutActionResult> {
+    const done: string[] = [];
+    const refused: Array<{ id: string; reason: string }> = [];
+    const ids = [...new Set(payableIds)];
+    for (const [index, id] of ids.entries()) {
+      try {
+        await this.hodApprovePayout(id, userId);
+        done.push(id);
+      } catch (err) {
+        refused.push({ id, reason: (err as Error).message });
+      }
+      await onProgress?.(index + 1, ids.length, 'Giving final approval');
+    }
+    return { done, refused };
+  }
+
+  /** One payout's final approval, in its own transaction; throws the refusal as it is. */
+  async hodApprovePayout(payableId: string, userId: string): Promise<AssayerPayableEntity | null> {
+    const approved = await this.inTx((m, emit) => this.hodApprovePayableInTx(m, emit, payableId, userId));
+    if (approved) {
+      this.notifyWithBranch(approved.assignmentId, (branchName) => ({
+        type: 'PAYABLE_APPROVED',
+        entityType: 'PAYABLE',
+        entityId: approved.id,
+        actorUserId: userId,
+        assayerId: approved.assayerId,
+        dedupeKey: `PAYABLE_APPROVED:${approved.id}`,
+        payload: { payableId: approved.id, amount: Number(approved.totalAmount), branchName },
+      }));
+    }
+    return approved;
+  }
+
+  /**
+   * The HOD sends a payout back to the office, with the reason (2026-09-24).
+   *
+   * Back means back: the payable returns to PENDING ("Due") with the office's approval undone — who,
+   * when, and the bank destination frozen at that approval — so the office's next approval is a
+   * fresh one that re-reads the assayer's bank details. Nothing is cancelled or voided: if the
+   * payout should never be paid, voiding it is the office's decision, with its own reason.
+   *
+   * Expense reimbursements take the same road (decision recorded here): the claim stays approved and
+   * the reimbursement payout goes back to Due, where the office either fixes and re-approves it or
+   * voids it. Returning the CLAIM to pending instead would need a second payout for the same claim,
+   * which `UQ_assayer_payables_expense` exists to make impossible.
+   */
+  async hodRejectPayout(payableId: string, reason: string, userId: string): Promise<AssayerPayableEntity> {
+    const problem = hodRejectReasonProblem(reason);
+    if (problem) throw new BadRequestException(problem);
+    const why = reason.trim();
+    let officeApprover: string | null = null;
+    const saved = await this.inTx(async (m, emit) => {
+      const p = await this.lockPayable(m, payableId);
+      if (p.status !== AssayerPayableStatus.APPROVED) {
+        throw new ConflictException(
+          p.status === AssayerPayableStatus.PENDING
+            ? `${p.payableNumber} is already back with the office.`
+            : `${p.payableNumber} is ${p.status.toLowerCase()} — there is nothing for the HOD to send back.`,
+        );
+      }
+      if (p.hodApprovedAt) {
+        throw new ConflictException(
+          `${p.payableNumber} already has the final approval. To stop it being paid, put it on hold or void it.`,
+        );
+      }
+      if (Number(p.paidAmount) > 0) {
+        throw new ConflictException(`${p.payableNumber} is already part paid — it cannot go back to the office. Put it on hold instead.`);
+      }
+      const bill = await this.activeBillFor(m, p);
+      if (bill) {
+        throw new ConflictException(`${p.payableNumber} is on assayer bill ${bill.invoiceNumber} — send the bill back instead.`);
+      }
+
+      officeApprover = p.approvedBy;
+      const before = { approvedAt: p.approvedAt, approvedBy: p.approvedBy };
+      p.status = AssayerPayableStatus.PENDING;
+      p.approvedAt = null;
+      p.approvedBy = null;
+      // The destination was frozen AT the office's approval; undoing that approval releases it, and
+      // the next approval freezes whatever the assayer's verified bank details are then.
+      p.destinationBankAccountNumber = null;
+      p.destinationIfsc = null;
+      p.destinationBankName = null;
+      p.destinationAccountHolderName = null;
+      p.payoutEvidenceVersionId = null;
+      p.destinationVerifiedAt = null;
+      p.destinationVerifiedSource = null;
+      p.hodRejectedAt = new Date();
+      p.hodRejectedBy = userId;
+      p.hodRejectReason = why;
+      p.updatedBy = userId;
+      const out = await m.save(p);
+      await this.history(userId, {
+        clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+        entityType: BillingEntityType.PAYABLE, entityId: out.id, action: 'PAYABLE_HOD_REJECTED',
+        fromState: AssayerPayableStatus.APPROVED, toState: AssayerPayableStatus.PENDING,
+        previousValue: before, reason: why,
+      }, m);
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYABLE_HOD_REJECTED',
+        entityType: 'PAYABLE',
+        entityId: out.id,
+        previousState: AssayerPayableStatus.APPROVED,
+        newState: AssayerPayableStatus.PENDING,
+        userId,
+        remarks: `Final approval refused; payout ${out.payableNumber} sent back to the office: ${why}`,
+        metadata: { payableId: out.id, payableNumber: out.payableNumber, officeApprovedBy: before.approvedBy, reason: why },
+      }, { manager });
+      emit('billing:payout-changed', { payableId: out.id, assayerId: out.assayerId, status: out.status, onHold: out.onHold });
+      return out;
+    });
+    this.notifyFinalApprovalRejected({
+      ownerUserId: officeApprover,
+      actorUserId: userId,
+      entityType: 'PAYABLE',
+      entityId: saved.id,
+      what: saved.expenseId ? `Expense reimbursement ${saved.payableNumber}` : `Payout ${saved.payableNumber}`,
+      reason: why,
+      tab: 'pay',
+      version: saved.hodRejectedAt ? new Date(saved.hodRejectedAt).getTime() : Date.now(),
+    });
+    return saved;
+  }
+
   async holdPayout(payableId: string, onHold: boolean, reason: string | undefined, userId: string): Promise<AssayerPayableEntity> {
     if (onHold && !reason?.trim()) throw new BadRequestException('Say why the payout is on hold.');
     return this.inTx(async (m, emit) => {
@@ -1204,6 +1962,9 @@ export class BillingEngineService implements OnModuleInit {
       p.onHold = onHold;
       p.holdReason = onHold ? reason!.trim() : null;
       p.updatedBy = userId;
+      // Releasing an approved payout re-reads the bank account it will go to (audit F2): a hold is
+      // how the desk stops a payment to a wrong account, and the release is when it has been fixed.
+      if (!onHold) await this.refreshPayoutDestinationInTx(m, p, userId, 'HOLD_RELEASED');
       const saved = await m.save(p);
       await this.history(userId, {
         clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
@@ -1275,6 +2036,13 @@ export class BillingEngineService implements OnModuleInit {
         remarks: reason.trim(),
         metadata: { payableId: saved.id, payableNumber: saved.payableNumber, assayerId: saved.assayerId, assignmentId: saved.assignmentId },
       }, { manager: m });
+
+      // Still attached only when the invoice was APPROVED (INVITED detached it above, SUBMITTED
+      // refused). Bring that invoice's figures — and, if this was its last unpaid line, its
+      // status — into line with what is actually left to pay.
+      if (saved.assayerInvoiceId) {
+        await this.reconcileApprovedInvoiceAfterVoid(m, emit, saved.assayerInvoiceId, saved.payableNumber, userId);
+      }
 
       // Same transaction, same reason: the client line this payable was booked alongside must
       // not stand alone as the only surviving half of a job that has been un-billed on the
@@ -1369,13 +2137,17 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   /**
-   * Re-derive an INVITED invoice's stored figures from its lines, on the caller's transaction.
+   * Re-derive an invoice's stored figures from its lines, on the caller's transaction.
    *
    * The invoice's amounts are nothing but SUMs of stored line amounts — so whenever a line
    * moves (re-priced) or leaves (void/hold detach), the header is recomputed from the rows
    * rather than patched incrementally, and can therefore never drift from its lines. An
    * invoice left with NO lines is auto-cancelled: an invitation to bill nothing is noise, and
    * cancelling it re-opens the one-active-invoice slot so the next invite round works.
+   *
+   * Only LIVE lines count. On an INVITED invoice that changes nothing (a voided line is detached
+   * before this runs); on an APPROVED one a voided line stays attached as history — see
+   * `reconcileApprovedInvoiceAfterVoid` — and must not keep its amount in the invoice's total.
    */
   private async recomputeAssayerInvoiceInTx(
     m: EntityManager,
@@ -1390,8 +2162,8 @@ export class BillingEngineService implements OnModuleInit {
               COALESCE(SUM(travel_amount), 0)      AS travel,
               COALESCE(SUM(tds_amount), 0)         AS tds,
               COALESCE(SUM(total_amount), 0)       AS total
-         FROM assayer_payables
-        WHERE assayer_invoice_id = $1 AND is_active = true`,
+         FROM assayer_payables p
+        WHERE p.assayer_invoice_id = $1 AND p.is_active = true${andLivePayableSql('p')}`,
       [inv.id],
     );
     const r = rows?.[0] ?? {};
@@ -1449,6 +2221,167 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   /**
+   * An APPROVED invoice lost a line to a void. Keep the line attached — the invoice is a record of
+   * what the assayer confirmed and what was approved, and the voided line with its status says
+   * what happened to it — but re-derive the header from the LIVE lines, so `totalAmount` and
+   * `lineCount` state what will actually be paid. Leaving the header alone (the old behaviour)
+   * meant an invoice that went on to be paid in full read "PAID ₹X" having paid less than X, and
+   * one whose only unpaid line was voided sat APPROVED forever with nothing left to pay.
+   *
+   * The approved figures are not lost: the recompute writes an ASSAYER_INVOICE_RECOMPUTED history
+   * row carrying the before and after values.
+   *
+   * Then, the two ends:
+   *  - every line voided → no live lines, and `recomputeAssayerInvoiceInTx` auto-cancels it
+   *    ("all lines removed"). It must NOT become PAID: nothing was paid against it.
+   *  - the voided line was the last unpaid one and the rest are paid → it is settled now.
+   */
+  private async reconcileApprovedInvoiceAfterVoid(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    invoiceId: string,
+    payableNumber: string,
+    userId: string,
+  ): Promise<void> {
+    const inv = await m.findOne(AssayerInvoiceEntity, {
+      where: { id: invoiceId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!inv || !isApprovedBill(inv.status)) return;
+    await this.recomputeAssayerInvoiceInTx(m, emit, inv, userId, `Line ${payableNumber} voided on the approved invoice`);
+    await this.settleAssayerInvoiceIfPaid(m, emit, invoiceId, userId);
+  }
+
+  /**
+   * Mark an APPROVED assayer invoice PAID when every line that is still owed has been paid.
+   *
+   * "Settled" means PAID or VOIDED: a voided line will never be paid, by decision, so it cannot be
+   * what holds the invoice open. The old test counted every non-PAID line, so one voided line on
+   * an approved invoice kept it APPROVED — "awaiting payment" — for good, however much was paid.
+   *
+   * But an invoice needs at least one PAID line to be PAID. One whose lines are ALL voided had
+   * nothing paid against it; calling it PAID would put a payment on the record that never
+   * happened (it is auto-cancelled by the recompute instead — see above).
+   */
+  private async settleAssayerInvoiceIfPaid(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    invoiceId: string,
+    userId: string,
+  ): Promise<void> {
+    const remainingUnpaid = await m.count(AssayerPayableEntity, {
+      where: {
+        assayerInvoiceId: invoiceId,
+        isActive: true,
+        status: Not(In([AssayerPayableStatus.PAID, ...DEAD_PAYABLE_STATUSES])),
+      },
+    });
+    if (remainingUnpaid > 0) return;
+    const paidLines = await m.count(AssayerPayableEntity, {
+      where: { assayerInvoiceId: invoiceId, isActive: true, status: AssayerPayableStatus.PAID },
+    });
+    if (paidLines === 0) return;
+
+    const inv = await m.findOne(AssayerInvoiceEntity, {
+      where: { id: invoiceId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    // HOD_APPROVED is the normal road to PAID (2026-09-24). APPROVED stays accepted: a bill whose
+    // last owed line was voided, or one partly paid before the HOD step existed, is settled by what
+    // its lines say happened — the money is the truth, not the step it skipped.
+    if (!inv || !isApprovedBill(inv.status)) return;
+
+    const invFromStatus = inv.status;
+    inv.status = AssayerInvoiceStatus.PAID;
+    inv.paidAt = new Date();
+    inv.paidBy = userId;
+    inv.updatedBy = userId;
+    await m.save(inv);
+
+    await this.history(userId, {
+      assayerId: inv.assayerId,
+      entityType: BillingEntityType.ASSAYER_INVOICE,
+      entityId: inv.id,
+      action: 'ASSAYER_INVOICE_PAID',
+      fromState: invFromStatus,
+      toState: AssayerInvoiceStatus.PAID,
+      newValue: { paidAt: inv.paidAt, paidBy: userId, totalAmount: Number(inv.totalAmount) },
+    }, m);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_INVOICE_PAID',
+      entityType: 'ASSAYER_INVOICE',
+      entityId: inv.id,
+      previousState: invFromStatus,
+      newState: AssayerInvoiceStatus.PAID,
+      userId,
+      remarks: `All lines settled (paid, or voided) — assayer invoice ${inv.invoiceNumber} marked PAID`,
+      metadata: { invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, totalAmount: Number(inv.totalAmount) },
+    }, { manager: m });
+
+    emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
+  }
+
+  /**
+   * The reverse of `settleAssayerInvoiceIfPaid` (audit F9): a payment on one of a PAID bill's lines
+   * was reversed, so the bill is owed again. It goes back to the status that clears its lines for
+   * payment — HOD_APPROVED, the only road to PAID since the HOD step (2026-09-24) — or APPROVED
+   * when it was settled without ever having had the HOD's approval (a bill part-paid before the
+   * step existed). Never further back: the approvals it was paid on still stand.
+   */
+  private async unsettleAssayerInvoiceInTx(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    invoiceId: string,
+    userId: string,
+    reason: string,
+  ): Promise<void> {
+    const inv = await m.findOne(AssayerInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
+    if (!inv || inv.status !== AssayerInvoiceStatus.PAID) return;
+    const back = inv.hodApprovedAt ? AssayerInvoiceStatus.HOD_APPROVED : AssayerInvoiceStatus.APPROVED;
+    const before = { paidAt: inv.paidAt, paidBy: inv.paidBy };
+    inv.status = back;
+    inv.paidAt = null;
+    inv.paidBy = null;
+    inv.updatedBy = userId;
+    await m.save(inv);
+    await this.history(userId, {
+      assayerId: inv.assayerId,
+      entityType: BillingEntityType.ASSAYER_INVOICE, entityId: inv.id, action: 'ASSAYER_INVOICE_UNSETTLED',
+      fromState: AssayerInvoiceStatus.PAID, toState: back, previousValue: before,
+      reason: `A payment on one of its lines was reversed: ${reason}`,
+    }, m);
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_INVOICE_UNSETTLED',
+      entityType: 'ASSAYER_INVOICE',
+      entityId: inv.id,
+      previousState: AssayerInvoiceStatus.PAID,
+      newState: back,
+      userId,
+      remarks: `Assayer bill ${inv.invoiceNumber} is owed again — a payment on one of its lines was reversed: ${reason}`,
+      metadata: { invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, assayerId: inv.assayerId },
+    }, { manager: m });
+    emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
+  }
+
+  /**
+   * Settle a bill whose lines are already all paid, at the moment it is approved (audit F10) — a
+   * line paid before its bill was approved (paid directly, then invited) left the bill APPROVED,
+   * or HOD_APPROVED, with nothing left to pay, for good. Public for `AssayerInvoiceService`, which
+   * approves bills on its own transaction.
+   */
+  async settleAssayerInvoiceIfPaidInTx(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    invoiceId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.settleAssayerInvoiceIfPaid(m, emit, invoiceId, userId);
+  }
+
+  /**
    * Disburse money against an approved payable — the outbound half of the engine, and the only
    * way a payable becomes PAID.
    *
@@ -1483,6 +2416,15 @@ export class BillingEngineService implements OnModuleInit {
             ? `${payable.payableNumber} is already paid.`
             : `${payable.payableNumber} has not been approved yet.`,
         );
+      }
+      /*
+        THE PAYMENT GATE (2026-09-24). The office's approval is not enough: money moves only once the
+        HOD has given the final approval — on the payout itself, or on the assayer bill it rides.
+        This is the one way a payable becomes PAID, so this line covers every payment path; the bank
+        file (`payoutBankDetails`) refuses the same rows for the same reason.
+      */
+      if (!payable.hodApprovedAt) {
+        throw awaitingHod(`${payable.payableNumber} has the office's approval but not the HOD's final approval yet.`);
       }
 
       // Operational KYC boundary & Destination Snapshot:
@@ -1568,53 +2510,9 @@ export class BillingEngineService implements OnModuleInit {
       payable.updatedBy = userId;
       await m.save(payable);
 
-      // If this payable belongs to an assayer invoice, check if all active lines on that invoice are now PAID
+      // If this payable belongs to an assayer invoice, the invoice may now be fully settled.
       if (fullyPaid && payable.assayerInvoiceId) {
-        const remainingUnpaid = await m.count(AssayerPayableEntity, {
-          where: {
-            assayerInvoiceId: payable.assayerInvoiceId,
-            isActive: true,
-            status: Not(AssayerPayableStatus.PAID),
-          },
-        });
-        if (remainingUnpaid === 0) {
-          const inv = await m.findOne(AssayerInvoiceEntity, {
-            where: { id: payable.assayerInvoiceId },
-            lock: { mode: 'pessimistic_write' },
-          });
-          if (inv && inv.status === AssayerInvoiceStatus.APPROVED) {
-            const invFromStatus = inv.status;
-            inv.status = AssayerInvoiceStatus.PAID;
-            inv.paidAt = new Date();
-            inv.paidBy = userId;
-            inv.updatedBy = userId;
-            await m.save(inv);
-
-            await this.history(userId, {
-              assayerId: inv.assayerId,
-              entityType: BillingEntityType.ASSAYER_INVOICE,
-              entityId: inv.id,
-              action: 'ASSAYER_INVOICE_PAID',
-              fromState: invFromStatus,
-              toState: AssayerInvoiceStatus.PAID,
-              newValue: { paidAt: inv.paidAt, paidBy: userId, totalAmount: Number(inv.totalAmount) },
-            }, m);
-
-            await this.auditService.recordEvent({
-              category: EventCategory.WORKFLOW,
-              eventType: 'ASSAYER_INVOICE_PAID',
-              entityType: 'ASSAYER_INVOICE',
-              entityId: inv.id,
-              previousState: invFromStatus,
-              newState: AssayerInvoiceStatus.PAID,
-              userId,
-              remarks: `All lines paid — assayer invoice ${inv.invoiceNumber} marked PAID`,
-              metadata: { invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, totalAmount: Number(inv.totalAmount) },
-            }, { manager: m });
-
-            emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
-          }
-        }
+        await this.settleAssayerInvoiceIfPaid(m, emit, payable.assayerInvoiceId, userId);
       }
 
       // Computed on the transaction's own connection so it sees the `paidAmount` just written.
@@ -1717,10 +2615,17 @@ export class BillingEngineService implements OnModuleInit {
     if (!assignmentIds.length) throw new BadRequestException('Pick at least one assignment to invoice.');
 
     return this.inTx(async (m, emit) => {
+      /**
+       * LIVE lines only (audit F1). A reopened-and-redone assignment has TWO lines — the cancelled
+       * one from the first completion and the live one from the redo — and this used to lock and
+       * load both. The count check below then saw two lines for one assignment, and the "already
+       * invoiced" check saw the CANCELLED one: the redone job could never be invoiced, and every
+       * other assignment picked alongside it was refused with it. A cancelled line is history.
+       */
       const entries = await m
         .createQueryBuilder(BillingEntryEntity, 'e')
         .setLock('pessimistic_write')
-        .where('e.assignment_id IN (:...assignmentIds)', { assignmentIds })
+        .where(`e.assignment_id IN (:...assignmentIds) AND e.is_active = true AND ${liveBillingEntrySql('e')}`, { assignmentIds })
         .orderBy('e.id', 'ASC')
         .getMany();
       if (entries.length !== assignmentIds.length) {
@@ -1747,7 +2652,7 @@ export class BillingEngineService implements OnModuleInit {
       const issueDate = dto.issueDate ?? businessTodayDateKey();
 
       const invoice = this.invoiceRepository.create({
-        invoiceNumber: `INV-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
+        invoiceNumber: await this.nextClientInvoiceNumber(m, issueDate),
         clientId: dto.clientId,
         projectId: projectIds.size === 1 ? ([...projectIds][0] as string) : null,
         status: InvoiceStatus.DRAFT,
@@ -1790,13 +2695,54 @@ export class BillingEngineService implements OnModuleInit {
     });
   }
 
+  /**
+   * The next client invoice number, `INV/25-26/000123` (audit F7, owner's decision) — consecutive
+   * within the financial year of the issue date, on the caller's transaction.
+   *
+   * One `INSERT … ON CONFLICT DO UPDATE … RETURNING` on the year's counter row: the row stays locked
+   * until the invoice's transaction ends, so two invoices created at once are serialised and cannot
+   * share a serial, and an invoice that rolls back takes its serial back with it — the series has no
+   * gaps from failures (a SEQUENCE would; `nextval` is never undone). See
+   * `ClientInvoiceNumberSeries1801300000100`.
+   */
+  private async nextClientInvoiceNumber(m: EntityManager, issueDate: string): Promise<string> {
+    const fy = indianFinancialYear(issueDate);
+    const rows = await m.query(
+      `INSERT INTO billing_invoice_number_series (financial_year, last_serial, updated_at)
+       VALUES ($1, 1, now())
+       ON CONFLICT (financial_year)
+       DO UPDATE SET last_serial = billing_invoice_number_series.last_serial + 1, updated_at = now()
+       RETURNING last_serial`,
+      [fy.label],
+    );
+    const serial = Number(rows?.[0]?.last_serial);
+    if (!Number.isInteger(serial) || serial < 1) {
+      throw new Error(`Could not allocate a client invoice number for FY ${fy.label}.`);
+    }
+    return formatClientInvoiceNumber(fy.label, serial);
+  }
+
+  /**
+   * Mark an invoice sent to the client — only once the HOD has approved it (2026-09-24).
+   *
+   * A draft, or one still with the HOD, is refused with `AWAITING_HOD_APPROVAL`: the office sends it
+   * for final approval first (`requestInvoiceFinalApproval`). The number it was created with is the
+   * number it is sent under; nothing on the HOD step renumbers.
+   */
   async sendInvoice(invoiceId: string, userId: string): Promise<BillingInvoiceEntity> {
     return this.inTx(async (m, emit) => {
       const invoice = await this.lockInvoice(m, invoiceId);
       if (invoice.status === InvoiceStatus.ISSUED) return invoice;
-      if (invoice.status !== InvoiceStatus.DRAFT) {
+      if (invoice.status === InvoiceStatus.DRAFT) {
+        throw awaitingHod(`${invoice.invoiceNumber} has not been sent for final approval. Send it for final approval first; it can go to the client once the HOD approves it.`);
+      }
+      if (invoice.status === InvoiceStatus.AWAITING_HOD) {
+        throw awaitingHod(`${invoice.invoiceNumber} is with the HOD. It can go to the client once they approve it.`);
+      }
+      if (invoice.status !== InvoiceStatus.HOD_APPROVED) {
         throw new ConflictException(`${invoice.invoiceNumber} is ${invoice.status.toLowerCase()} and cannot be sent.`);
       }
+      const fromState = invoice.status;
       invoice.status = InvoiceStatus.ISSUED;
       if (!invoice.issueDate) invoice.issueDate = businessTodayDateKey();
       if (!invoice.dueDate) {
@@ -1807,8 +2753,26 @@ export class BillingEngineService implements OnModuleInit {
       await this.history(userId, {
         clientId: saved.clientId, projectId: saved.projectId,
         entityType: BillingEntityType.INVOICE, entityId: saved.id, action: 'INVOICE_STATUS_CHANGED',
-        fromState: InvoiceStatus.DRAFT, toState: InvoiceStatus.ISSUED,
+        fromState, toState: InvoiceStatus.ISSUED,
       }, m);
+      /**
+       * Nothing to collect (audit F16): an invoice whose lines total ₹0 — every line credited to
+       * zero — is settled the moment it is sent. Left ISSUED it sat in receivables forever, since no
+       * payment can be recorded against ₹0 (a payment must be positive). Settled through the same
+       * collection step a payment uses, so its lines and the invoice agree, with its own history row.
+       */
+      if (round2(Number(saved.total) - Number(saved.paidAmount)) <= 0) {
+        const entries = await this.lockEntriesByInvoice(m, saved.id);
+        await this.applyInvoiceCollection(m, saved, entries, userId);
+        if (saved.status === InvoiceStatus.PAID) {
+          await this.history(userId, {
+            clientId: saved.clientId, projectId: saved.projectId,
+            entityType: BillingEntityType.INVOICE, entityId: saved.id, action: 'INVOICE_STATUS_CHANGED',
+            fromState: InvoiceStatus.ISSUED, toState: InvoiceStatus.PAID,
+            reason: 'Nothing to collect — the invoice totals ₹0, so it is settled when sent.',
+          }, m);
+        }
+      }
       // Issuing turns a draft into a real receivable — the point money becomes owed to us.
       const manager = m;
       await this.auditService.recordEvent({
@@ -1816,7 +2780,7 @@ export class BillingEngineService implements OnModuleInit {
         eventType: 'INVOICE_ISSUED',
         entityType: 'INVOICE',
         entityId: saved.id,
-        previousState: InvoiceStatus.DRAFT,
+        previousState: fromState,
         newState: InvoiceStatus.ISSUED,
         userId,
         remarks: `Issued invoice ${saved.invoiceNumber} (₹${Number(saved.total)}) to client ${saved.clientId}`,
@@ -1832,6 +2796,321 @@ export class BillingEngineService implements OnModuleInit {
       emit('billing:invoice-changed', { invoiceId: saved.id, clientId: saved.clientId, status: saved.status });
       return saved;
     });
+  }
+
+  /**
+   * THE HOD'S QUEUE (2026-09-24): everything the office approved that waits for the final approval.
+   *
+   *  - ASSAYER_BILL — a bill in APPROVED (HOD_APPROVED is after the HOD).
+   *  - DIRECT_PAYOUT / EXPENSE_REIMBURSEMENT — an APPROVED payable with no final approval, not on
+   *    hold, still owed, and not riding a bill that is out, confirmed or office-approved (that bill
+   *    is what the HOD approves). Told apart by `expense_id`.
+   *  - CLIENT_INVOICE — an invoice in AWAITING_HOD.
+   *
+   * Region: a bill is anchored on its assayer's home region, as `assertAssayerInvoiceInScope` is; a
+   * payout and an invoice on their assignments' branches by the one rule `billing-region-scope.ts`
+   * writes down, applied when region scoping enforces — the same ceilings as the lists they come from.
+   */
+  async finalApprovalQueue(scope?: Partial<GlobalScope>): Promise<FinalApprovalQueue> {
+    const restricted = scope?.regions?.length ? [...scope.regions] : null;
+    const mode = restricted ? await this.regionGuard.stagedMode() : 'off';
+    const enforced = restricted && mode === 'enforce' ? restricted : null;
+    const rg = billingRegionFilters(enforced);
+    const params: unknown[] = enforced ? [enforced] : [];
+    // A bill follows the strict assayer ceiling (as its own routes do), whatever the staged mode.
+    const billParams: unknown[] = restricted ? [restricted] : [];
+    const billRegion = restricted ? ' AND (a.region IS NULL OR a.region = ANY($1::text[]))' : '';
+
+    const payablesWhere = `p.is_active = true AND p.status = 'APPROVED' AND p.hod_approved_at IS NULL
+         AND p.on_hold = false AND p.total_amount - p.paid_amount > 0
+         AND NOT EXISTS (SELECT 1 FROM assayer_invoices ai
+                          WHERE ai.id = p.assayer_invoice_id AND ai.status IN ('INVITED','SUBMITTED','APPROVED'))${rg.payable('p')}`;
+    const invoicesWhere = `i.is_active = true AND i.status = 'AWAITING_HOD'${rg.invoice('i')}`;
+    const billsWhere = `ai.is_active = true AND ai.status = 'APPROVED'${billRegion}`;
+
+    const [bills, payables, invoices, billCount, payableCounts, invoiceCount] = await Promise.all([
+      this.payableRepository.manager.query(
+        `SELECT ai.id, ai.invoice_number, ai.total_amount, ai.currency, ai.line_count, ai.approved_by, ai.approved_at,
+                ai.hod_reject_reason, a.display_name AS payee_name, a.assayer_code AS payee_code,
+                u.display_name AS approver_name
+           FROM assayer_invoices ai
+           JOIN assayers a ON a.id = ai.assayer_id
+           LEFT JOIN users u ON u.id = ai.approved_by
+          WHERE ${billsWhere}
+          ORDER BY ai.approved_at ASC NULLS LAST
+          LIMIT ${FINAL_APPROVAL_QUEUE_CAP}`, billParams),
+      this.payableRepository.manager.query(
+        `SELECT p.id, p.payable_number, p.expense_id, p.total_amount, p.paid_amount, p.currency, p.approved_by, p.approved_at,
+                p.hod_reject_reason, a.display_name AS payee_name, a.assayer_code AS payee_code,
+                u.display_name AS approver_name, asg.assignment_number,
+                (SELECT h.reason FROM billing_history h
+                  WHERE h.entity_type = 'PAYABLE' AND h.entity_id = p.id AND h.action = 'PAYABLE_STATUS_CHANGED'
+                    AND h.to_state = 'APPROVED'
+                  ORDER BY h.created_at DESC LIMIT 1) AS office_note
+           FROM assayer_payables p
+           JOIN assayers a ON a.id = p.assayer_id
+           LEFT JOIN users u ON u.id = p.approved_by
+           LEFT JOIN assignments asg ON asg.id = p.assignment_id
+          WHERE ${payablesWhere}
+          ORDER BY p.approved_at ASC NULLS LAST
+          LIMIT ${FINAL_APPROVAL_QUEUE_CAP * 2}`, params),
+      this.payableRepository.manager.query(
+        `SELECT i.id, i.invoice_number, i.total, i.currency, i.hod_requested_by, i.hod_requested_at, i.hod_reject_reason,
+                c.name AS payee_name, u.display_name AS approver_name,
+                (SELECT COUNT(*)::int FROM billing_entries e WHERE e.invoice_id = i.id) AS line_count
+           FROM billing_invoices i
+           JOIN clients c ON c.id = i.client_id
+           LEFT JOIN users u ON u.id = i.hod_requested_by
+          WHERE ${invoicesWhere}
+          ORDER BY i.hod_requested_at ASC NULLS LAST
+          LIMIT ${FINAL_APPROVAL_QUEUE_CAP}`, params),
+      this.payableRepository.manager.query(
+        `SELECT COUNT(*)::int AS n FROM assayer_invoices ai JOIN assayers a ON a.id = ai.assayer_id WHERE ${billsWhere}`, billParams),
+      this.payableRepository.manager.query(
+        `SELECT COUNT(*) FILTER (WHERE p.expense_id IS NULL)::int AS direct,
+                COUNT(*) FILTER (WHERE p.expense_id IS NOT NULL)::int AS expense
+           FROM assayer_payables p WHERE ${payablesWhere}`, params),
+      this.payableRepository.manager.query(`SELECT COUNT(*)::int AS n FROM billing_invoices i WHERE ${invoicesWhere}`, params),
+    ]);
+
+    // What the HOD should know about where each payout's money goes (audit F2/F3). Advisory: a
+    // failure to work it out leaves the rows without warnings rather than failing the queue.
+    const warningsById = await this.finalApprovalWarnings(
+      payables.map((r: any) => r.id),
+      bills.map((r: any) => r.id),
+    ).catch((err) => {
+      this.logger.warn(`Final-approval queue: could not work out bank-account warnings: ${(err as Error).message}`);
+      return new Map<string, string[]>();
+    });
+    const iso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
+    const items: FinalApprovalItem[] = [
+      ...bills.map((r: any): FinalApprovalItem => ({
+        kind: 'ASSAYER_BILL', id: r.id, number: r.invoice_number,
+        payeeName: r.payee_name ?? null, payeeCode: r.payee_code ?? null,
+        amount: Number(r.total_amount), currency: r.currency ?? 'INR', lineCount: Number(r.line_count ?? 0),
+        officeApprovedBy: r.approved_by ?? null, officeApprovedByName: r.approver_name ?? null, officeApprovedAt: iso(r.approved_at),
+        officeNote: null, assignmentNumber: null, lastRejectReason: r.hod_reject_reason ?? null,
+        warnings: warningsById.get(r.id) ?? [],
+      })),
+      ...payables.map((r: any): FinalApprovalItem => ({
+        kind: r.expense_id ? 'EXPENSE_REIMBURSEMENT' : 'DIRECT_PAYOUT', id: r.id, number: r.payable_number,
+        payeeName: r.payee_name ?? null, payeeCode: r.payee_code ?? null,
+        amount: round2(Number(r.total_amount) - Number(r.paid_amount)), currency: r.currency ?? 'INR', lineCount: 1,
+        officeApprovedBy: r.approved_by ?? null, officeApprovedByName: r.approver_name ?? null, officeApprovedAt: iso(r.approved_at),
+        officeNote: r.office_note ?? null, assignmentNumber: r.assignment_number ?? null, lastRejectReason: r.hod_reject_reason ?? null,
+        warnings: warningsById.get(r.id) ?? [],
+      })),
+      ...invoices.map((r: any): FinalApprovalItem => ({
+        kind: 'CLIENT_INVOICE', id: r.id, number: r.invoice_number,
+        payeeName: r.payee_name ?? null, payeeCode: null,
+        amount: Number(r.total), currency: r.currency ?? 'INR', lineCount: Number(r.line_count ?? 0),
+        officeApprovedBy: r.hod_requested_by ?? null, officeApprovedByName: r.approver_name ?? null, officeApprovedAt: iso(r.hod_requested_at),
+        officeNote: null, assignmentNumber: null, lastRejectReason: r.hod_reject_reason ?? null,
+      })),
+    ];
+
+    const counts: Record<FinalApprovalKind, number> = {
+      ASSAYER_BILL: Number(billCount?.[0]?.n ?? 0),
+      DIRECT_PAYOUT: Number(payableCounts?.[0]?.direct ?? 0),
+      EXPENSE_REIMBURSEMENT: Number(payableCounts?.[0]?.expense ?? 0),
+      CLIENT_INVOICE: Number(invoiceCount?.[0]?.n ?? 0),
+    };
+    const total = counts.ASSAYER_BILL + counts.DIRECT_PAYOUT + counts.EXPENSE_REIMBURSEMENT + counts.CLIENT_INVOICE;
+    return { items, counts, total, truncated: items.length < total };
+  }
+
+
+  /**
+   * The bank-account warnings for the HOD's queue, keyed by the payout's id and by the bill's id —
+   * the same sentences the office saw (`payoutDestinationChecks`): not verified, changed since the
+   * office approved, or on another assayer's record (which the final approval will refuse). A bill
+   * carries its lines' warnings, once each.
+   */
+  private async finalApprovalWarnings(payableIds: string[], billIds: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    const billLines: Array<{ id: string; assayer_invoice_id: string }> = billIds.length
+      ? await this.payableRepository.manager.query(
+          `SELECT p.id, p.assayer_invoice_id FROM assayer_payables p
+            WHERE p.assayer_invoice_id = ANY($1) AND p.is_active = true AND p.status = 'APPROVED' AND p.hod_approved_at IS NULL`,
+          [billIds],
+        )
+      : [];
+    const ids = [...new Set([...payableIds, ...billLines.map((l) => l.id)])];
+    if (!ids.length) return out;
+    const checks = await this.payoutDestinationChecks(ids);
+    const byPayable = new Map(checks.map((c) => [c.payableId, c.warnings]));
+    for (const id of payableIds) {
+      const w = byPayable.get(id);
+      if (w?.length) out.set(id, w);
+    }
+    for (const line of billLines) {
+      const w = byPayable.get(line.id) ?? [];
+      if (!w.length) continue;
+      const list = out.get(line.assayer_invoice_id) ?? [];
+      for (const warning of w) if (!list.includes(warning)) list.push(warning);
+      out.set(line.assayer_invoice_id, list);
+    }
+    return out;
+  }
+
+  // -----------------------------------------------------------------------
+  // The HOD's final approval of a client invoice (owner, 2026-09-24)
+  // -----------------------------------------------------------------------
+
+  /** The office sends a draft up for the HOD's final approval: DRAFT → AWAITING_HOD. */
+  async requestInvoiceFinalApproval(invoiceId: string, userId: string): Promise<BillingInvoiceEntity> {
+    let sent = false;
+    const saved = await this.inTx(async (m, emit) => {
+      const invoice = await this.lockInvoice(m, invoiceId);
+      if (invoice.status === InvoiceStatus.AWAITING_HOD) return invoice; // the double-press
+      if (invoice.status !== InvoiceStatus.DRAFT) {
+        throw new ConflictException(
+          invoice.status === InvoiceStatus.HOD_APPROVED
+            ? `${invoice.invoiceNumber} already has the final approval — it can be marked sent to the client.`
+            : `${invoice.invoiceNumber} is ${invoice.status.toLowerCase()} and cannot be sent for final approval.`,
+        );
+      }
+      invoice.status = InvoiceStatus.AWAITING_HOD;
+      invoice.hodRequestedAt = new Date();
+      invoice.hodRequestedBy = userId;
+      invoice.hodApprovedAt = null;
+      invoice.hodApprovedBy = null;
+      invoice.updatedBy = userId;
+      const out = await m.save(invoice);
+      await this.history(userId, {
+        clientId: out.clientId, projectId: out.projectId,
+        entityType: BillingEntityType.INVOICE, entityId: out.id, action: 'INVOICE_SENT_FOR_FINAL_APPROVAL',
+        fromState: InvoiceStatus.DRAFT, toState: InvoiceStatus.AWAITING_HOD,
+      }, m);
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'INVOICE_SENT_FOR_FINAL_APPROVAL',
+        entityType: 'INVOICE',
+        entityId: out.id,
+        previousState: InvoiceStatus.DRAFT,
+        newState: InvoiceStatus.AWAITING_HOD,
+        userId,
+        remarks: `Sent invoice ${out.invoiceNumber} (₹${Number(out.total)}) for the HOD's final approval`,
+        metadata: { invoiceId: out.id, invoiceNumber: out.invoiceNumber, clientId: out.clientId, amount: Number(out.total) },
+      }, { manager });
+      emit('billing:invoice-changed', { invoiceId: out.id, clientId: out.clientId, status: out.status });
+      sent = true;
+      return out;
+    });
+    if (sent) {
+      this.notifyFinalApprovalNeeded({
+        entityType: 'INVOICE', entityId: saved.id, actorUserId: userId,
+        what: `Client invoice ${saved.invoiceNumber}`, amount: Number(saved.total),
+        version: saved.hodRequestedAt ? new Date(saved.hodRequestedAt).getTime() : Date.now(),
+      });
+    }
+    return saved;
+  }
+
+  /**
+   * The HOD approves a client invoice: AWAITING_HOD → HOD_APPROVED, after which the office may mark
+   * it sent. Not by whoever made the invoice, nor by whoever sent it up — a second pair of eyes has
+   * to belong to a second person (`security.segregationOfDuties.mode`, audited either way).
+   */
+  async hodApproveInvoice(invoiceId: string, userId: string): Promise<BillingInvoiceEntity> {
+    return this.inTx(async (m, emit) => {
+      const invoice = await this.lockInvoice(m, invoiceId);
+      if (invoice.status === InvoiceStatus.HOD_APPROVED) return invoice;
+      if (invoice.status !== InvoiceStatus.AWAITING_HOD) {
+        throw new ConflictException(
+          invoice.status === InvoiceStatus.DRAFT
+            ? `${invoice.invoiceNumber} has not been sent for final approval.`
+            : `${invoice.invoiceNumber} is ${invoice.status.toLowerCase()} — there is nothing for the HOD to approve.`,
+        );
+      }
+      const subject = { entityType: 'INVOICE' as const, entityId: invoice.id, payableNumber: invoice.invoiceNumber };
+      await this.assertSegregationOfDuties(userId, invoice.createdBy, `make client invoice ${invoice.invoiceNumber} and also give it the final approval`, subject);
+      await this.assertSegregationOfDuties(userId, invoice.hodRequestedBy, `send client invoice ${invoice.invoiceNumber} for final approval and also give it`, subject);
+
+      invoice.status = InvoiceStatus.HOD_APPROVED;
+      invoice.hodApprovedAt = new Date();
+      invoice.hodApprovedBy = userId;
+      invoice.updatedBy = userId;
+      const out = await m.save(invoice);
+      await this.history(userId, {
+        clientId: out.clientId, projectId: out.projectId,
+        entityType: BillingEntityType.INVOICE, entityId: out.id, action: 'INVOICE_HOD_APPROVED',
+        fromState: InvoiceStatus.AWAITING_HOD, toState: InvoiceStatus.HOD_APPROVED,
+        newValue: { hodApprovedBy: userId, sentUpBy: out.hodRequestedBy },
+      }, m);
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'INVOICE_HOD_APPROVED',
+        entityType: 'INVOICE',
+        entityId: out.id,
+        previousState: InvoiceStatus.AWAITING_HOD,
+        newState: InvoiceStatus.HOD_APPROVED,
+        userId,
+        remarks: `Final approval (HOD) of invoice ${out.invoiceNumber} (₹${Number(out.total)}) — may be sent to the client`,
+        metadata: { invoiceId: out.id, invoiceNumber: out.invoiceNumber, clientId: out.clientId, amount: Number(out.total) },
+      }, { manager });
+      emit('billing:invoice-changed', { invoiceId: out.id, clientId: out.clientId, status: out.status });
+      return out;
+    });
+  }
+
+  /** The HOD sends a client invoice back to the office with the reason: AWAITING_HOD → DRAFT. */
+  async hodRejectInvoice(invoiceId: string, reason: string, userId: string): Promise<BillingInvoiceEntity> {
+    const problem = hodRejectReasonProblem(reason);
+    if (problem) throw new BadRequestException(problem);
+    const why = reason.trim();
+    let sentUpBy: string | null = null;
+    const saved = await this.inTx(async (m, emit) => {
+      const invoice = await this.lockInvoice(m, invoiceId);
+      if (invoice.status !== InvoiceStatus.AWAITING_HOD) {
+        throw new ConflictException(
+          invoice.status === InvoiceStatus.DRAFT
+            ? `${invoice.invoiceNumber} is already back with the office.`
+            : `${invoice.invoiceNumber} is ${invoice.status.toLowerCase()} — there is nothing for the HOD to send back.`,
+        );
+      }
+      sentUpBy = invoice.hodRequestedBy ?? invoice.createdBy ?? null;
+      invoice.status = InvoiceStatus.DRAFT;
+      invoice.hodRequestedAt = null;
+      invoice.hodRequestedBy = null;
+      invoice.hodRejectedAt = new Date();
+      invoice.hodRejectedBy = userId;
+      invoice.hodRejectReason = why;
+      invoice.updatedBy = userId;
+      const out = await m.save(invoice);
+      await this.history(userId, {
+        clientId: out.clientId, projectId: out.projectId,
+        entityType: BillingEntityType.INVOICE, entityId: out.id, action: 'INVOICE_HOD_REJECTED',
+        fromState: InvoiceStatus.AWAITING_HOD, toState: InvoiceStatus.DRAFT, reason: why,
+      }, m);
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'INVOICE_HOD_REJECTED',
+        entityType: 'INVOICE',
+        entityId: out.id,
+        previousState: InvoiceStatus.AWAITING_HOD,
+        newState: InvoiceStatus.DRAFT,
+        userId,
+        remarks: `Final approval refused; invoice ${out.invoiceNumber} sent back to the office: ${why}`,
+        metadata: { invoiceId: out.id, invoiceNumber: out.invoiceNumber, clientId: out.clientId, reason: why },
+      }, { manager });
+      emit('billing:invoice-changed', { invoiceId: out.id, clientId: out.clientId, status: out.status });
+      return out;
+    });
+    this.notifyFinalApprovalRejected({
+      ownerUserId: sentUpBy,
+      actorUserId: userId,
+      entityType: 'INVOICE',
+      entityId: saved.id,
+      what: `Client invoice ${saved.invoiceNumber}`,
+      reason: why,
+      tab: 'invoices',
+      version: saved.hodRejectedAt ? new Date(saved.hodRejectedAt).getTime() : Date.now(),
+    });
+    return saved;
   }
 
   /** Cancel an unpaid invoice. Its lines go back to UNBILLED — the work is still billable. */
@@ -1924,7 +3203,7 @@ export class BillingEngineService implements OnModuleInit {
 
       if (invoice.status !== InvoiceStatus.ISSUED) {
         throw new BadRequestException(
-          invoice.status === InvoiceStatus.DRAFT
+          invoice.status === InvoiceStatus.DRAFT || invoice.status === InvoiceStatus.AWAITING_HOD || invoice.status === InvoiceStatus.HOD_APPROVED
             ? `${invoice.invoiceNumber} has not been sent yet.`
             : `${invoice.invoiceNumber} is ${invoice.status.toLowerCase()}.`,
         );
@@ -2073,7 +3352,14 @@ export class BillingEngineService implements OnModuleInit {
           payable.paidBy = null;
         }
         payable.updatedBy = userId;
+        // A reversed payout is usually a transfer that bounced off a wrong account: the retry must
+        // go to the account on the record now, not the one frozen at approval (audit F2).
+        await this.refreshPayoutDestinationInTx(m, payable, userId, 'PAYMENT_REVERSED');
         await m.save(payable);
+        // The bill it rode is no longer settled (audit F9).
+        if (payable.assayerInvoiceId && payable.status !== AssayerPayableStatus.PAID) {
+          await this.unsettleAssayerInvoiceInTx(m, emit, payable.assayerInvoiceId, userId, reason.trim());
+        }
         await this.history(userId, {
           clientId: payable.clientId, projectId: payable.projectId, assignmentId: payable.assignmentId, assayerId: payable.assayerId,
           entityType: BillingEntityType.PAYMENT, entityId: payment.id, action: 'PAYMENT_REVERSED',
@@ -2146,7 +3432,10 @@ export class BillingEngineService implements OnModuleInit {
       e.paidAmount = linePaid;
       e.outstandingAmount = round2(lineTotal - linePaid);
       if (e.outstandingAmount < MONEY_EPSILON) e.outstandingAmount = 0;
-      e.state = e.outstandingAmount <= 0 && lineTotal > 0 ? BillingState.PAID : BillingState.INVOICED;
+      // A ₹0 (or credit) line has nothing of its own to collect: it is settled when its invoice is.
+      e.state = e.outstandingAmount <= 0 && (lineTotal > 0 || invoice.status === InvoiceStatus.PAID)
+        ? BillingState.PAID
+        : BillingState.INVOICED;
       e.updatedBy = userId;
       await m.save(e);
     }
@@ -2215,23 +3504,63 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   /**
-   * The same figures, over only the rows the ASSAYER may see: lines on an APPROVED invoice,
-   * plus grandfathered `pre_invoicing_era` rows (revealed under the old rules), never VOIDED.
-   * The SELECT list is shared with `assayerTotals` above — the fork narrows the WHERE, it never
-   * re-derives a formula.
+   * The assayer's bills whose lines they may see amounts for — the ONE answer both the statement's
+   * rows and its totals read, so the two cannot disagree.
+   *
+   *  - Any bill they have SENT (`ASSAYER_SENT_INVOICE_STATUSES`: submitted, approved, paid).
+   *  - A revision the office made of a bill they had already sent (owner decision 2026-09-24).
+   *    Revising marks the bill SUPERSEDED and moves its lines to a new revision that starts unsent,
+   *    so it can ask them to check and send again; the amounts they already saw stay in Money
+   *    meanwhile. "Already sent" is read from the supersession chain: any earlier revision with a
+   *    `submitted_at` — the stamp `submit` writes — anywhere back along `supersedes_invoice_id`.
+   *    A revision only ever carries lines from the bill it supersedes, so every line on it was on
+   *    that sent bill.
+   *
+   * An invitation never sent, at any revision, reveals nothing — the amounts are shown only inside
+   * the invitation the assayer is reviewing.
    */
-  private async assayerVisibleTotals(assayerId: string): Promise<{
+  private async assayerRevealingInvoiceIds(assayerId: string): Promise<string[]> {
+    const rows: Array<{ id: string }> = await this.payableRepository.manager.query(
+      `WITH RECURSIVE chain AS (
+         SELECT i.id AS invoice_id, i.supersedes_invoice_id AS ancestor_id
+           FROM assayer_invoices i
+          WHERE i.assayer_id = $1 AND i.supersedes_invoice_id IS NOT NULL
+         UNION
+         SELECT c.invoice_id, a.supersedes_invoice_id
+           FROM chain c
+           JOIN assayer_invoices a ON a.id = c.ancestor_id
+          WHERE a.supersedes_invoice_id IS NOT NULL
+       )
+       SELECT i.id FROM assayer_invoices i
+        WHERE i.assayer_id = $1 AND i.status = ANY($2::text[])
+       UNION
+       SELECT c.invoice_id FROM chain c
+         JOIN assayer_invoices a ON a.id = c.ancestor_id
+        WHERE a.submitted_at IS NOT NULL`,
+      [assayerId, [...ASSAYER_SENT_INVOICE_STATUSES]],
+    );
+    return (rows ?? []).map((r) => r.id);
+  }
+
+  /**
+   * The same figures, over only the rows the ASSAYER may see: lines on a bill that reveals them
+   * (`assayerRevealingInvoiceIds` — a bill they have sent, or a revision of one; owner decision
+   * 2026-09-24. It was approved-only before, which also dropped a bill's lines from view the
+   * moment it was paid), plus grandfathered `pre_invoicing_era` rows (revealed under the old
+   * rules), never VOIDED. The SELECT list is shared with `assayerTotals` above — the fork narrows
+   * the WHERE, it never re-derives a formula.
+   */
+  private async assayerVisibleTotals(assayerId: string, revealingInvoiceIds: string[]): Promise<{
     earned: number; paid: number; outstanding: number; awaitingApproval: number; onHoldOrDisputed: number;
     tdsWithheld: number; payableCount: number;
   }> {
     const rows = await this.payableRepository.manager.query(
       `SELECT ${BillingEngineService.ASSAYER_TOTALS_SELECT}
          FROM assayer_payables p
-         LEFT JOIN assayer_invoices ai ON ai.id = p.assayer_invoice_id
         WHERE p.assayer_id = $1 AND p.is_active = true
           AND p.status <> 'VOIDED'
-          AND (p.pre_invoicing_era = true OR ai.status = 'APPROVED')`,
-      [assayerId],
+          AND (p.pre_invoicing_era = true OR p.assayer_invoice_id = ANY($2::uuid[]))`,
+      [assayerId, revealingInvoiceIds],
     );
     return this.totalsFromRow(rows?.[0]);
   }
@@ -2245,8 +3574,9 @@ export class BillingEngineService implements OnModuleInit {
    *
    *  - `'staff'` (default): today's full statement, unchanged, plus each payable's
    *    `invoiceNumber`/`invoiceStatus` so finance can see which lines ride which invoice.
-   *  - `'assayer'`: the earnings gate. Amounts appear only for payables whose invoice the
-   *    assayer has been through the invite → submit → approve loop for (invoice APPROVED), plus
+   *  - `'assayer'`: the earnings gate. Amounts appear only for payables on a bill the assayer
+   *    has SENT (`ASSAYER_SENT_INVOICE_STATUSES` — submitted, approved or paid; owner decision
+   *    2026-09-24, "amounts appear as soon as the assayer sends the bill"), plus
    *    grandfathered `preInvoicingEra` rows whose money was already revealed under the old
    *    rules; VOIDED rows never. Payments are filtered to those visible payables,
    *    `balanceAfter` is OMITTED (a running balance over rows the reader cannot see is a money
@@ -2262,6 +3592,8 @@ export class BillingEngineService implements OnModuleInit {
     assayerId: string,
     scope?: Partial<GlobalScope>,
     audience: 'staff' | 'assayer' = 'staff',
+    /** The caller's role names — decide how much of the PAN the statement carries. */
+    viewerRoles: string[] = [],
   ): Promise<any> {
     const invoicingEnabled = await this.settings
       .get<boolean>('billing.assayerInvoicingEnabled')
@@ -2271,8 +3603,10 @@ export class BillingEngineService implements OnModuleInit {
 
     // Loaded through the repository, not raw SQL, so the encrypted PAN is decrypted for the
     // statement's TDS block. tds.section is a label only — it never changes an amount.
+    // Which bills reveal their lines to the assayer — read once, used by the totals and the rows.
+    const revealing = gated ? new Set(await this.assayerRevealingInvoiceIds(assayerId)) : new Set<string>();
     const [totals, payables, payments, assayer, tdsSection] = await Promise.all([
-      gated ? this.assayerVisibleTotals(assayerId) : this.assayerTotals(assayerId),
+      gated ? this.assayerVisibleTotals(assayerId, [...revealing]) : this.assayerTotals(assayerId),
       this.payableRepository.find({ where: { assayerId, isActive: true }, order: { createdAt: 'DESC' } }),
       this.paymentRepository.find({ where: { assayerId, direction: PaymentDirection.OUTBOUND, isActive: true }, order: { createdAt: 'DESC' } }),
       this.assayerRepository.findOne({ where: { id: assayerId } }).catch(() => null),
@@ -2311,14 +3645,29 @@ export class BillingEngineService implements OnModuleInit {
         createdAt: p.createdAt,
         invoiceNumber: inv?.invoice_number ?? null,
         invoiceStatus: inv?.status ?? null,
+        /** The HOD's final approval (2026-09-24): an APPROVED row without it is not payable yet. */
+        hodApproved: !!p.hodApprovedAt,
       };
     };
 
+    /**
+     * The PAN, never whole (2026-09-24 audit). This handed the decrypted number to every reader of
+     * the statement, and the global redaction could not see it: it masks by key NAME over objects
+     * shaped like an assayer, and this row calls it `pan`. The rule is the record's own: an AUDITOR
+     * (with no operating role beside it) gets no PAN at all, everyone else the last four; the whole
+     * number is only ever read through the audited `GET /assayers/:id/sensitive/pan`. `panOnFile`
+     * lets the screen still say whether one exists — the question this line answers for finance.
+     */
+    const panOnFile = !!assayer?.panNumber?.trim();
+    const auditorOnly = viewerRoles.includes(SystemRole.AUDITOR)
+      && !viewerRoles.some((r) => r === SystemRole.ADMIN || r === SystemRole.OPERATIONS || r === SystemRole.DEVELOPER);
     const head = {
       assayerId,
       assayerName: assayer?.displayName ?? null,
       assayerCode: assayer?.assayerCode ?? null,
-      pan: assayer?.panNumber ?? null,
+      pan: panOnFile && !auditorOnly ? maskTail(assayer!.panNumber!.trim()) : null,
+      panMasked: true,
+      panOnFile,
       tdsSection: tdsSection ?? '194J',
       totals,
     };
@@ -2343,8 +3692,7 @@ export class BillingEngineService implements OnModuleInit {
     const visible = payables.filter(
       (p) =>
         p.status !== AssayerPayableStatus.VOIDED &&
-        (p.preInvoicingEra ||
-          (p.assayerInvoiceId && invoiceById.get(p.assayerInvoiceId)?.status === AssayerInvoiceStatus.APPROVED)),
+        (p.preInvoicingEra || (!!p.assayerInvoiceId && revealing.has(p.assayerInvoiceId))),
     );
     const visibleIds = new Set(visible.map((p) => p.id));
 
@@ -2417,6 +3765,8 @@ export class BillingEngineService implements OnModuleInit {
     assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean;
     /** True = riding an assayer bill, false = on none, undefined = both. See `PayoutsQuery`. */
     onBill?: boolean;
+    /** True = has the HOD's final approval, false = does not (yet), undefined = both. */
+    hodApproved?: boolean;
     page?: number | string; limit?: number | string;
   } = {}, scope?: Partial<GlobalScope>): Promise<BillingPage<any>> {
     const w = billingPageWindow(filters.page, filters.limit);
@@ -2430,6 +3780,7 @@ export class BillingEngineService implements OnModuleInit {
       if (filters.status) where.status = filters.status;
       if (filters.onHold !== undefined) where.onHold = filters.onHold;
       if (filters.onBill !== undefined) where.assayerInvoiceId = filters.onBill ? Not(IsNull()) : IsNull();
+      if (filters.hodApproved !== undefined) where.hodApprovedAt = filters.hodApproved ? Not(IsNull()) : IsNull();
       const [payables, total] = await this.payableRepository.findAndCount({
         where, order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
       });
@@ -2444,6 +3795,9 @@ export class BillingEngineService implements OnModuleInit {
       if (filters.onHold !== undefined) qb.andWhere('p.on_hold = :onHold', { onHold: filters.onHold });
       if (filters.onBill !== undefined) {
         qb.andWhere(filters.onBill ? 'p.assayer_invoice_id IS NOT NULL' : 'p.assayer_invoice_id IS NULL');
+      }
+      if (filters.hodApproved !== undefined) {
+        qb.andWhere(filters.hodApproved ? 'p.hod_approved_at IS NOT NULL' : 'p.hod_approved_at IS NULL');
       }
       qb.leftJoin('assignments', 'rg_a', 'rg_a.id = p.assignment_id')
         .leftJoin('project_branches', 'rg_pb', 'rg_pb.id = rg_a.project_branch_id')
@@ -2921,6 +4275,12 @@ export class BillingEngineService implements OnModuleInit {
       assayerName: string | null; assayerCode: string | null;
       beneficiaryName: string | null; accountNumber: string | null; ifsc: string | null; pan: string | null;
       netAmount: number; reference: string; hasBankDetails: boolean;
+      /**
+       * The assayer's record now names a different account than the one frozen at approval
+       * (audit F2). The file still pays the frozen one; `warning` says so, masked to the last four.
+       */
+      destinationDiffersFromRecord: boolean;
+      warning: string | null;
     }>;
     skipped: Array<{ id: string; reason: string }>;
   }> {
@@ -2935,6 +4295,9 @@ export class BillingEngineService implements OnModuleInit {
       if (p.status !== AssayerPayableStatus.PAID && p.onHold) { skipped.push({ id: p.id, reason: `${p.payableNumber} is on hold` }); return false; }
       if (p.status === AssayerPayableStatus.PAID) { skipped.push({ id: p.id, reason: `${p.payableNumber} is already paid` }); return false; }
       if (p.status !== AssayerPayableStatus.APPROVED) { skipped.push({ id: p.id, reason: `${p.payableNumber} is not approved yet` }); return false; }
+      // The same gate as `recordDisbursement`: a bank file is money leaving, so the HOD's final
+      // approval is required here too — never a row the payment step would then refuse.
+      if (!p.hodApprovedAt) { skipped.push({ id: p.id, reason: `${p.payableNumber}: ${AWAITING_HOD_MESSAGE}` }); return false; }
       if (round2(Number(p.totalAmount) - Number(p.paidAmount)) <= 0) { skipped.push({ id: p.id, reason: `${p.payableNumber} has nothing outstanding` }); return false; }
       return true;
     });
@@ -2952,6 +4315,10 @@ export class BillingEngineService implements OnModuleInit {
       const account = p.destinationBankAccountNumber ?? null;
       const ifsc = p.destinationIfsc ?? null;
       const beneficiaryName = p.destinationAccountHolderName ?? a?.displayName ?? null;
+      const recordAccount = normaliseBankAccountNumber(a?.bankAccountNumber);
+      const snapshotAccount = normaliseBankAccountNumber(account);
+      const differs = !!snapshotAccount && !!a
+        && (snapshotAccount !== recordAccount || (ifsc ?? '').trim().toUpperCase() !== (a.ifscCode ?? '').trim().toUpperCase());
       return {
         payableId: p.id,
         payableNumber: p.payableNumber,
@@ -2965,6 +4332,10 @@ export class BillingEngineService implements OnModuleInit {
         netAmount: round2(Number(p.totalAmount) - Number(p.paidAmount)),
         reference: `${p.payableNumber}${a?.assayerCode ? ` ${a.assayerCode}` : ''}`,
         hasBankDetails: !!(account && ifsc),
+        destinationDiffersFromRecord: differs,
+        warning: differs
+          ? `${p.payableNumber}: ${payoutDestinationChangedWarning(maskTail(snapshotAccount), recordAccount ? maskTail(recordAccount) : '')}`
+          : null,
       };
     });
 
@@ -3028,12 +4399,20 @@ export class BillingEngineService implements OnModuleInit {
     id?: string; displayName?: string | null; roles?: string[]; ipAddress?: string | null;
   }): Promise<{
     from: string | null; to: string | null; section: string;
+    /**
+     * The s.194J annual threshold in force now (audit F15). The TDS on each row is what was actually
+     * withheld, as booked: nothing below the threshold, the whole year's catch-up on the payable
+     * that crossed it — so a row's `tds` is not `rate × gross` for a year that crossed inside the
+     * window, and an assayer who never crossed has no row at all (nothing was deducted).
+     */
+    thresholdRupees: number;
     rows: Array<{ assayerId: string; assayerName: string | null; assayerCode: string | null; pan: string | null; panMasked: boolean; gross: number; tds: number; net: number; count: number }>;
     totals: { gross: number; tds: number; net: number; count: number };
   }> {
     const from = filters.from || null;
     const to = filters.to || null;
-    const [agg, section] = await Promise.all([
+    const thresholdFallback = Number(SETTING_BY_KEY['billing.tds194jThresholdRupees']?.default ?? 50000);
+    const [agg, section, thresholdRupees] = await Promise.all([
       this.payableRepository.manager.query(
         `SELECT assayer_id,
                 COALESCE(SUM(base_amount + travel_amount), 0) AS gross,
@@ -3069,6 +4448,7 @@ export class BillingEngineService implements OnModuleInit {
         [from, to],
       ),
       this.settings.get<string>('billing.tdsSection').catch(() => '194J'),
+      this.settings.getNumber('billing.tds194jThresholdRupees', thresholdFallback).catch(() => thresholdFallback),
     ]);
 
     const assayerIds = agg.map((r: any) => r.assayer_id);
@@ -3133,7 +4513,7 @@ export class BillingEngineService implements OnModuleInit {
       }),
       { gross: 0, tds: 0, net: 0, count: 0 },
     );
-    return { from, to, section: section ?? '194J', rows, totals };
+    return { from, to, section: section ?? '194J', thresholdRupees: Number(thresholdRupees) || 0, rows, totals };
   }
 
   /** Everything money-related about one assignment — the one line the assignment detail shows. */
@@ -3258,6 +4638,8 @@ export class BillingEngineService implements OnModuleInit {
                COUNT(*) FILTER (WHERE status = 'PENDING'  AND on_hold = false)::int                              AS due_count,
                COUNT(*) FILTER (WHERE status = 'APPROVED' AND on_hold = false)::int                              AS approved_count,
                COUNT(*) FILTER (WHERE on_hold = true)::int                                                       AS held_count,
+               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'APPROVED' AND on_hold = false AND hod_approved_at IS NULL), 0) AS awaiting_hod,
+               COUNT(*) FILTER (WHERE status = 'APPROVED' AND on_hold = false AND hod_approved_at IS NULL)::int AS awaiting_hod_count,
                COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NULL), 0) AS unbilled,
                COUNT(*) FILTER (WHERE status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NULL)::int AS unbilled_count,
                COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NOT NULL), 0) AS in_claim,
@@ -3333,6 +4715,7 @@ export class BillingEngineService implements OnModuleInit {
         dueCount: Number(p.due_count ?? 0), approvedCount: Number(p.approved_count ?? 0), heldCount: Number(p.held_count ?? 0),
         unbilled: n(p.unbilled), unbilledCount: Number(p.unbilled_count ?? 0),
         inClaimReview: n(p.in_claim), inClaimReviewCount: Number(p.in_claim_count ?? 0),
+        awaitingHod: n(p.awaiting_hod), awaitingHodCount: Number(p.awaiting_hod_count ?? 0),
       },
       receivables: {
         unbilled: n(e.unbilled), invoiced: n(inv.invoiced), collected: n(inv.collected), outstanding: n(inv.outstanding), held: n(e.held),
@@ -3464,7 +4847,7 @@ export class BillingEngineService implements OnModuleInit {
           FROM assayer_payables p
           JOIN assignments a ON a.id = p.assignment_id
           LEFT JOIN assayers s ON s.id = p.assayer_id
-         WHERE p.is_active = true AND p.expense_id IS NULL AND (p.rate_snapshot->>'settled') = 'false'${rg.payable('p')}
+         WHERE p.is_active = true AND p.expense_id IS NULL${andLivePayableSql('p')} AND (p.rate_snapshot->>'settled') = 'false'${rg.payable('p')}
          ORDER BY p.created_at DESC LIMIT ${ATTENTION_LIMIT}`, 'unsettled'),
       q(`
         SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name,
@@ -3473,7 +4856,9 @@ export class BillingEngineService implements OnModuleInit {
           FROM assayer_payables p
           JOIN assignments a ON a.id = p.assignment_id
           LEFT JOIN assayers s ON s.id = p.assayer_id
-         WHERE p.is_active = true AND p.expense_id IS NULL
+         -- LIVE payables only: a voided payout is history, and "fee changed" on it asks finance to
+         -- act on money that will never be paid (a reopened-and-redone job carries one).
+         WHERE p.is_active = true AND p.expense_id IS NULL${andLivePayableSql('p')}
            AND (p.rate_snapshot->>'feeAmount') IS NOT NULL
            AND (p.rate_snapshot->>'feeAmount')::numeric <>
                CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END${rg.payable('p')}
@@ -3483,7 +4868,7 @@ export class BillingEngineService implements OnModuleInit {
           FROM assayer_payables p
           LEFT JOIN assignments a ON a.id = p.assignment_id
           LEFT JOIN assayers s ON s.id = p.assayer_id
-         WHERE p.is_active = true AND p.on_hold = true${rg.payable('p')}
+         WHERE p.is_active = true AND p.on_hold = true${andLivePayableSql('p')}${rg.payable('p')}
          ORDER BY p.updated_at DESC LIMIT ${ATTENTION_LIMIT}`, 'held-payable'),
       q(`
         SELECT e.id, e.assignment_id, a.assignment_number, c.name AS client_name, e.total_amount, e.hold_reason
@@ -3688,11 +5073,12 @@ export class BillingEngineService implements OnModuleInit {
    * has to survive the request. Recorded with `recordEventSafe` so a failure to write the trail
    * can never turn a refusal into a permission.
    */
-  private async assertSegregationOfDuties(
+  /** Public for the sibling `AssayerInvoiceService` (the bill's final approval) — ONE check, one trail. */
+  async assertSegregationOfDuties(
     actorId: string,
     otherPartyId: string | null | undefined,
     context: string,
-    subject?: { entityType: 'PAYABLE'; entityId: string; payableNumber?: string | null },
+    subject?: { entityType: 'PAYABLE' | 'ASSAYER_INVOICE' | 'INVOICE'; entityId: string; payableNumber?: string | null },
   ): Promise<void> {
     if (!otherPartyId || otherPartyId !== actorId) return;
     const mode = await this.sodMode();
@@ -3817,6 +5203,72 @@ export class BillingEngineService implements OnModuleInit {
       [assignmentId],
     );
     return rows?.[0]?.branch_name ?? 'a branch';
+  }
+
+  /**
+   * Tell the HODs something is waiting for their final approval (2026-09-24). Deduplicated per item
+   * AND per round (`version` — the moment it was approved or sent up), so an item that comes back
+   * after a rejection is announced again, and a retried approval is not announced twice. Bursts
+   * collapse in the catalog: a bulk approval of forty payouts is one line in the bell.
+   */
+  notifyFinalApprovalNeeded(opts: {
+    entityType: 'PAYABLE' | 'ASSAYER_INVOICE' | 'INVOICE';
+    entityId: string;
+    actorUserId: string | null;
+    what: string;
+    amount: number;
+    version: number;
+  }): void {
+    void this.resolveUserName(opts.actorUserId ?? 'system')
+      .catch(() => 'The office')
+      .then((officeName) => this.notificationDispatch.emitSafe({
+        type: 'BILLING_FINAL_APPROVAL_NEEDED',
+        entityType: opts.entityType,
+        entityId: opts.entityId,
+        actorUserId: opts.actorUserId,
+        dedupeKey: `BILLING_FINAL_APPROVAL_NEEDED:${opts.entityType}:${opts.entityId}:${opts.version}`,
+        payload: { what: opts.what, amount: round2(opts.amount), officeName },
+      }))
+      .catch((err) => this.logger.error(`Final-approval notification skipped: ${(err as Error).message}`));
+  }
+
+  /** The office payout approval that now waits for the HOD — `notifyFinalApprovalNeeded` for one payable. */
+  private notifyAwaitingFinalApproval(p: AssayerPayableEntity): void {
+    this.notifyFinalApprovalNeeded({
+      entityType: 'PAYABLE',
+      entityId: p.id,
+      actorUserId: p.approvedBy,
+      what: p.expenseId ? `Expense reimbursement ${p.payableNumber}` : `Payout ${p.payableNumber} (approved without a bill)`,
+      amount: round2(Number(p.totalAmount) - Number(p.paidAmount)),
+      version: p.approvedAt ? new Date(p.approvedAt).getTime() : Date.now(),
+    });
+  }
+
+  /** Tell whoever did the office's part that the HOD sent it back, and why. */
+  notifyFinalApprovalRejected(opts: {
+    ownerUserId: string | null;
+    actorUserId: string;
+    entityType: 'PAYABLE' | 'ASSAYER_INVOICE' | 'INVOICE';
+    entityId: string;
+    what: string;
+    reason: string;
+    /** The Billing tab the office finds it on again. */
+    tab: 'pay' | 'bills' | 'invoices';
+    version: number;
+  }): void {
+    if (!opts.ownerUserId) return;
+    void this.resolveUserName(opts.actorUserId)
+      .catch(() => 'The HOD')
+      .then((hodName) => this.notificationDispatch.emitSafe({
+        type: 'BILLING_FINAL_APPROVAL_REJECTED',
+        entityType: opts.entityType,
+        entityId: opts.entityId,
+        actorUserId: opts.actorUserId,
+        ownerUserId: opts.ownerUserId,
+        dedupeKey: `BILLING_FINAL_APPROVAL_REJECTED:${opts.entityType}:${opts.entityId}:${opts.version}`,
+        payload: { what: opts.what, reason: opts.reason, hodName, tab: opts.tab },
+      }))
+      .catch((err) => this.logger.error(`Final-approval rejection notification skipped: ${(err as Error).message}`));
   }
 
   /**

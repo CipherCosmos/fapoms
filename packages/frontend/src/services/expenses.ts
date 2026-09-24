@@ -28,6 +28,12 @@ export interface ExpenseClaim {
    * claim means the reimbursement never got raised and the money is not on its way.
    */
   reimbursementPayableId: string | null;
+  /**
+   * Set only when a senior approved this claim although the approval rules refused it — their
+   * written reason, and the refusal codes it set aside (`EXPENSE_APPROVAL_*`). Null otherwise.
+   */
+  approvalOverrideReason?: string | null;
+  approvalOverrideCodes?: string[] | null;
   createdAt: string;
   // Loaded by /expenses/pending (relations: assignment, assayer).
   assayer?: { id: string; displayName?: string; assayerCode?: string } | null;
@@ -41,11 +47,15 @@ export const getPendingExpenses = () => api.request<ExpenseClaim[]>('/expenses/p
  * Approve or reject a claim. A rejection MUST carry a reason — the backend refuses a reject
  * with no note, since a refused reimbursement the assayer can't act on is exactly the dispute
  * that needs a record.
+ *
+ * `overrideReason` is a senior's written reason to approve a claim the approval rules refused
+ * (assignment cancelled, assayer reassigned away, job's pay on a sent bill —
+ * `EXPENSE_APPROVAL_OVERRIDABLE_CODES`). Sent only on that path.
  */
-export const reviewExpense = (expenseId: string, approve: boolean, notes?: string) =>
+export const reviewExpense = (expenseId: string, approve: boolean, notes?: string, overrideReason?: string) =>
   api.request<ExpenseClaim>(`/expenses/${expenseId}/review`, {
     method: 'POST',
-    body: JSON.stringify({ approve, notes }),
+    body: JSON.stringify(overrideReason ? { approve, notes, overrideReason } : { approve, notes }),
   });
 
 /** One assayer's full claim history (optionally filtered by status). */

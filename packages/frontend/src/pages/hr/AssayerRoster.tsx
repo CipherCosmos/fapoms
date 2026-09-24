@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { assayerLifecycleLabel } from '@fapoms/shared';
+import { assayerLifecycleLabel, isBackgroundJobInFlight, type BackgroundJobScope } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
@@ -21,8 +21,9 @@ import { RosterFilterPanel, AppliedFilterBar } from './RosterFilterPanel';
 import { RosterExportDialog } from './RosterExportDialog';
 import { RECORD_LINK_PARAMS } from './record-sections';
 import { counted } from '../../utils/plural';
-import { useImportJob, type ImportSummary } from '../../components/import/useImportJob';
-import { ImportProgressPanel } from '../../components/import/ImportProgressPanel';
+import { useBackgroundJob } from '../../hooks/useBackgroundJob';
+import { BackgroundJobPanel } from '../../components/jobs/BackgroundJobPanel';
+import { RosterImportReview, RosterImportOutcome, rosterImportDetails } from './roster/RosterImportJobViews';
 
 // Modular Roster Subcomponents
 import { useRosterQuery } from './roster/useRosterQuery';
@@ -32,7 +33,20 @@ import { RosterTable } from './roster/RosterTable';
 import { RosterBulkToolbar } from './roster/RosterBulkToolbar';
 import { LifecycleTransitionModal } from './roster/LifecycleTransitionModal';
 
-/** What `/assayers/roster/import` returns */
+/**
+ * The roster import runs as a background job (`ROSTER_IMPORT`) on the one national roster — every
+ * roster upload shares this scope, so the page finds its rehearsal or import after a refresh.
+ */
+const ROSTER_IMPORT_SCOPE: BackgroundJobScope = { type: 'ROSTER', id: null };
+
+/** How a summary is said on screen: a tone, a sentence, and one line per extra fact. */
+export interface ImportSummary {
+  tone: 'success' | 'warning' | 'error';
+  text: string;
+  notes?: string[];
+}
+
+/** What a roster import (or its rehearsal) reports — the job's `result.details`. */
 export interface RosterImportSummary {
   rowsRead: number;
   created: number;
@@ -120,11 +134,27 @@ export const AssayerRoster: React.FC<{
   // saves whatever filename the job reports, so nothing here needs to know it is a PDF.
   const { download: downloadPdf, busy: exportingPdf } = useQueuedExcelExport();
   const handleExportPdf = () => void downloadPdf('/reports/assayer-roster-pdf/jobs');
-  const [uploading, setUploading] = useState(false);
   const [overwriteConflicts, setOverwriteConflicts] = useState(false);
-  const rosterImport = useImportJob<RosterImportSummary>();
-  /** The rehearsal that must answer before the import is offered — queued and polled the same way. */
-  const rosterRehearsal = useImportJob<RosterImportSummary>();
+  /**
+   * The roster rehearsal and import, as the server has them. Read from `GET /jobs` on mount, so a
+   * refresh — or a hard refresh — mid-run shows the same run, and a rehearsal still waiting for its
+   * answer is offered again. Updated live by the socket.
+   */
+  const rosterJob = useBackgroundJob('ROSTER_IMPORT', ROSTER_IMPORT_SCOPE, { endpoint: '/assayers/roster/import' });
+  const rosterJobNow = rosterJob.job;
+  const uploading = rosterJob.upload.phase === 'uploading'
+    || (!!rosterJobNow && isBackgroundJobInFlight(rosterJobNow.status));
+  /** A finished run the operator closed; the next run shows again. */
+  const [dismissedJobId, setDismissedJobId] = useState<string | null>(null);
+  /** The roster list is re-read once when a real import lands — not on every render after. */
+  const refreshedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rosterJobNow || rosterJobNow.status !== 'SUCCEEDED') return;
+    if (rosterImportDetails(rosterJobNow)?.dryRun !== false) return;
+    if (refreshedFor.current === rosterJobNow.id) return;
+    refreshedFor.current = rosterJobNow.id;
+    refresh();
+  }, [rosterJobNow, refresh]);
 
   // Deep-link query param routing
   useEffect(() => {
@@ -151,19 +181,6 @@ export const AssayerRoster: React.FC<{
     const id = searchParams.get('register');
     if (id) void navigate(`/hr/roster/${encodeURIComponent(id)}?edit=1`, { replace: true });
   }, [searchParams, navigate]);
-
-  // Import finish synchronization
-  const refreshedForImport = useRef<string | null>(null);
-  useEffect(() => {
-    if (rosterImport.state.phase !== 'done') {
-      if (rosterImport.state.phase === 'idle') refreshedForImport.current = null;
-      return;
-    }
-    const key = rosterImport.state.fileName;
-    if (refreshedForImport.current === key) return;
-    refreshedForImport.current = key;
-    refresh();
-  }, [rosterImport.state, refresh]);
 
   useEffect(() => {
     setVisibleCount(200);
@@ -423,60 +440,40 @@ export const AssayerRoster: React.FC<{
 
   // Rehearsal & real import
   /**
-   * Rehearse the workbook, show what it would do, and import it only if the operator agrees.
+   * Upload the workbook for a rehearsal. The server stores it and answers at once; the rehearsal
+   * (the whole import, rolled back) runs in the background and ends waiting for review, where
+   * `RosterImportReview` shows what it would do and offers the real import.
    *
-   * The rehearsal was one awaited request, `POST /assayers/roster/import?dryRun=true`, with two
-   * faults. The server read `dryRun` from the form body, not the URL, so this "rehearsal" was queued
-   * as a REAL import before anyone had confirmed anything — and its 202 had no `rowsRead`, so the
-   * page then failed and showed an error while the import ran. And a true rehearsal is the whole
-   * import rolled back: minutes for a full roster, past the three-minute upload timeout. The flags
-   * now travel as form fields, and the rehearsal is queued and followed to its answer like the
-   * import is.
+   * The flags travel in the job's `params`, which the route reads — never in the URL, where an old
+   * page once put them and the "rehearsal" was run as a real import.
    */
   const handleUpload = async (file: File) => {
-    setUploading(true);
-    try {
-      const rehearsal = await rosterRehearsal.run('/assayers/roster/import', file, {
-        dryRun: 'true',
-        overwrite: String(overwriteConflicts),
-      });
-      // A failed check stays on screen in its own panel with the server's reason; a dismissed or
-      // abandoned one needs nothing said. Either way there is nothing to confirm.
-      if (rehearsal.phase !== 'done') return;
-      const dry = rehearsal.report;
-      rosterRehearsal.reset();
-      if (dry.dryRun !== true) {
-        // Offering "import" now would import it a second time.
-        setNotice({
-          tone: 'err',
-          text: 'The server imported this workbook instead of only checking it. Review the roster before uploading it again.',
-        });
-        return;
-      }
-      const proceed = await confirm({
-        title: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers from this workbook?`,
-        message: (
-          <div>
-            This will add <strong>{dry.created.toLocaleString('en-IN')}</strong> and update{' '}
-            <strong>{dry.updated.toLocaleString('en-IN')}</strong> appraisers.
-            {dry.skipped > 0 && (
-              <div style={{ marginTop: '6px', fontSize: 'var(--text-xs)' }}>
-                {dry.skipped} row(s) without appraiser code will be skipped.
-              </div>
-            )}
-          </div>
-        ),
-        confirmLabel: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers`,
-      });
-      if (!proceed) return;
-      await rosterImport.start('/assayers/roster/import', file, {
-        overwrite: String(overwriteConflicts),
-      });
-    } catch (e) {
-      setNotice({ tone: 'err', text: userMessage(e) });
-    } finally {
-      setUploading(false);
-    }
+    setDismissedJobId(null);
+    await rosterJob.start(file, { dryRun: true, overwrite: overwriteConflicts });
+  };
+
+  /**
+   * Import what the rehearsal checked: the same confirmation as before, then the reviewed rehearsal
+   * is committed on the server, which runs the real import over the same stored file.
+   */
+  const handleConfirmImport = async (dry: RosterImportSummary, jobId: string) => {
+    const proceed = await confirm({
+      title: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers from this workbook?`,
+      message: (
+        <div>
+          This will add <strong>{dry.created.toLocaleString('en-IN')}</strong> and update{' '}
+          <strong>{dry.updated.toLocaleString('en-IN')}</strong> appraisers.
+          {dry.skipped > 0 && (
+            <div style={{ marginTop: '6px', fontSize: 'var(--text-xs)' }}>
+              {dry.skipped} row(s) without appraiser code will be skipped.
+            </div>
+          )}
+        </div>
+      ),
+      confirmLabel: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers`,
+    });
+    if (!proceed) return;
+    await rosterJob.commit({ dryRun: false }, jobId);
   };
 
   const downloadTemplate = async () => {
@@ -497,19 +494,32 @@ export const AssayerRoster: React.FC<{
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       {confirmDialog}
 
-      <ImportProgressPanel
-        // Only while it runs or if it fails: a finished rehearsal's answer is the confirm dialog, and
-        // a "Roster imported — N new" panel for a run that saved nothing would say the opposite.
-        state={rosterRehearsal.state.phase === 'done' ? { phase: 'idle' } : rosterRehearsal.state}
-        onDismiss={rosterRehearsal.reset}
-        summarise={summariseRosterImport}
-        mode="rehearsal"
-      />
-      <ImportProgressPanel
-        state={rosterImport.state}
-        onDismiss={rosterImport.reset}
-        summarise={summariseRosterImport}
-      />
+      {/*
+        The roster run, as the server has it — the same after a refresh. Uploading, queued and
+        running show the shared job card (progress, "you can leave this page", cancel); a rehearsal
+        waiting for review shows what it would do and offers the import; a finished import says
+        what it did. A finished rehearsal (reviewed or discarded) needs nothing more said.
+      */}
+      {rosterJob.upload.phase !== 'idle' ? (
+        // Bytes still travelling (or refused on the way): only this tab has them.
+        <BackgroundJobPanel handle={rosterJob} />
+      ) : rosterJobNow?.status === 'AWAITING_REVIEW' ? (
+        <RosterImportReview
+          job={rosterJobNow}
+          onImport={(dry) => void handleConfirmImport(dry, rosterJobNow.id)}
+          onDiscard={() => void rosterJob.cancel(rosterJobNow.id)}
+        />
+      ) : rosterJobNow?.status === 'SUCCEEDED' && rosterImportDetails(rosterJobNow)?.dryRun === false ? (
+        rosterJobNow.id !== dismissedJobId && (
+          <RosterImportOutcome
+            job={rosterJobNow}
+            summarise={summariseRosterImport}
+            onDismiss={() => setDismissedJobId(rosterJobNow.id)}
+          />
+        )
+      ) : rosterJobNow && (isBackgroundJobInFlight(rosterJobNow.status) || rosterJobNow.status === 'FAILED') ? (
+        <BackgroundJobPanel handle={rosterJob} />
+      ) : null}
 
       {/* Alert Notices */}
       {bulkProgress && (
@@ -552,6 +562,7 @@ export const AssayerRoster: React.FC<{
             <button
               type="button"
               onClick={() => setNoticeExpanded((v) => !v)}
+              title={noticeExpanded ? 'Collapse the import summary' : `Expand to see all ${notice.details!.length} import details`}
               style={{
                 marginTop: '6px',
                 background: 'none',
@@ -723,6 +734,7 @@ export const AssayerRoster: React.FC<{
             type="button"
             onClick={() => setShowImport(false)}
             className="btn btn-secondary"
+            title="Close the import dialog without uploading"
             style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}
           >
             Close
@@ -749,6 +761,7 @@ export const AssayerRoster: React.FC<{
             type="checkbox"
             checked={overwriteConflicts}
             onChange={(e) => setOverwriteConflicts(e.target.checked)}
+            title="When on, values in the sheet overwrite existing records; when off, conflicts are filed for review"
             style={{ marginTop: '3px' }}
           />
           <span>

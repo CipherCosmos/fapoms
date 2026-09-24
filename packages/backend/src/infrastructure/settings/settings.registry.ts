@@ -19,6 +19,7 @@
  */
 
 import { CANONICAL_STATE_NAMES } from '@fapoms/shared';
+import { validatePublicUrl, validateSmtpHost } from './setting-validators';
 
 export type SettingType = 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron' | 'json';
 
@@ -62,6 +63,11 @@ export interface SettingDef {
    * nature is the other. Unset means "whatever my group is" — see `audienceOfSetting`.
    */
   audience?: SettingAudience;
+  /**
+   * A save-time check on the coerced value: return a message to refuse it, `null` to accept.
+   * Runs only when a value is saved here, never on the environment fallback.
+   */
+  validate?: (value: any) => string | null | Promise<string | null>;
 }
 
 /**
@@ -89,6 +95,7 @@ export const SETTINGS_GROUPS = [
   // (see feedback-roles.ts), so its SLA knobs follow the desk.
   { key: 'feedback', label: 'Support SLA', audience: 'technical', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
   { key: 'onboarding', label: 'Joining and identity', audience: 'technical', description: 'What an appraiser must prove about who they are before they can be activated, and how strictly it is enforced.' },
+  { key: 'rechecks', label: 'Re-checks over time', audience: 'business', description: 'How often a working appraiser is re-checked — background, police, credit and identity documents — how early HR is reminded, and how long an overdue check is allowed before they are held from new work.' },
   { key: 'field', label: 'In the field', audience: 'business', description: 'What the app enforces on an assayer while they are out on a job.' },
   { key: 'planning', label: 'Planning', audience: 'business', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
   { key: 'roster', label: 'Roster import', audience: 'business', description: 'How the appraiser roster spreadsheet is brought in.' },
@@ -250,6 +257,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: null,
     envVar: 'SMTP_HOST',
     applies: 'immediately',
+    validate: validateSmtpHost,
   },
   {
     key: 'email.smtpPort',
@@ -313,6 +321,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: 'http://localhost:5173',
     envVar: 'APP_PUBLIC_URL',
     applies: 'immediately',
+    validate: validatePublicUrl,
   },
 
   // ── SMS ─────────────────────────────────────────────────────────────────
@@ -645,6 +654,18 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     applies: 'immediately',
   },
   {
+    key: 'billing.tds194jThresholdRupees',
+    label: 'TDS starts once a year’s fees pass',
+    description: 'Section 194J annual threshold — confirm with your CA. No TDS is deducted from an assayer until their total fees in the financial year (April–March, Indian dates) go past this amount. The payment that takes them past it carries TDS on the whole year’s fees, earlier payments included; every payment after it is withheld at the normal rate. Voided payments do not count. Set 0 to withhold on every payment from the first rupee (the behaviour before this setting existed). Applies to payables booked, re-priced or approved from now on; paid payables keep what was withheld.',
+    group: 'billing',
+    type: 'number',
+    default: 50000,
+    min: 0,
+    max: 10000000,
+    unit: '₹',
+    applies: 'immediately',
+  },
+  {
     key: 'billing.tdsSection',
     label: 'TDS section quoted on statements',
     description: 'The Income-tax Act section the TDS you withhold from field workers is deducted under, printed on the PAN-wise TDS report. Payments to auditors for professional/technical work are usually 194J (10%); use 194C for payments to contractors. This is a label only — it does not change the amount withheld.',
@@ -767,6 +788,39 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     min: 50, max: 50_000, unit: 'metres',
     applies: 'immediately',
   },
+  {
+    key: 'field.arrivalRadiusMeters',
+    label: 'The app treats them as arrived within',
+    description: 'How close to the branch the phone must be before the app treats the assayer as having arrived — that is when it offers them the Check in button and notes their arrival time. It only decides when the app speaks up: checking in is still allowed anywhere inside the check-in distance above. If this is set larger than that distance, the check-in distance is used.',
+    group: 'field',
+    type: 'number',
+    default: 200,
+    min: 25, max: 2000, unit: 'metres',
+    applies: 'immediately',
+  },
+  // The arrival-time rule (owner decision 2026-09-24): when the phone's own "I arrived at" time is
+  // written as the check-in time instead of the moment the server received it. Both keys are read
+  // through the constants in `@fapoms/shared` check-in-rules.ts, which also hold the defaults.
+  {
+    key: 'field.checkInArrivalMaxAgeHours',
+    label: 'Accept the phone\'s arrival time for up to',
+    description: 'When an assayer checks in from somewhere with no signal, the check-in reaches us late. The app also sends the time the phone actually arrived, and we record that instead — but only if it is the same day, no older than this, and the phone\'s location history shows it at the branch around then. Anything older is recorded at the time it reached us. Set it lower to trust late check-ins less; the location-history check applies either way.',
+    group: 'field',
+    type: 'number',
+    default: 4,
+    min: 0, max: 24, unit: 'hours',
+    applies: 'immediately',
+  },
+  {
+    key: 'field.checkInArrivalTrailWindowMinutes',
+    label: 'Location history must show them at the branch within',
+    description: 'To accept the phone\'s arrival time, its location history must have a reading inside the check-in zone this close to that time, before or after. Wider accepts phones that record their position less often; narrower makes the arrival time harder to claim without really being there.',
+    group: 'field',
+    type: 'number',
+    default: 15,
+    min: 1, max: 120, unit: 'minutes',
+    applies: 'immediately',
+  },
   // `field.maxNegotiationRounds` and `field.maxCounterOfferTravelFee` lived here until in-app
   // fee negotiation was removed. Their orphaned DB rows are left in place (harmless, historical);
   // the limits endpoint still answers `maxNegotiationRounds: 0` as the old-APK kill-switch — see
@@ -775,7 +829,8 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     /**
      * The rollout gate for assayer invoicing — the flow where an assayer, invited by the desk,
      * first SEES the fees for their completed work, submits them as one invoice, and gains
-     * visible earnings only once the desk approves it. Off (the default) keeps the assayer's
+     * visible earnings once they have sent it (owner decision 2026-09-24; it was once the desk's
+     * approval). Off (the default) keeps the assayer's
      * statement in its full pre-gate shape and hides every invite control, so the code can ship
      * dark and the switch is flipped only once the mobile build that renders the invitation
      * states is distributed. Old apps degrade safely either way — the gated statement is a
@@ -784,7 +839,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
      */
     key: 'billing.assayerInvoicingEnabled',
     label: 'Assayer invoicing',
-    description: 'The invoicing round, which is how assayers are paid: the desk invites them to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and earnings appear only after the desk approves what they submitted. On by default, because this IS the payment flow. Switch it off only for a deployment whose field app predates the invoicing round — assayers there will not see their fees at all.',
+    description: 'The invoicing round, which is how assayers are paid: the desk invites them to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and their earnings appear as soon as they send the invoice. On by default, because this IS the payment flow. Switch it off only for a deployment whose field app predates the invoicing round — assayers there will not see their fees at all.',
     group: 'billing',
     type: 'boolean',
     default: true,
@@ -816,7 +871,8 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
       + 'enforcing immediately would have blocked every new joiner against a process the desk had '
       + 'never operated once. Move it to Enforce as soon as the identity queue on the roster is '
       + 'being worked. "Off" skips the check entirely. Nothing here stops work already assigned, '
-      + 'and no earlier joining stage is affected.',
+      + 'and no earlier joining stage is affected. Background verification is NOT governed by this '
+      + 'switch: a clear check and its uploaded report are always required to finish onboarding.',
     group: 'onboarding',
     type: 'select',
     options: [
@@ -835,6 +891,102 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
      */
     default: 'warn',
     envVar: 'IDENTITY_GATE_MODE',
+    applies: 'immediately',
+  },
+  // ── Checks done over time (2026-09-23) ──────────────────────────────────
+  // Read by ComplianceStandingService on every read — a change applies to the next person looked
+  // at, the next planning run and the next reminder sweep. See periodic-checks.ts in shared.
+  {
+    key: 'recheck.bgv.intervalMonths',
+    label: 'Background verification — repeat every',
+    description: 'How many months after the last background verification a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 24,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.police.intervalMonths',
+    label: 'Police verification — repeat every',
+    description: 'How many months after the last police verification a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 12,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.credit.intervalMonths',
+    label: 'Credit (CIBIL) check — repeat every',
+    description: 'How many months after the last credit check a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 12,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.identity.intervalMonths',
+    label: 'Identity documents re-check — repeat every',
+    description: 'How many months after the last identity-documents re-check a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 24,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.graceDays',
+    label: 'Re-check grace period',
+    description: 'Days after a re-check falls due before the appraiser is held from new work. During '
+      + 'these days they keep working and HR is reminded; after them, planning will not offer them and '
+      + 'no new assignment can be created for them until the check is recorded.',
+    group: 'rechecks',
+    type: 'number',
+    default: 30,
+    min: 0,
+    max: 365,
+    unit: 'days',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.remindDaysBefore',
+    label: 'Re-check reminder lead time',
+    description: 'How many days before a re-check falls due HR starts being reminded about it.',
+    group: 'rechecks',
+    type: 'number',
+    default: 30,
+    min: 0,
+    max: 180,
+    unit: 'days',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.firstRoundDueOn',
+    label: 'First re-check due by (YYYY-MM-DD)',
+    description: 'For a working appraiser who has never had a given check recorded, the date that '
+      + 'first check falls due. The roster predates these checks, so this is a date you choose rather '
+      + 'than "today" — otherwise the whole field would be held from work after one grace period.',
+    group: 'rechecks',
+    type: 'string',
+    default: '2026-12-31',
     applies: 'immediately',
   },
   {
@@ -1317,11 +1469,38 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     description: 'How long an emailed self-registration link stays valid before a candidate must be re-invited from the interview log.',
     group: 'registration', type: 'number', default: 72, min: 1, max: 720, unit: 'hours', applies: 'immediately',
   },
+  /**
+   * Invite links that open the field app instead of the browser (2026-09-24). Android checks
+   * `https://<host>/.well-known/assetlinks.json` for the app's package and signing-certificate
+   * fingerprint; iOS checks `/.well-known/apple-app-site-association` for Team ID + bundle id. Both
+   * files are served by `AppLinksController` from these two values. Not secrets — both files are
+   * public by design.
+   */
+  {
+    key: 'registration.androidAppCertSha256',
+    label: 'Android app signing fingerprint',
+    description: 'The SHA-256 fingerprint of the certificate the field app is signed with, so invite links open the app on Android instead of the browser. Change it only if the app is ever signed with a different key (for example after moving to Google Play app signing, which re-signs the app). Several can be listed, separated by commas.',
+    group: 'registration', type: 'string',
+    default: '65:EC:61:13:9B:44:E5:07:96:8E:92:78:37:F4:05:F1:42:BA:8D:A3:A3:0B:AA:64:90:24:B9:07:BD:17:A6:23',
+    applies: 'immediately',
+  },
+  {
+    key: 'registration.iosAppTeamId',
+    label: 'Apple Team ID for the iPhone app',
+    description: 'The 10-character Apple Developer Team ID the iPhone app is published under. Until it is filled in, invite links open in the browser on iPhones (they still work there). Android is not affected by this.',
+    group: 'registration', type: 'string', default: '', applies: 'immediately',
+  },
   {
     key: 'registration.otpResendCooldownSeconds',
     label: 'OTP resend cooldown',
     description: 'How long a candidate must wait before requesting another mobile verification code on the same registration link.',
     group: 'registration', type: 'number', default: 60, min: 15, max: 600, unit: 'seconds', applies: 'immediately',
+  },
+  {
+    key: 'references.notifyOnApproval',
+    label: 'Tell referees when a candidate is approved',
+    description: 'When an application is approved, each person the candidate named as a reference is told that HR may call them — by email where there is an address, and by text where there is a mobile number and the text has a registered DLT template. Anybody who could not be reached is shown as such on the record, where HR can send it again. Switch off to contact referees only by hand.',
+    group: 'registration', type: 'boolean', default: true, applies: 'immediately',
   },
   // ── Email Templates ───────────────────────────────────────────────────────
   {
@@ -1352,6 +1531,18 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     key: 'email.template.application-rejected',
     label: 'Template: Application Rejected',
     description: 'Versioned configuration and overrides for application rejection email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.application-info-requested',
+    label: 'Template: Application Needs Attention',
+    description: 'Versioned configuration and overrides for the email listing what HR asked a candidate to fix.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.reference-notice',
+    label: 'Template: Reference Heads-up',
+    description: 'Versioned configuration and overrides for the email telling a referee that HR may call them.',
     group: 'email_templates', type: 'json', default: null, applies: 'immediately',
   },
   {

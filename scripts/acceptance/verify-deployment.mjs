@@ -529,7 +529,7 @@ async function check310(admin, prodInferred) {
     return { status: r.status, body: j };
   };
 
-  const clean = await post('control.pdf', 'application/pdf', '%PDF-1.4\n% clean control file for deployment certification\n');
+  const clean = await post('control.pdf', 'application/pdf', '%PDF-1.4\n% clean control file for deployment certification\n%%EOF\n');
   const infected = await post('eicar.pdf', 'application/pdf', EICAR);
 
   const rejected = infected.status === 400 && String(infected.body?.code ?? '') === 'UPLOAD_REJECTED';

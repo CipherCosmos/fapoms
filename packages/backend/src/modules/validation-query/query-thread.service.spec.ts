@@ -8,6 +8,7 @@ import { ValidationCaseEntity } from '../validation/validation-case.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { ValidationQueryStatus } from '@fapoms/shared';
 
 /**
@@ -40,6 +41,7 @@ describe('QueryThreadService.postMessage', () => {
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
         { provide: NotificationDispatchService, useValue: dispatch },
         { provide: DomainEventPublisher, useValue: publisher },
+        { provide: RegionGuardService, useValue: { getUserRegions: jest.fn(), assertRegionAllowedStaged: jest.fn() } },
       ],
     }).compile();
     service = module.get(QueryThreadService);

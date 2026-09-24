@@ -1,9 +1,9 @@
 import {
-  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { lookupIfsc, type IfscLookupResult } from '../geo/ifsc-lookup.helper'; import * as xlsx from 'xlsx'; import {   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, stateFromAddressAndPincode, canonicalStateName, canonicalState, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked, canTransitionAssayerLifecycle, EventCategory,
+  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { lookupIfsc, type IfscLookupResult } from '../geo/ifsc-lookup.helper'; import * as xlsx from 'xlsx'; import { isBankAccountNumber, normaliseBankAccountNumber, BANK_ACCOUNT_NUMBER_RULE,   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, stateFromAddressAndPincode, canonicalStateName, canonicalState, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked, canTransitionAssayerLifecycle, EventCategory,
   businessDateKey,
 } from '@fapoms/shared';
 import {
-  rowReader, parseSheet, describeMissingColumn, normaliseHeader, BLANK_HEADER, ParsedSheet,
+  rowReader, parseSheet, describeMissingColumn, normaliseHeader, BLANK_HEADER, ParsedSheet, readWorkbook,
 } from '../../core/excel/sheet-reader';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerService } from './assayer.service';
@@ -35,6 +35,24 @@ export interface RosterImportSummary {
   notes: string[];
   /** Set when the run was a rehearsal — nothing was written. */
   dryRun: boolean;
+}
+
+export interface RosterImportOptions {
+  dryRun?: boolean;
+  sheetName?: string;
+  overwrite?: boolean;
+  fileName?: string;
+  /**
+   * Told where the run has got to: once before the first row, between rows, once after the last,
+   * and at the post-commit lifecycle step. The background job (`roster-import.job.ts`) hands in its
+   * throttled `ctx.progress`, so calling it per row costs a function call.
+   */
+  onProgress?: (processed: number, total: number, stage: string) => Promise<void> | void;
+  /**
+   * Called between rows, inside the import's one transaction. Throwing from it (a cancelled job)
+   * rolls the whole run back — nothing is left half-written.
+   */
+  checkpoint?: () => Promise<void>;
 }
 
 /**
@@ -220,7 +238,7 @@ export class RosterImportService {
     file: Buffer,
     sheetName?: string,
   ): { sheet: xlsx.WorkSheet; parsed: ParsedSheet } {
-    const workbook = xlsx.read(file, { type: 'buffer', cellDates: true });
+    const workbook = readWorkbook(file, { cellDates: true });
 
     // Same header-row scan either way — an explicit sheetName only narrows WHICH sheet is
     // scanned, not whether a title row above the real headers is found on it. This used to
@@ -263,9 +281,12 @@ export class RosterImportService {
   async importAssayerSheet(
     file: Buffer,
     actorId: string,
-    options: { dryRun?: boolean; sheetName?: string; overwrite?: boolean; fileName?: string } = {},
+    options: RosterImportOptions = {},
   ): Promise<RosterImportSummary> {
     const dryRun = options.dryRun ?? false;
+    const onProgress = options.onProgress;
+    const checkpoint = options.checkpoint;
+    const rowStage = dryRun ? 'Checking rows' : 'Importing rows';
     // Default OFF: a sheet value that disagrees with what is already on file is filed as a
     // review issue rather than applied. See `resolveOverwritableField`.
     const overwrite = options.overwrite ?? false;
@@ -425,7 +446,7 @@ export class RosterImportService {
        * started it.
        *
        * NOT from the ambient request context, and that is the point. A roster import is queued:
-       * `RosterImportWorker` runs it in a Bull job, where there is no request and no principal to
+       * `RosterImportJob` runs it in a background worker, where there is no request and no principal to
        * read a tenant off. `TenantContext` says exactly this — "Background work that touches
        * tenant-owned data must carry the organisation id explicitly in its job payload and pass it
        * down" — and `actorId` is what this job carries, so the organisation is looked up from the
@@ -460,7 +481,17 @@ export class RosterImportService {
         for (const person of found) existingByCode.set(person.assayerCode, person);
       }
 
+      await onProgress?.(0, rows.length, rowStage);
       for (const [index, row] of rows.entries()) {
+        /**
+         * Between rows, inside the transaction — and that is safe here, unlike in most importers:
+         * every write of this run goes through this one transaction, so a stop thrown now rolls
+         * ALL of it back (the same way the rehearsal's `DryRunComplete` does). A cancelled import
+         * leaves the roster exactly as it found it; nothing after the commit (lifecycle moves,
+         * geocoding, the audit row) has happened yet.
+         */
+        if (checkpoint && index > 0) await checkpoint();
+        if (onProgress && index > 0) await onProgress(index, rows.length, rowStage);
         // +2: one for the header, one because a spreadsheet's first data row is row 2 to the
         // person who will go and look at it.
         const sourceRow = index + 2;
@@ -613,6 +644,8 @@ export class RosterImportService {
         if (issues.length) await this.saveIssues(manager, issues, assayerId, code);
       }
 
+      await onProgress?.(rows.length, rows.length, rowStage);
+
       for (const [pair, kinds] of duplicatePairs) {
         summary.notes.push(
           `${pair} share the same ${[...kinds].join(', ')} — likely one person registered under two codes. `
@@ -663,6 +696,7 @@ export class RosterImportService {
      * queued moves were checked for reachability but never actually run.
      */
     if (!dryRun && pendingTransitions.length > 0 && this.assayerService) {
+      await onProgress?.(rows.length, rows.length, 'Applying lifecycle changes the sheet reports');
       const idsByTarget = new Map<AssayerLifecycleStatus, string[]>();
       for (const { id, to } of pendingTransitions) {
         const ids = idsByTarget.get(to) ?? [];
@@ -1207,9 +1241,17 @@ export class RosterImportService {
           + 'has been left as it was rather than overwriting the real one. Reveal the field on the '
           + 'record and copy the full number if it needs changing.',
       });
+    } else if (rawAccount !== null && !isBankAccountNumber(rawAccount)) {
+      // The same shape rule the API now holds every write to — reported, and the old value kept,
+      // like every other unusable cell. A payout destination is not something to guess at.
+      issues.push({
+        sourceSheet: sheet, sourceRow, sourceColumn: 'A/c Number',
+        rawValue: rawAccount.slice(0, 100),
+        reason: `${BANK_ACCOUNT_NUMBER_RULE} This cell does not, so it was not imported.`,
+      });
     } else {
       a.bankAccountNumber = this.resolveOverwritableField(
-        a.bankAccountNumber, rawAccount, overwrite,
+        a.bankAccountNumber, rawAccount === null ? null : normaliseBankAccountNumber(rawAccount), overwrite,
         { issues, sourceRow, sheet, column: 'A/c Number', label: 'Bank Account' },
       );
     }

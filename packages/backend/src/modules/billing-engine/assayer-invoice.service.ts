@@ -6,13 +6,13 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, EntityManager } from 'typeorm';
+import { Repository, In, EntityManager, Raw } from 'typeorm';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { isUniqueViolation } from '../../infrastructure/database/unique-violation';
 import { AssayerInvoiceEntity } from './assayer-invoice.entity';
 import { AssayerPayableEntity } from './payable.entity';
 import { ASSAYER_INVOICE_ELIGIBLE_SQL } from './assayer-invoice-eligibility';
-import { BillingEngineService, billingPageWindow, BillingPage } from './billing-engine.service';
+import { BillingEngineService, billingPageWindow, BillingPage, isApprovedBill } from './billing-engine.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -20,7 +20,8 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { round2, MONEY_EPSILON } from './assignment-money';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
-import { AssayerInvoiceStatus, AssayerPayableStatus, BillingEntityType, EventCategory, AssayerInvoiceInvitation, AssayerInvoiceLine, AssayerInvoiceSummary, AssayerInvoiceInviteOutcome, businessDateKey } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
+import { AssayerInvoiceStatus, AssayerPayableStatus, BillingEntityType, EventCategory, AssayerInvoiceInvitation, AssayerInvoiceLine, AssayerInvoiceSummary, AssayerInvoiceInviteOutcome, businessDateKey, hodRejectReasonProblem } from '@fapoms/shared';
 
 /**
  * The assayer-invoice lifecycle: invite → submit → approve (and cancel).
@@ -45,6 +46,26 @@ import { AssayerInvoiceStatus, AssayerPayableStatus, BillingEntityType, EventCat
  * All writes ride `UnitOfWork` transactions with the rows write-locked, exactly as
  * `billing-engine.service.ts` does; history rows go through the engine's one `history` writer.
  */
+/** The shortest reason accepted when staff confirm a bill for the assayer (audit F5). */
+export const SUBMIT_ON_BEHALF_REASON_MIN = 10;
+
+/**
+ * The refusal an office approval gets when re-deciding the lines' TDS moved the bill's net total
+ * (audit F4 no-PAN re-rate, F15 s.194J threshold). The assayer confirmed a figure; they are not
+ * paid a different one without confirming it — the bill goes back to them as a new revision.
+ */
+export const BILL_TAX_RECALCULATED_MESSAGE =
+  'The bill amount changed because tax was recalculated — sent back to the assayer to confirm';
+
+type RevisionNotice = { assayerId: string; invoiceId: string; invoiceNumber: string; count: number; revision: number };
+
+/** Thrown inside the approval transaction so it rolls back whole; handled by `approve`. */
+class BillTaxMovedSignal extends Error {
+  constructor(readonly invoiceNumber: string, readonly totalBefore: number, readonly totalAfter: number) {
+    super('bill tax moved at approval');
+  }
+}
+
 @Injectable()
 export class AssayerInvoiceService {
   private readonly logger = new Logger(AssayerInvoiceService.name);
@@ -332,7 +353,24 @@ export class AssayerInvoiceService {
    * stale screen) and is refused, because silently swallowing it would hide that two
    * submissions were attempted.
    */
-  async submit(assayerId: string, clientRequestId: string): Promise<AssayerInvoiceSummary> {
+  async submit(
+    assayerId: string,
+    clientRequestId: string,
+    /**
+     * Set when billing staff record the confirmation FOR the assayer (the desk-side road, e.g. an
+     * assayer who confirmed on the phone) — audit F5, 2026-09-24. The trail then names the staff
+     * member who did it and why; it used to record the assayer's own id as the actor, so a desk
+     * submission read, forever after, as the assayer's own consent.
+     */
+    onBehalf?: { staffId: string; reason: string },
+  ): Promise<AssayerInvoiceSummary> {
+    const actorId = onBehalf?.staffId ?? assayerId;
+    const onBehalfReason = onBehalf?.reason?.trim() ?? null;
+    if (onBehalf && (!onBehalfReason || onBehalfReason.length < SUBMIT_ON_BEHALF_REASON_MIN)) {
+      throw new BadRequestException(
+        `Say why you are confirming this bill for the assayer (at least ${SUBMIT_ON_BEHALF_REASON_MIN} characters) — the reason is written to the bill's history.`,
+      );
+    }
     let notify: { invoiceId: string; invoiceNumber: string; count: number; total: number } | null = null;
     const saved = await this.inTx(async (m, emit) => {
       const inv = await m.findOne(AssayerInvoiceEntity, {
@@ -352,14 +390,19 @@ export class AssayerInvoiceService {
       inv.submittedAt = new Date();
       inv.submittedRequestId = clientRequestId;
       inv.confirmedVersion = inv.revision ?? 1;
-      inv.updatedBy = assayerId;
+      inv.updatedBy = actorId;
       const out = await m.save(inv);
 
-      await this.engine.history(assayerId, {
+      await this.engine.history(actorId, {
         assayerId,
         entityType: BillingEntityType.ASSAYER_INVOICE, entityId: out.id, action: 'ASSAYER_INVOICE_SUBMITTED',
         fromState: AssayerInvoiceStatus.INVITED, toState: AssayerInvoiceStatus.SUBMITTED,
-        newValue: { submittedRequestId: clientRequestId, lineCount: out.lineCount, totalAmount: Number(out.totalAmount) },
+        newValue: {
+          submittedRequestId: clientRequestId, lineCount: out.lineCount, totalAmount: Number(out.totalAmount),
+          submittedBy: onBehalf ? 'STAFF_ON_BEHALF' : 'ASSAYER',
+          ...(onBehalf ? { onBehalfOfAssayerId: assayerId, staffId: onBehalf.staffId } : {}),
+        },
+        reason: onBehalf ? `Confirmed for the assayer by staff: ${onBehalfReason}` : null,
       }, m);
       // `const manager = m` + shorthand `{ manager }`: the audit-write-scope guard checks this
       // exact spelling on the closing line — same alias the sibling service uses for it.
@@ -371,9 +414,14 @@ export class AssayerInvoiceService {
         entityId: out.id,
         previousState: AssayerInvoiceStatus.INVITED,
         newState: AssayerInvoiceStatus.SUBMITTED,
-        userId: assayerId,
-        remarks: `Assayer submitted invoice ${out.invoiceNumber} (${out.lineCount} line(s), ₹${Number(out.totalAmount)})`,
-        metadata: { invoiceId: out.id, invoiceNumber: out.invoiceNumber, assayerId, lineCount: out.lineCount, totalAmount: Number(out.totalAmount) },
+        userId: actorId,
+        remarks: onBehalf
+          ? `Staff confirmed invoice ${out.invoiceNumber} for assayer ${assayerId} (${out.lineCount} line(s), ₹${Number(out.totalAmount)}): ${onBehalfReason}`
+          : `Assayer submitted invoice ${out.invoiceNumber} (${out.lineCount} line(s), ₹${Number(out.totalAmount)})`,
+        metadata: {
+          invoiceId: out.id, invoiceNumber: out.invoiceNumber, assayerId, lineCount: out.lineCount, totalAmount: Number(out.totalAmount),
+          submittedBy: onBehalf ? 'STAFF_ON_BEHALF' : 'ASSAYER',
+        },
       }, { manager });
       emit('billing:assayer-invoice-changed', { invoiceId: out.id, assayerId, status: out.status });
       notify = { invoiceId: out.id, invoiceNumber: out.invoiceNumber, count: out.lineCount, total: Number(out.totalAmount) };
@@ -392,7 +440,7 @@ export class AssayerInvoiceService {
             type: 'ASSAYER_INVOICE_SUBMITTED',
             entityType: 'ASSAYER_INVOICE',
             entityId: n.invoiceId,
-            actorUserId: assayerId,
+            actorUserId: actorId,
             dedupeKey: `ASSAYER_INVOICE_SUBMITTED:${n.invoiceId}:${clientRequestId}`,
             payload: {
               assayerName: rows?.[0]?.display_name ?? 'An assayer',
@@ -421,11 +469,62 @@ export class AssayerInvoiceService {
    * silent re-total, because the assayer consented to the figures as shown.
    */
   async approve(invoiceId: string, actorId: string): Promise<AssayerInvoiceSummary> {
-    let notify: { invoiceNumber: string; count: number; assayerId: string } | null = null;
-    const saved = await this.inTx(async (m, emit) => {
+    let notify: { invoiceNumber: string; count: number; assayerId: string; total: number; at: number } | null = null;
+    /** What the approver must know that did not refuse the approval (audit F3) — returned with the bill. */
+    const warnings: string[] = [];
+    let saved: AssayerInvoiceEntity;
+    try {
+      saved = await this.approveInTx(invoiceId, actorId, warnings, (n) => { notify = n; });
+    } catch (err) {
+      if (!(err instanceof BillTaxMovedSignal)) throw err;
+      await this.sendBackForTaxChange(invoiceId, actorId, err);
+      throw withCode(
+        new ConflictException(`${BILL_TAX_RECALCULATED_MESSAGE} (${err.invoiceNumber}: ₹${err.totalBefore} confirmed, ₹${err.totalAfter} after tax).`),
+        'BILL_TAX_RECALCULATED',
+      );
+    }
+    return this.afterApprove(saved, actorId, notify, warnings);
+  }
+
+  /**
+   * The bill goes back to its assayer because approval re-decided its lines' tax (see
+   * `BILL_TAX_RECALCULATED_MESSAGE`). In ONE transaction: each Due line takes its new TDS (with the
+   * line's own PAYABLE_TDS_RECOMPUTED history), then the bill is revised exactly as `reviseInvoice`
+   * revises it — superseded, a new revision INVITED at the new figures — and the assayer is asked to
+   * confirm it. Nothing is approved.
+   */
+  private async sendBackForTaxChange(invoiceId: string, actorId: string, moved: BillTaxMovedSignal): Promise<void> {
+    const reason = `${BILL_TAX_RECALCULATED_MESSAGE}: net ₹${moved.totalBefore} → ₹${moved.totalAfter}`;
+    const revision = await this.inTx(async (m, emit) => {
+      // The bill before its lines — the order `approve` takes them in.
+      await m.findOne(AssayerInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
+      const lines = await m
+        .createQueryBuilder(AssayerPayableEntity, 'p')
+        .setLock('pessimistic_write')
+        .where('p.assayer_invoice_id = :invoiceId AND p.is_active = true', { invoiceId })
+        .orderBy('p.id', 'ASC')
+        .getMany();
+      const current: AssayerPayableEntity[] = [];
+      for (const line of lines) {
+        current.push(line.status === AssayerPayableStatus.PENDING
+          ? (await this.engine.reTaxDueLineForRevisionInTx(m, line.id, actorId)).payable
+          : line);
+      }
+      return this.reviseInTx(m, emit, invoiceId, actorId, reason, current);
+    });
+    this.notifyRevision(revision.notify, actorId, 'TAX_RECALCULATED');
+  }
+
+  private async approveInTx(
+    invoiceId: string,
+    actorId: string,
+    warnings: string[],
+    setNotify: (n: { invoiceNumber: string; count: number; assayerId: string; total: number; at: number }) => void,
+  ): Promise<AssayerInvoiceEntity> {
+    return this.inTx(async (m, emit) => {
       const inv = await m.findOne(AssayerInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
       if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
-      if (inv.status === AssayerInvoiceStatus.APPROVED) return inv; // the double-press — no-op
+      if (isApprovedBill(inv.status)) return inv; // the double-press — no-op
       if (inv.status === AssayerInvoiceStatus.PAID) {
         throw new ConflictException(`${inv.invoiceNumber} is already paid.`);
       }
@@ -485,18 +584,36 @@ export class AssayerInvoiceService {
       // segregation-of-duties, history, audit and the payout-changed event all included; only
       // the per-payable push is suppressed in favour of one invoice-level notification.
       // `bypassInvoiceGuard`: THIS invoice is the active one those lines ride.
+      const tdsDelta = { tds: 0, total: 0 };
       for (const line of lines) {
         if (line.status === AssayerPayableStatus.PENDING) {
           await this.engine.approvePayableInTx(m, emit, line.id, actorId, {
             suppressNotification: true,
             bypassInvoiceGuard: true,
+            onWarning: (w) => { if (!warnings.includes(w)) warnings.push(w); },
+            onTdsChange: (d) => { tdsDelta.tds += d.tds; tdsDelta.total += d.total; },
           });
         }
+      }
+
+      /**
+       * Approval can re-decide a line's TDS (audit F4/F15: the PAN is on file now, or the year's
+       * s.194J threshold position moved), which moves what the assayer is paid. The assayer
+       * CONFIRMED the bill's figure, so a different net total is never approved over their head.
+       */
+      if (Math.abs(tdsDelta.total) > MONEY_EPSILON / 2) {
+        // NOT approved silently at a figure the assayer never saw: the whole approval rolls back,
+        // and the bill goes back to them as a revision at the new figure (handled below).
+        const totalBefore = Number(inv.totalAmount);
+        throw new BillTaxMovedSignal(inv.invoiceNumber, totalBefore, round2(totalBefore + tdsDelta.total));
       }
 
       inv.status = AssayerInvoiceStatus.APPROVED;
       inv.approvedAt = new Date();
       inv.approvedBy = actorId;
+      // The office's approval is the first of two (2026-09-24); the HOD's is always given after it.
+      inv.hodApprovedAt = null;
+      inv.hodApprovedBy = null;
       inv.updatedBy = actorId;
       const out = await m.save(inv);
 
@@ -521,13 +638,130 @@ export class AssayerInvoiceService {
         metadata: { invoiceId: out.id, invoiceNumber: out.invoiceNumber, assayerId: out.assayerId, lineCount: out.lineCount, totalAmount: Number(out.totalAmount) },
       }, { manager });
       emit('billing:assayer-invoice-changed', { invoiceId: out.id, assayerId: out.assayerId, status: out.status });
-      notify = { invoiceNumber: out.invoiceNumber, count: out.lineCount, assayerId: out.assayerId };
+      // Every line already paid (paid directly before this bill reached approval): settled now, not
+      // left "approved" with nothing to pay (audit F10).
+      await this.engine.settleAssayerInvoiceIfPaidInTx(m, emit, out.id, actorId);
+      const settled = await m.findOne(AssayerInvoiceEntity, { where: { id: out.id } });
+      if (settled?.status === AssayerInvoiceStatus.PAID) return settled;
+      setNotify({
+        invoiceNumber: out.invoiceNumber, count: out.lineCount, assayerId: out.assayerId,
+        total: Number(out.totalAmount), at: out.approvedAt ? new Date(out.approvedAt).getTime() : Date.now(),
+      });
       return out;
+    });
+  }
+
+  private afterApprove(
+    saved: AssayerInvoiceEntity,
+    actorId: string,
+    notify: { invoiceNumber: string; count: number; assayerId: string; total: number; at: number } | null,
+    warnings: string[],
+  ): AssayerInvoiceSummary {
+    if (notify) {
+      /*
+        The office's approval now waits for the HOD (2026-09-24), so it is the HOD who hears about
+        it. The assayer's "approved" (ASSAYER_INVOICE_APPROVED) moved to `hodApprove`: it is sent
+        when the bill is actually cleared for payment, never as a promise the HOD could still undo.
+      */
+      const n = notify as { invoiceNumber: string; count: number; total: number; at: number };
+      this.engine.notifyFinalApprovalNeeded({
+        entityType: 'ASSAYER_INVOICE',
+        entityId: saved.id,
+        actorUserId: actorId,
+        what: `Assayer bill ${n.invoiceNumber} (${n.count} line${n.count === 1 ? '' : 's'})`,
+        amount: n.total,
+        version: n.at,
+      });
+    }
+    return warnings.length ? { ...this.toSummary(saved), warnings } : this.toSummary(saved);
+  }
+
+  // -----------------------------------------------------------------------
+  // The HOD's final approval of a bill (owner, 2026-09-24)
+  // -----------------------------------------------------------------------
+
+  /**
+   * The HOD approves an office-approved bill: APPROVED → HOD_APPROVED, and every approved,
+   * still-owed line gets the final approval in the SAME transaction — through the engine's
+   * `hodApprovePayableInTx`, so the checks, history, audit and events are the payout path's own.
+   * Only after this can any of the bill's payouts be paid.
+   *
+   * The HOD may not be the office approver of the bill (nor of any line on it): checked by
+   * `assertSegregationOfDuties` under `security.segregationOfDuties.mode`, refused and audited.
+   */
+  async hodApprove(invoiceId: string, actorId: string): Promise<AssayerInvoiceSummary> {
+    let notify: { invoiceNumber: string; count: number; assayerId: string } | null = null;
+    const saved = await this.inTx(async (m, emit) => {
+      const inv = await m.findOne(AssayerInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
+      if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
+      if (inv.status === AssayerInvoiceStatus.HOD_APPROVED) return inv; // the double-press
+      if (inv.status !== AssayerInvoiceStatus.APPROVED) {
+        throw new ConflictException(
+          inv.status === AssayerInvoiceStatus.SUBMITTED
+            ? `${inv.invoiceNumber} has not been approved by the office yet.`
+            : `${inv.invoiceNumber} is ${inv.status.toLowerCase()} — there is nothing for the HOD to approve.`,
+        );
+      }
+      await this.engine.assertSegregationOfDuties(
+        actorId,
+        inv.approvedBy,
+        `approve assayer bill ${inv.invoiceNumber} at the office and also give it the final approval`,
+        { entityType: 'ASSAYER_INVOICE', entityId: inv.id, payableNumber: inv.invoiceNumber },
+      );
+
+      const lines = await m
+        .createQueryBuilder(AssayerPayableEntity, 'p')
+        .setLock('pessimistic_write')
+        .where('p.assayer_invoice_id = :invoiceId AND p.is_active = true', { invoiceId: inv.id })
+        .orderBy('p.id', 'ASC')
+        .getMany();
+      const held = lines.filter((l) => l.onHold && l.status === AssayerPayableStatus.APPROVED);
+      if (held.length) {
+        throw new ConflictException(
+          `${held.map((l) => l.payableNumber).join(', ')} on hold — release the hold, or void the line, before the bill's final approval.`,
+        );
+      }
+      let approvedLines = 0;
+      for (const line of lines) {
+        if (line.status === AssayerPayableStatus.APPROVED && !line.hodApprovedAt) {
+          await this.engine.hodApprovePayableInTx(m, emit, line.id, actorId, { viaBill: true });
+          approvedLines++;
+        }
+      }
+
+      inv.status = AssayerInvoiceStatus.HOD_APPROVED;
+      inv.hodApprovedAt = new Date();
+      inv.hodApprovedBy = actorId;
+      inv.updatedBy = actorId;
+      const out = await m.save(inv);
+      await this.engine.history(actorId, {
+        assayerId: out.assayerId,
+        entityType: BillingEntityType.ASSAYER_INVOICE, entityId: out.id, action: 'ASSAYER_INVOICE_HOD_APPROVED',
+        fromState: AssayerInvoiceStatus.APPROVED, toState: AssayerInvoiceStatus.HOD_APPROVED,
+        newValue: { lineCount: out.lineCount, linesApproved: approvedLines, totalAmount: Number(out.totalAmount), officeApprovedBy: out.approvedBy },
+      }, m);
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSAYER_INVOICE_HOD_APPROVED',
+        entityType: 'ASSAYER_INVOICE',
+        entityId: out.id,
+        previousState: AssayerInvoiceStatus.APPROVED,
+        newState: AssayerInvoiceStatus.HOD_APPROVED,
+        userId: actorId,
+        remarks: `Final approval (HOD) of assayer bill ${out.invoiceNumber} (${out.lineCount} line(s), ₹${Number(out.totalAmount)}) — cleared for payment`,
+        metadata: { invoiceId: out.id, invoiceNumber: out.invoiceNumber, assayerId: out.assayerId, officeApprovedBy: out.approvedBy, totalAmount: Number(out.totalAmount) },
+      }, { manager });
+      emit('billing:assayer-invoice-changed', { invoiceId: out.id, assayerId: out.assayerId, status: out.status });
+      notify = { invoiceNumber: out.invoiceNumber, count: out.lineCount, assayerId: out.assayerId };
+      // A bill whose lines were all paid before its final approval is settled by it (audit F10).
+      await this.engine.settleAssayerInvoiceIfPaidInTx(m, emit, out.id, actorId);
+      const settled = await m.findOne(AssayerInvoiceEntity, { where: { id: out.id } });
+      return settled?.status === AssayerInvoiceStatus.PAID ? settled : out;
     });
 
     if (notify) {
-      // Count-only body (the catalog keeps ₹ out of assayer pushes); amounts are on the
-      // statement, which approval has just unlocked.
+      // Count-only body (the catalog keeps ₹ out of assayer pushes); amounts are on the statement.
       const n = notify as { invoiceNumber: string; count: number; assayerId: string };
       this.notificationDispatch.emitSafe({
         type: 'ASSAYER_INVOICE_APPROVED',
@@ -539,6 +773,131 @@ export class AssayerInvoiceService {
         payload: { count: n.count, invoiceNumber: n.invoiceNumber },
       });
     }
+    return this.toSummary(saved);
+  }
+
+  /**
+   * The HOD sends a bill back to the office, with the reason: APPROVED → SUBMITTED.
+   *
+   * Back to exactly where the office found it. The assayer's confirmation still stands — they
+   * confirmed THESE figures, and nothing about them changed (`confirmedVersion` is untouched; a
+   * correction is still a revision, which asks them again). The office's approval is undone on the
+   * bill and on every line it approved: the lines return to PENDING with their approver and the
+   * bank destination frozen at that approval cleared, exactly the fields approval set. The office
+   * then approves again, revises, or cancels.
+   *
+   * Refused when any line has money against it (a bill part-paid before the HOD step existed) — a
+   * line that paid cannot be un-approved. Refused, too, when the assayer already has another bill
+   * out (the one-open-bill-per-assayer rule): that one has to be dealt with first.
+   */
+  async hodReject(invoiceId: string, actorId: string, reason: string): Promise<AssayerInvoiceSummary> {
+    const problem = hodRejectReasonProblem(reason);
+    if (problem) throw new BadRequestException(problem);
+    const why = reason.trim();
+    let officeApprover: string | null = null;
+    let saved: AssayerInvoiceEntity;
+    try {
+      saved = await this.inTx(async (m, emit) => {
+        const inv = await m.findOne(AssayerInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
+        if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
+        if (inv.status !== AssayerInvoiceStatus.APPROVED) {
+          throw new ConflictException(
+            inv.status === AssayerInvoiceStatus.HOD_APPROVED
+              ? `${inv.invoiceNumber} already has the final approval. To stop a payout on it, put it on hold or void it.`
+              : `${inv.invoiceNumber} is ${inv.status.toLowerCase()} — there is nothing for the HOD to send back.`,
+          );
+        }
+        const lines = await m
+          .createQueryBuilder(AssayerPayableEntity, 'p')
+          .setLock('pessimistic_write')
+          .where('p.assayer_invoice_id = :invoiceId AND p.is_active = true', { invoiceId: inv.id })
+          .orderBy('p.id', 'ASC')
+          .getMany();
+        const moneyMoved = lines.filter((l) => l.status === AssayerPayableStatus.PAID || Number(l.paidAmount) > 0);
+        if (moneyMoved.length) {
+          throw new ConflictException(
+            `${moneyMoved.map((l) => l.payableNumber).join(', ')} already paid on ${inv.invoiceNumber} — the bill cannot go back to the office. Hold or void the unpaid lines instead.`,
+          );
+        }
+
+        officeApprover = inv.approvedBy;
+        for (const l of lines) {
+          if (l.status !== AssayerPayableStatus.APPROVED) continue;
+          const before = { approvedAt: l.approvedAt, approvedBy: l.approvedBy, hodApprovedAt: l.hodApprovedAt };
+          l.status = AssayerPayableStatus.PENDING;
+          l.approvedAt = null;
+          l.approvedBy = null;
+          l.hodApprovedAt = null;
+          l.hodApprovedBy = null;
+          l.destinationBankAccountNumber = null;
+          l.destinationIfsc = null;
+          l.destinationBankName = null;
+          l.destinationAccountHolderName = null;
+          l.payoutEvidenceVersionId = null;
+          l.destinationVerifiedAt = null;
+          l.destinationVerifiedSource = null;
+          l.hodRejectedAt = new Date();
+          l.hodRejectedBy = actorId;
+          l.hodRejectReason = why;
+          l.updatedBy = actorId;
+          await m.save(l);
+          await this.engine.history(actorId, {
+            clientId: l.clientId, projectId: l.projectId, assignmentId: l.assignmentId, assayerId: l.assayerId,
+            entityType: BillingEntityType.PAYABLE, entityId: l.id, action: 'PAYABLE_HOD_REJECTED',
+            fromState: AssayerPayableStatus.APPROVED, toState: AssayerPayableStatus.PENDING,
+            previousValue: before, reason: `With bill ${inv.invoiceNumber}: ${why}`,
+          }, m);
+          emit('billing:payout-changed', { payableId: l.id, assayerId: l.assayerId, status: l.status, onHold: l.onHold });
+        }
+
+        inv.status = AssayerInvoiceStatus.SUBMITTED;
+        inv.approvedAt = null;
+        inv.approvedBy = null;
+        inv.hodRejectedAt = new Date();
+        inv.hodRejectedBy = actorId;
+        inv.hodRejectReason = why;
+        inv.updatedBy = actorId;
+        const out = await m.save(inv);
+        await this.engine.history(actorId, {
+          assayerId: out.assayerId,
+          entityType: BillingEntityType.ASSAYER_INVOICE, entityId: out.id, action: 'ASSAYER_INVOICE_HOD_REJECTED',
+          fromState: AssayerInvoiceStatus.APPROVED, toState: AssayerInvoiceStatus.SUBMITTED,
+          newValue: { lineCount: out.lineCount, totalAmount: Number(out.totalAmount), officeApprovedBy: officeApprover },
+          reason: why,
+        }, m);
+        const manager = m;
+        await this.auditService.recordEvent({
+          category: EventCategory.WORKFLOW,
+          eventType: 'ASSAYER_INVOICE_HOD_REJECTED',
+          entityType: 'ASSAYER_INVOICE',
+          entityId: out.id,
+          previousState: AssayerInvoiceStatus.APPROVED,
+          newState: AssayerInvoiceStatus.SUBMITTED,
+          userId: actorId,
+          remarks: `Final approval refused; assayer bill ${out.invoiceNumber} sent back to the office: ${why}`,
+          metadata: { invoiceId: out.id, invoiceNumber: out.invoiceNumber, assayerId: out.assayerId, officeApprovedBy: officeApprover, reason: why },
+        }, { manager });
+        emit('billing:assayer-invoice-changed', { invoiceId: out.id, assayerId: out.assayerId, status: out.status });
+        return out;
+      });
+    } catch (err) {
+      if (isUniqueViolation(err, 'UQ_assayer_invoices_one_active_per_assayer')) {
+        throw new ConflictException(
+          'This assayer already has another bill out or confirmed. Deal with that bill first (approve or cancel it), then send this one back.',
+        );
+      }
+      throw err;
+    }
+    this.engine.notifyFinalApprovalRejected({
+      ownerUserId: officeApprover,
+      actorUserId: actorId,
+      entityType: 'ASSAYER_INVOICE',
+      entityId: saved.id,
+      what: `Assayer bill ${saved.invoiceNumber}`,
+      reason: why,
+      tab: 'bills',
+      version: saved.hodRejectedAt ? new Date(saved.hodRejectedAt).getTime() : Date.now(),
+    });
     return this.toSummary(saved);
   }
 
@@ -557,7 +916,7 @@ export class AssayerInvoiceService {
       const inv = await m.findOne(AssayerInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
       if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
       if (inv.status === AssayerInvoiceStatus.CANCELLED) return inv;
-      if (inv.status === AssayerInvoiceStatus.APPROVED) {
+      if (isApprovedBill(inv.status)) {
         throw new ConflictException(
           `${inv.invoiceNumber} is approved — its lines are approved payouts now. Void the payouts individually instead.`,
         );
@@ -622,169 +981,199 @@ export class AssayerInvoiceService {
    */
   async reviseInvoice(invoiceId: string, actorId: string, reason: string): Promise<AssayerInvoiceSummary> {
     if (!reason?.trim()) throw new BadRequestException('Reason is required when revising a claim.');
-    let notify: { assayerId: string; invoiceId: string; invoiceNumber: string; count: number; total: number; revision: number } | null = null;
-    const newInv = await this.inTx(async (m, emit) => {
-      const inv = await m.findOne(AssayerInvoiceEntity, {
-        where: { id: invoiceId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
-      if (inv.status === AssayerInvoiceStatus.APPROVED || inv.status === AssayerInvoiceStatus.PAID) {
-        throw new ConflictException(`${inv.invoiceNumber} is already ${inv.status.toLowerCase()} and cannot be revised.`);
-      }
-      if (inv.status === AssayerInvoiceStatus.SUPERSEDED) {
-        throw new ConflictException(`${inv.invoiceNumber} is already superseded.`);
-      }
-      if (inv.status === AssayerInvoiceStatus.CANCELLED) {
-        throw new ConflictException(`${inv.invoiceNumber} is cancelled.`);
-      }
+    const out = await this.inTx((m, emit) => this.reviseInTx(m, emit, invoiceId, actorId, reason));
+    this.notifyRevision(out.notify, actorId);
+    return this.toSummary(out.saved);
+  }
 
-      const lines = await m
-        .createQueryBuilder(AssayerPayableEntity, 'p')
-        .setLock('pessimistic_write')
-        .where('p.assayer_invoice_id = :invoiceId AND p.is_active = true', { invoiceId: inv.id })
-        .orderBy('p.id', 'ASC')
-        .getMany();
+  /**
+   * The revision itself, on the caller's transaction — shared by `reviseInvoice` (a person asked
+   * for it) and `approve` (the tax moved at approval, so the assayer must confirm the new figure).
+   */
+  private async reviseInTx(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    invoiceId: string,
+    actorId: string,
+    reason: string,
+    /** The bill's lines, already locked (and re-taxed) by the caller on this transaction. */
+    lockedLines?: AssayerPayableEntity[],
+  ): Promise<{ saved: AssayerInvoiceEntity; notify: RevisionNotice }> {
+    const inv = await m.findOne(AssayerInvoiceEntity, {
+      where: { id: invoiceId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
+    if (isApprovedBill(inv.status) || inv.status === AssayerInvoiceStatus.PAID) {
+      throw new ConflictException(`${inv.invoiceNumber} is already ${inv.status === AssayerInvoiceStatus.PAID ? 'paid' : 'approved'} and cannot be revised.`);
+    }
+    if (inv.status === AssayerInvoiceStatus.SUPERSEDED) {
+      throw new ConflictException(`${inv.invoiceNumber} is already superseded.`);
+    }
+    if (inv.status === AssayerInvoiceStatus.CANCELLED) {
+      throw new ConflictException(`${inv.invoiceNumber} is cancelled.`);
+    }
 
-      const eligibleLines = lines.filter((l) => !l.onHold && l.status === AssayerPayableStatus.PENDING);
-      if (!eligibleLines.length) {
-        throw new BadRequestException('No eligible unheld lines remain to create a revised claim.');
-      }
+    const lines = lockedLines ?? await m
+      .createQueryBuilder(AssayerPayableEntity, 'p')
+      .setLock('pessimistic_write')
+      .where('p.assayer_invoice_id = :invoiceId AND p.is_active = true', { invoiceId: inv.id })
+      .orderBy('p.id', 'ASC')
+      .getMany();
 
-      const prevStatus = inv.status;
-      const baseNumber = inv.invoiceNumber.split('-R')[0];
-      const nextRevision = (inv.revision || 1) + 1;
-      const revisedInvoiceNumber = `${baseNumber}-R${nextRevision}`;
+    const eligibleLines = lines.filter((l) => !l.onHold && l.status === AssayerPayableStatus.PENDING);
+    if (!eligibleLines.length) {
+      throw new BadRequestException('No eligible unheld lines remain to create a revised claim.');
+    }
 
-      // Transition old invoice to SUPERSEDED first (clears active partial unique index slot)
-      inv.status = AssayerInvoiceStatus.SUPERSEDED;
-      inv.updatedBy = actorId;
-      await m.save(inv);
+    const prevStatus = inv.status;
+    const baseNumber = inv.invoiceNumber.split('-R')[0];
+    const nextRevision = (inv.revision || 1) + 1;
+    const revisedInvoiceNumber = `${baseNumber}-R${nextRevision}`;
 
-      // Create new revised invoice
-      const revisedInvoice = this.invoiceRepository.create({
-        invoiceNumber: revisedInvoiceNumber,
-        assayerId: inv.assayerId,
-        status: AssayerInvoiceStatus.INVITED,
-        invitedAt: new Date(),
-        invitedBy: actorId,
-        revision: nextRevision,
-        supersedesInvoiceId: inv.id,
-        lineCount: eligibleLines.length,
-        subtotalBase: round2(eligibleLines.reduce((s, l) => s + Number(l.baseAmount), 0)),
-        subtotalTravel: round2(eligibleLines.reduce((s, l) => s + Number(l.travelAmount), 0)),
-        tdsAmount: round2(eligibleLines.reduce((s, l) => s + Number(l.tdsAmount), 0)),
-        totalAmount: round2(eligibleLines.reduce((s, l) => s + Number(l.totalAmount), 0)),
-        currency: inv.currency,
-        notes: `Revision ${nextRevision} superseding ${inv.invoiceNumber}. Reason: ${reason.trim()}`,
-        createdBy: actorId,
-        updatedBy: actorId,
-      });
-      const savedRevised = await m.save(revisedInvoice);
+    // Transition old invoice to SUPERSEDED first (clears active partial unique index slot)
+    inv.status = AssayerInvoiceStatus.SUPERSEDED;
+    inv.updatedBy = actorId;
+    await m.save(inv);
 
-      // Re-link eligible lines to the new revised invoice
+    // Create new revised invoice
+    const revisedInvoice = this.invoiceRepository.create({
+      invoiceNumber: revisedInvoiceNumber,
+      assayerId: inv.assayerId,
+      status: AssayerInvoiceStatus.INVITED,
+      invitedAt: new Date(),
+      invitedBy: actorId,
+      revision: nextRevision,
+      supersedesInvoiceId: inv.id,
+      lineCount: eligibleLines.length,
+      subtotalBase: round2(eligibleLines.reduce((s, l) => s + Number(l.baseAmount), 0)),
+      subtotalTravel: round2(eligibleLines.reduce((s, l) => s + Number(l.travelAmount), 0)),
+      tdsAmount: round2(eligibleLines.reduce((s, l) => s + Number(l.tdsAmount), 0)),
+      totalAmount: round2(eligibleLines.reduce((s, l) => s + Number(l.totalAmount), 0)),
+      currency: inv.currency,
+      notes: `Revision ${nextRevision} superseding ${inv.invoiceNumber}. Reason: ${reason.trim()}`,
+      createdBy: actorId,
+      updatedBy: actorId,
+    });
+    const savedRevised = await m.save(revisedInvoice);
+
+    // Re-link eligible lines to the new revised invoice
+    await m.update(
+      AssayerPayableEntity,
+      eligibleLines.map((l) => l.id),
+      { assayerInvoiceId: savedRevised.id, updatedBy: actorId },
+    );
+
+    // Lines on hold (if any) are detached from the old invoice so they return to eligible pool upon unholding
+    const heldLines = lines.filter((l) => l.onHold || l.status !== AssayerPayableStatus.PENDING);
+    if (heldLines.length) {
       await m.update(
         AssayerPayableEntity,
-        eligibleLines.map((l) => l.id),
-        { assayerInvoiceId: savedRevised.id, updatedBy: actorId },
+        heldLines.map((l) => l.id),
+        { assayerInvoiceId: null, updatedBy: actorId },
       );
+    }
 
-      // Lines on hold (if any) are detached from the old invoice so they return to eligible pool upon unholding
-      const heldLines = lines.filter((l) => l.onHold || l.status !== AssayerPayableStatus.PENDING);
-      if (heldLines.length) {
-        await m.update(
-          AssayerPayableEntity,
-          heldLines.map((l) => l.id),
-          { assayerInvoiceId: null, updatedBy: actorId },
-        );
-      }
+    // Record pointer from old invoice to the new revision
+    inv.supersededByInvoiceId = savedRevised.id;
+    await m.save(inv);
 
-      // Record pointer from old invoice to the new revision
-      inv.supersededByInvoiceId = savedRevised.id;
-      await m.save(inv);
+    await this.engine.history(actorId, {
+      assayerId: inv.assayerId,
+      entityType: BillingEntityType.ASSAYER_INVOICE, entityId: inv.id, action: 'ASSAYER_INVOICE_SUPERSEDED',
+      fromState: prevStatus, toState: AssayerInvoiceStatus.SUPERSEDED,
+      newValue: { supersededByInvoiceId: savedRevised.id, revision: nextRevision, reason: reason.trim() },
+      reason: reason.trim(),
+    }, m);
 
-      await this.engine.history(actorId, {
-        assayerId: inv.assayerId,
-        entityType: BillingEntityType.ASSAYER_INVOICE, entityId: inv.id, action: 'ASSAYER_INVOICE_SUPERSEDED',
-        fromState: prevStatus, toState: AssayerInvoiceStatus.SUPERSEDED,
-        newValue: { supersededByInvoiceId: savedRevised.id, revision: nextRevision, reason: reason.trim() },
-        reason: reason.trim(),
-      }, m);
+    await this.engine.history(actorId, {
+      assayerId: inv.assayerId,
+      entityType: BillingEntityType.ASSAYER_INVOICE, entityId: savedRevised.id, action: 'ASSAYER_INVOICE_INVITED',
+      fromState: null, toState: AssayerInvoiceStatus.INVITED,
+      newValue: {
+        invoiceNumber: savedRevised.invoiceNumber, lineCount: savedRevised.lineCount,
+        totalAmount: Number(savedRevised.totalAmount), revision: nextRevision,
+        supersedesInvoiceId: inv.id,
+      },
+      reason: reason.trim(),
+    }, m);
 
-      await this.engine.history(actorId, {
-        assayerId: inv.assayerId,
-        entityType: BillingEntityType.ASSAYER_INVOICE, entityId: savedRevised.id, action: 'ASSAYER_INVOICE_INVITED',
-        fromState: null, toState: AssayerInvoiceStatus.INVITED,
-        newValue: {
-          invoiceNumber: savedRevised.invoiceNumber, lineCount: savedRevised.lineCount,
-          totalAmount: Number(savedRevised.totalAmount), revision: nextRevision,
-          supersedesInvoiceId: inv.id,
-        },
-        reason: reason.trim(),
-      }, m);
+    const manager = m;
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_INVOICE_SUPERSEDED',
+      entityType: 'ASSAYER_INVOICE',
+      entityId: inv.id,
+      previousState: prevStatus,
+      newState: AssayerInvoiceStatus.SUPERSEDED,
+      userId: actorId,
+      remarks: `Superseded by revision ${savedRevised.invoiceNumber}: ${reason.trim()}`,
+      metadata: { oldInvoiceId: inv.id, newInvoiceId: savedRevised.id, reason: reason.trim() },
+    }, { manager });
 
-      const manager = m;
-      await this.auditService.recordEvent({
-        category: EventCategory.WORKFLOW,
-        eventType: 'ASSAYER_INVOICE_SUPERSEDED',
-        entityType: 'ASSAYER_INVOICE',
-        entityId: inv.id,
-        previousState: prevStatus,
-        newState: AssayerInvoiceStatus.SUPERSEDED,
-        userId: actorId,
-        remarks: `Superseded by revision ${savedRevised.invoiceNumber}: ${reason.trim()}`,
-        metadata: { oldInvoiceId: inv.id, newInvoiceId: savedRevised.id, reason: reason.trim() },
-      }, { manager });
+    emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
+    emit('billing:assayer-invoice-changed', { invoiceId: savedRevised.id, assayerId: savedRevised.assayerId, status: savedRevised.status });
 
-      emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
-      emit('billing:assayer-invoice-changed', { invoiceId: savedRevised.id, assayerId: savedRevised.assayerId, status: savedRevised.status });
-
-      notify = {
+    return {
+      saved: savedRevised,
+      notify: {
         assayerId: inv.assayerId,
         invoiceId: savedRevised.id,
         invoiceNumber: savedRevised.invoiceNumber,
         count: savedRevised.lineCount,
-        total: Number(savedRevised.totalAmount),
         revision: nextRevision,
-      };
+      },
+    };
+  }
 
-      return savedRevised;
+  /** Ask the assayer to confirm a new revision. `why` tells the app why it came back. */
+  private notifyRevision(n: RevisionNotice, actorId: string, why?: 'TAX_RECALCULATED'): void {
+    this.notificationDispatch.emitSafe({
+      type: 'ASSAYER_INVOICE_INVITED',
+      entityType: 'ASSAYER_INVOICE',
+      entityId: n.invoiceId,
+      actorUserId: actorId,
+      assayerId: n.assayerId,
+      dedupeKey: `ASSAYER_INVOICE_REVISED:${n.invoiceId}`,
+      // NO amount (audit F13), exactly like the first invitation: a push body sits on a lock
+      // screen, and the reveal happens in the app, on the invitation itself.
+      payload: {
+        invoiceNumber: n.invoiceNumber,
+        count: n.count,
+        revision: n.revision,
+        isRevision: true,
+        ...(why ? { reason: why } : {}),
+      },
     });
-
-    if (notify) {
-      const n = notify as { assayerId: string; invoiceId: string; invoiceNumber: string; count: number; total: number; revision: number };
-      this.notificationDispatch.emitSafe({
-        type: 'ASSAYER_INVOICE_INVITED',
-        entityType: 'ASSAYER_INVOICE',
-        entityId: n.invoiceId,
-        actorUserId: actorId,
-        assayerId: n.assayerId,
-        dedupeKey: `ASSAYER_INVOICE_REVISED:${n.invoiceId}`,
-        payload: {
-          invoiceNumber: n.invoiceNumber,
-          count: n.count,
-          total: n.total,
-          revision: n.revision,
-          isRevision: true,
-        },
-      });
-    }
-
-    return this.toSummary(newInv);
   }
 
   // -----------------------------------------------------------------------
   // Reads
   // -----------------------------------------------------------------------
 
-  /** A page of invoices with assayer labels — the ops list. */
+  /**
+   * A page of invoices with assayer labels — the ops list.
+   *
+   * Region-narrowed (audit F12, 2026-09-24) like every other billing read: a bill is anchored on its
+   * assayer's home region, the same column `assertAssayerInvoiceInScope` reads when one is opened, so
+   * the list never offers a bill the drawer would then refuse. An assayer with no region passes, as
+   * it does there. This list used to return the whole country's bills to a region desk.
+   */
   async list(filters: {
     status?: AssayerInvoiceStatus; assayerId?: string; page?: number | string; limit?: number | string;
-  } = {}): Promise<BillingPage<AssayerInvoiceSummary>> {
+  } = {}, scope?: Partial<GlobalScope>): Promise<BillingPage<AssayerInvoiceSummary>> {
     const w = billingPageWindow(filters.page, filters.limit);
     const where: Record<string, unknown> = { isActive: true };
     if (filters.status) where.status = filters.status;
-    if (filters.assayerId) where.assayerId = filters.assayerId;
+    const regions = scope?.regions?.length ? [...scope.regions] : null;
+    if (regions) {
+      const inScope = `IN (SELECT s.id FROM assayers s WHERE s.region IS NULL OR s.region = ANY(CAST(:regions AS text[])))`;
+      where.assayerId = filters.assayerId
+        ? Raw((alias) => `${alias} = :assayerId AND ${alias} ${inScope}`, { assayerId: filters.assayerId, regions })
+        : Raw((alias) => `${alias} ${inScope}`, { regions });
+    } else if (filters.assayerId) {
+      where.assayerId = filters.assayerId;
+    }
     const [rows, total] = await this.invoiceRepository.findAndCount({
       where, order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
     });
@@ -827,6 +1216,11 @@ export class AssayerInvoiceService {
       submittedAt: inv.submittedAt ? new Date(inv.submittedAt).toISOString() : null,
       approvedAt: inv.approvedAt ? new Date(inv.approvedAt).toISOString() : null,
       approvedBy: inv.approvedBy ?? null,
+      hodApprovedAt: inv.hodApprovedAt ? new Date(inv.hodApprovedAt).toISOString() : null,
+      hodApprovedBy: inv.hodApprovedBy ?? null,
+      hodRejectedAt: inv.hodRejectedAt ? new Date(inv.hodRejectedAt).toISOString() : null,
+      hodRejectedBy: inv.hodRejectedBy ?? null,
+      hodRejectReason: inv.hodRejectReason ?? null,
       cancelledAt: inv.cancelledAt ? new Date(inv.cancelledAt).toISOString() : null,
       cancelledBy: inv.cancelledBy ?? null,
       cancelReason: inv.cancelReason ?? null,

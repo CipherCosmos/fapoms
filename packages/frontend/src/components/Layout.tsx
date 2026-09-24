@@ -99,7 +99,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
         {/* Mobile Bottom Navigation Bar */}
         <nav className="mobile-bottom-nav">
           {mobileNavItems.map(({ path, label, icon: Icon }) => (
-            <NavLink key={path} to={path} className={({ isActive }) => `mobile-nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink key={path} to={path} title={label} className={({ isActive }) => `mobile-nav-item ${isActive ? 'active' : ''}`}>
               <Icon size={18} />
               <span>{label}</span>
             </NavLink>

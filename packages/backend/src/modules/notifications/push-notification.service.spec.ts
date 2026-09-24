@@ -36,6 +36,8 @@ describe('PushNotificationService', () => {
     deviceTokenRepo = module.get<Repository<DeviceTokenEntity>>(getRepositoryToken(DeviceTokenEntity));
     fcmProvider = module.get<FcmProvider>(FcmProvider);
     jest.clearAllMocks();
+    // Nobody else holds the token unless a test says so.
+    mockDeviceTokenRepo.find.mockResolvedValue([]);
   });
 
   describe('registerToken', () => {
@@ -65,11 +67,35 @@ describe('PushNotificationService', () => {
     });
 
     it('should skip save if token is unchanged', async () => {
-      mockDeviceTokenRepo.findOne.mockResolvedValue({ id: 'dt-1', userId: 'user-1', token: 'tok-1', platform: 'android' });
+      mockDeviceTokenRepo.findOne.mockResolvedValue({ id: 'dt-1', userId: 'user-1', token: 'tok-1', platform: 'android', isActive: true });
 
       await service.registerToken('user-1', 'tok-1', 'android');
 
       expect(mockDeviceTokenRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('reactivates the row a sign-out deactivated instead of inserting a second one', async () => {
+      // The (user, platform) index is unique whatever isActive says: an insert here was refused,
+      // and the phone silently stopped receiving pushes after signing back in.
+      mockDeviceTokenRepo.findOne.mockResolvedValue({ id: 'dt-1', userId: 'user-1', token: 'tok-1', platform: 'android', isActive: false });
+
+      await service.registerToken('user-1', 'tok-1', 'android');
+
+      expect(mockDeviceTokenRepo.findOne).toHaveBeenCalledWith({ where: { userId: 'user-1', platform: 'android' } });
+      expect(mockDeviceTokenRepo.create).not.toHaveBeenCalled();
+      expect(mockDeviceTokenRepo.save).toHaveBeenCalledWith(expect.objectContaining({ id: 'dt-1', isActive: true }));
+    });
+
+    it('takes the device away from whoever held it before, so their pushes stop reaching this phone', async () => {
+      const previous = { id: 'dt-a', userId: 'user-a', token: 'shared-tok', platform: 'android', isActive: true };
+      mockDeviceTokenRepo.find.mockResolvedValue([previous]);
+      mockDeviceTokenRepo.findOne.mockResolvedValue(null);
+      mockDeviceTokenRepo.create.mockReturnValue({ userId: 'user-b', token: 'shared-tok', platform: 'android' });
+
+      await service.registerToken('user-b', 'shared-tok', 'android');
+
+      expect(mockDeviceTokenRepo.save).toHaveBeenCalledWith(expect.objectContaining({ id: 'dt-a', isActive: false }));
+      expect(mockDeviceTokenRepo.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-b', token: 'shared-tok' }));
     });
   });
 

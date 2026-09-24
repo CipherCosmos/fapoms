@@ -1,13 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
-import { RoutingService, RouteSource } from '../geo/routing.provider';
+import { RoutingService, RouteSource, mapWithConcurrency, CELL_REROUTE_CONCURRENCY } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, calculateHaversineDistance, businessDateKey, addDaysToDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -29,17 +29,21 @@ import {
   summariseRemarks,
 } from '../assayer-remarks/assayer-remark.contract';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { ComplianceStandingService } from '../assayer/compliance-standing.service';
+import { findLastBranchAuditor, rotationBars, rotationBarredReason, LastBranchAuditor } from '../assignment/branch-rotation';
+import { ASSIGNED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 
 /**
  * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
  */
 const EXCLUSION_REASONS: Record<string, string> = {
   deployable: 'Onboarding not finished — not yet assignable',
-  availability: 'Unavailable on this date (already booked or on leave)',
+  compliance: 'Held from new work — a re-check is overdue or awaiting a senior\'s decision',
+  availability: 'Unavailable on this date (holiday, outside the project dates, or on leave)',
   consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
   clientEligibility: 'Not eligible for this client — planning requires an Active or Recommended empanelment standing',
   ruleEngineEligibility: 'Blocked by a business rule',
-  requiredSkills: 'Missing a skill or certification this project requires',
+  requiredSkills: 'Missing a skill or certification this project or client requires',
   distancePolicy: "Outside the client's permitted distance band for this branch",
   distancePolicyUnlocated:
     "Home address not located yet, so the client's minimum-distance rule cannot be checked — "
@@ -55,6 +59,7 @@ const EXCLUSION_REASONS: Record<string, string> = {
  */
 const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING'> = {
   deployable: 'ONBOARDING',
+  compliance: 'POLICY',
   availability: 'DATE',
   consecutiveBranchAudit: 'ROTATION',
   distancePolicy: 'DISTANCE',
@@ -88,7 +93,13 @@ export interface PlanningContext {
   scheduledDate: Date;
   weights: Record<string, number>;
   /**
-   * Treat the date-bound checks (already booked, on leave) as advisory rather than
+   * The project being planned, when the caller knows it. Decides which project-branch row the
+   * project skills are read from (a branch can sit in several projects) and which project counts
+   * as "this cycle" for the rotation rule — the last auditor must come from an EARLIER project.
+   */
+  projectId?: string | null;
+  /**
+   * Treat the date-bound checks (holiday, project dates, on leave) as advisory rather than
    * disqualifying, so the operator sees the whole nearby workforce and decides for themselves.
    *
    * Ops asked for this because the date filter answers a narrower question than the one they
@@ -135,8 +146,12 @@ export interface PlanningContext {
    * back to querying when it is absent.
    */
   branchFacts?: {
-    /** Most recent assignment on this branch, or null if it has never been audited. */
-    lastAssignment: { assayerId: string; status: AssignmentStatus } | null;
+    /**
+     * The branch's last auditor from an EARLIER project (see assignment/branch-rotation.ts), or
+     * null when nobody has audited it before. Optional so a context built by hand still
+     * type-checks; the rotation filter then asks the database itself.
+     */
+    lastAuditor?: LastBranchAuditor | null;
     /**
      * Whether `scheduledDate` is a holiday for this branch's state/client — identical for every
      * candidate, so resolved once rather than once per assayer. Consulted by AvailabilityFilter,
@@ -181,15 +196,13 @@ export interface PlanningContext {
     commercialProfilesByAssayer: Record<string, any[]>;
     /** Clarification queries raised against each assayer. */
     queryCountByAssayer: Record<string, number>;
-    /** Lifetime assignment counts per assayer: everything dispatched, and everything taken. */
-    assignmentTotalsByAssayer: Record<string, { total: number; accepted: number }>;
     /**
-     * Assayers already committed on the scheduled date, mapped to the assignment that holds
-     * them. Double-booking was one findOne per candidate asking the same date question.
+     * Lifetime offer answers per assayer: `total` is offers ANSWERED (accepted-or-later, or
+     * declined — never pending or desk-cancelled), `accepted` the yes half. See F14.
      */
-    doubleBookedByAssayer: Record<string, string>;
-    /** Recent completed assignments per assayer, for the delivery-speed score. */
-    completedByAssayer: Record<string, Array<{ completionDate: Date | null; createdAt: Date }>>;
+    assignmentTotalsByAssayer: Record<string, { total: number; accepted: number }>;
+    /** Recent completed assignments per assayer (at most 20, newest first), for delivery speed. */
+    completedByAssayer: Record<string, DeliveryRow[]>;
     /**
      * The business rules that apply to this branch and client, loaded once.
      *
@@ -215,14 +228,11 @@ export interface PlanningContext {
      */
     noEmpanelmentRowPolicy?: 'BLOCK' | 'ALLOW';
     /**
-     * How many assignments each assayer has already ACCEPTED for the scheduled day, and where
-     * those branches are. Both were per-candidate queries that compared a `date` column against
-     * a JavaScript Date carrying a time — a comparison Postgres never satisfies — so the
-     * same-day overload penalty and the same-day grouping bonus have both been inert. Resolved
-     * here through the same date-only key the double-booking guard uses, which makes the two
-     * rules start applying; see the commit that introduced this.
+     * Where each assayer already has ASSIGNED work (offered, accepted, on site or done) on the
+     * scheduled day, for the same-day grouping bonus. Matched on the date-only business key. The
+     * old per-day ACCEPTED count that sat beside this fed a same-day penalty the owner retired on
+     * 2026-09-24 and had no reader left, so it is gone (F16).
      */
-    sameDayAcceptedCountByAssayer: Record<string, number>;
     sameDayBranchPointsByAssayer: Record<string, Array<{ latitude: number; longitude: number }>>;
     /**
      * Staff remarks about each candidate from the last 365 days, rated ones only, newest first.
@@ -305,6 +315,49 @@ export class DeployabilityFilter implements CandidateFilter {
   }
 }
 
+/**
+ * Held from new work on compliance grounds — a re-check overdue past its grace period, or an
+ * adverse re-check awaiting a senior (see `periodic-checks.ts`). The same answer the assignment
+ * gates refuse on (`ComplianceStandingService.workBlockers`), asked once per planning run for every
+ * candidate (`prime`) rather than once per candidate. Never relaxed and never overridable here:
+ * the remedy is on the person's record, not a reason typed on this screen.
+ */
+@Injectable()
+export class ComplianceHoldFilter implements CandidateFilter {
+  name = 'compliance';
+  private readonly cache = new Map<string, { at: number; blockers: string[] }>();
+  private static readonly FRESH_MS = 60_000;
+
+  constructor(@Optional() private readonly compliance?: ComplianceStandingService) {}
+
+  /** Load every candidate's standing in one batch before the loop asks about them one by one. */
+  async prime(assayerIds: string[]): Promise<void> {
+    if (!this.compliance || assayerIds.length === 0) return;
+    if (this.cache.size > 5_000) this.cache.clear();
+    const standings = await this.compliance.standingsFor(assayerIds);
+    const at = Date.now();
+    for (const id of assayerIds) this.cache.set(id, { at, blockers: standings.get(id)?.blockers ?? [] });
+  }
+
+  private async blockers(assayerId: string): Promise<string[]> {
+    if (!this.compliance) return [];
+    const hit = this.cache.get(assayerId);
+    if (hit && Date.now() - hit.at < ComplianceHoldFilter.FRESH_MS) return hit.blockers;
+    const blockers = await this.compliance.workBlockers(assayerId);
+    this.cache.set(assayerId, { at: Date.now(), blockers });
+    return blockers;
+  }
+
+  async evaluate(assayer: AssayerEntity): Promise<boolean> {
+    return (await this.blockers(assayer.id)).length === 0;
+  }
+
+  /** What holds them, in the words the record and the assignment refusal use. */
+  async explain(assayer: AssayerEntity): Promise<string> {
+    return `${(await this.blockers(assayer.id)).join('; ')}. Record it on their Background tab.`;
+  }
+}
+
 @Injectable()
 export class AvailabilityFilter implements CandidateFilter {
   name = 'availability';
@@ -329,7 +382,7 @@ export class AvailabilityFilter implements CandidateFilter {
      * DeployabilityFilter's; whether they are free on this date is this one's.
      */
 
-    // All four checks below are about one specific day. When the operator has asked to see the
+    // All three checks below are about one specific day. When the operator has asked to see the
     // whole workforce regardless of that day, they stop disqualifying and are reported on the
     // candidate row instead — see PlanningContext.relaxAvailability.
     if (context.relaxAvailability) return true;
@@ -358,17 +411,10 @@ export class AvailabilityFilter implements CandidateFilter {
     // goes through recommend()).
     if (context.branchFacts && !context.branchFacts.timelineResult.passed) return false;
 
-    // 3. Check double booking
-    // Resolved for the whole pool in one query when recommend() supplied the facts; the
-    // per-candidate check remains for standalone use.
-    if (context.branchFacts) {
-      if (context.branchFacts.doubleBookedByAssayer[assayer.id]) return false;
-    } else {
-      const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
-      if (!dbResult.passed) return false;
-    }
+    // (No "already booked that day" check: owner decision 2026-09-24 — an assayer may take several
+    // branches on one day. Same-day work now only helps, through the route-grouping score.)
 
-    // 4. Check leaves
+    // 3. Check leaves
     const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
     if (!leaveResult.passed) {
       return false;
@@ -378,7 +424,7 @@ export class AvailabilityFilter implements CandidateFilter {
   }
 
   /**
-   * Which of the four checks above actually failed, for the operator to read.
+   * Which of the three checks above actually failed, for the operator to read.
    *
    * `evaluate()` collapses all four to one boolean, so every exclusion this filter produces was
    * stamped with the same static sentence — "already booked or on leave" — regardless of which
@@ -402,13 +448,6 @@ export class AvailabilityFilter implements CandidateFilter {
       return { reason: "Unavailable on this date — outside the project's engagement window", detail: context.branchFacts.timelineResult.reason };
     }
 
-    const doubleBooked = context.branchFacts
-      ? context.branchFacts.doubleBookedByAssayer[assayer.id]
-      : !(await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate)).passed;
-    if (doubleBooked) {
-      return { reason: 'Unavailable on this date — already booked' };
-    }
-
     const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
     if (!leaveResult.passed) {
       return { reason: 'Unavailable on this date — on leave', detail: leaveResult.reason };
@@ -428,42 +467,38 @@ export class ConsecutiveBranchAuditFilter implements CandidateFilter {
     private readonly ruleBypass: RuleBypassService,
   ) {}
 
+  /**
+   * The branch's last auditor, from an EARLIER project — `findLastBranchAuditor`, the one
+   * definition the assignment write path enforces too (see assignment/branch-rotation.ts).
+   * recommend() resolves it once for the pool; the query is the standalone fallback.
+   */
+  private async lastAuditor(context: PlanningContext): Promise<LastBranchAuditor | null> {
+    if (context.branchFacts && 'lastAuditor' in context.branchFacts) return context.branchFacts.lastAuditor ?? null;
+    return findLastBranchAuditor(
+      this.assignmentRepository,
+      context.branch?.id,
+      context.projectId ?? context.branchFacts?.projectBranch?.projectId ?? null,
+    );
+  }
+
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     if (!context.branch?.id) return true;
-
-    // The branch's last assignment is the same answer for every candidate, so recommend()
-    // resolves it once and passes it here. Falling back to the query keeps this filter usable
-    // on its own.
-    const lastAssignment = context.branchFacts
-      ? context.branchFacts.lastAssignment
-      : await this.assignmentRepository.findOne({
-          where: {
-            projectBranch: { branchId: context.branch.id },
-            isActive: true,
-          },
-          order: { createdAt: 'DESC' },
-          relations: ['projectBranch'],
-        });
-
-    if (!lastAssignment) return true; // No prior audit recorded for this branch
-
-    // Only block the assayer once they're actually locked in (ACCEPTED) or have already
-    // completed this branch's audit (anti-collusion / no-repeat-auditor rule). A still-PENDING
-    // offer awaiting response — or one that was REJECTED/CANCELLED — should not prevent the same
-    // assayer from still showing up as a recommendable backup candidate.
-    const locksOutCandidate = [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED].includes(lastAssignment.status);
-    if (lastAssignment.assayerId === assayer.id && locksOutCandidate) {
-      if (this.ruleBypass.isBypassedSync(BypassableRule.REPEAT_AUDITOR_ROTATION)) {
-        this.ruleBypass.noteBypass(BypassableRule.REPEAT_AUDITOR_ROTATION, {
-          entityType: 'BRANCH', entityId: context.branch.id,
-          detail: `${assayer.displayName} audited this branch most recently`,
-        });
-        return true;
-      }
-      return false;
+    const last = await this.lastAuditor(context);
+    if (!rotationBars(last, assayer.id)) return true;
+    if (this.ruleBypass.isBypassedSync(BypassableRule.REPEAT_AUDITOR_ROTATION)) {
+      this.ruleBypass.noteBypass(BypassableRule.REPEAT_AUDITOR_ROTATION, {
+        entityType: 'BRANCH', entityId: context.branch.id,
+        detail: `${assayer.displayName} audited this branch most recently`,
+      });
+      return true;
     }
+    return false;
+  }
 
-    return true;
+  /** The sentence for the excluded panel — the same one the write path refuses with. */
+  async explain(assayer: AssayerEntity, context: PlanningContext): Promise<string | undefined> {
+    const last = await this.lastAuditor(context);
+    return last ? rotationBarredReason(last, assayer.displayName ?? 'This assayer') : undefined;
   }
 }
 
@@ -757,22 +792,36 @@ export class RequiredSkillsFilter implements CandidateFilter {
     private readonly constraintEvaluator: ConstraintEvaluator,
   ) {}
 
-  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+  private async projectOf(context: PlanningContext): Promise<any | null> {
     // Same row for every candidate, so recommend() resolves it once. The query remains as a
     // standalone fallback.
     const pb = context.branchFacts?.projectBranch !== undefined
       ? context.branchFacts.projectBranch
       : await this.projectBranchRepository.findOne({
-          where: { branchId: context.branch.id, isActive: true },
+          where: { branchId: context.branch.id, isActive: true, ...(context.projectId ? { projectId: context.projectId } : {}) },
           relations: ['project'],
         });
+    return pb?.project ?? null;
+  }
 
-    if (!pb || !pb.project) {
-      return true;
+  /**
+   * The first requirement this person fails — the project's own, then the client's
+   * (`planningPreferences.requiredSkills` / `.requiredCertifications`, a hard requirement since the
+   * owner's 2026-09-25 decision) — or null when they meet both. One answer for `evaluate` and for
+   * the excluded panel's sentence, so the two cannot name different reasons.
+   */
+  async failure(assayer: AssayerEntity, context: PlanningContext): Promise<ConstraintResult | null> {
+    const project = await this.projectOf(context);
+    if (project) {
+      const r = this.constraintEvaluator.checkSkillsAndCertifications(assayer, project, context.scheduledDate);
+      if (!r.passed) return r;
     }
+    const client = this.constraintEvaluator.checkClientRequirements(assayer, context.client?.planningPreferences, context.scheduledDate);
+    return client.passed ? null : client;
+  }
 
-    const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project, context.scheduledDate);
-    return checkResult.passed;
+  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    return (await this.failure(assayer, context)) === null;
   }
 }
 
@@ -826,6 +875,15 @@ export class DistanceScoreCalculator implements ScoreCalculator {
       );
     return distanceScore(route.distanceKm);
   }
+}
+
+/**
+ * Is this candidate ranked from a live GPS fix rather than their home? Mirrors the entity's own
+ * `effectiveLatitude` rule (opted in AND a fix on record). Read defensively: fixtures and raw rows
+ * carry no getters.
+ */
+export function isRankedFromLive(a: Pick<AssayerEntity, 'isLiveEnabled' | 'liveLatitude' | 'liveLongitude'>): boolean {
+  return a?.isLiveEnabled === true && a.liveLatitude != null && a.liveLongitude != null;
 }
 
 /** See `DistanceScoreCalculator`. Exported so the curve is testable without a routing double. */
@@ -930,6 +988,30 @@ export class PerformanceScoreCalculator implements ScoreCalculator {
   }
 }
 
+/**
+ * Offers the assayer actually answered: said yes to (and everything after a yes), or declined.
+ *
+ * F14 (2026-09-25): the rate used to divide by EVERY offer ever made — so an offer still waiting
+ * for an answer, and an offer the desk itself cancelled, both counted as a "no". A newly busy
+ * assayer with five fresh offers in their inbox read as a 0 % accepter. Only answers are counted
+ * now; a PENDING or CANCELLED row says nothing about the person.
+ */
+export const ANSWERED_OFFER_STATUSES: AssignmentStatus[] = [
+  AssignmentStatus.ACCEPTED,
+  AssignmentStatus.CHECKED_IN,
+  AssignmentStatus.IN_PROGRESS,
+  AssignmentStatus.COMPLETED,
+  AssignmentStatus.REJECTED,
+];
+/** The "yes" half of `ANSWERED_OFFER_STATUSES`. */
+export const ACCEPTED_OFFER_STATUSES: AssignmentStatus[] = ANSWERED_OFFER_STATUSES.filter((s) => s !== AssignmentStatus.REJECTED);
+
+/** Accepted ÷ answered, 0–100; 85 for somebody who has never answered an offer. */
+export function acceptanceRateScore(answered: number, accepted: number): number {
+  if (!(answered > 0)) return 85;
+  return Math.round((Math.min(accepted, answered) / answered) * 100);
+}
+
 @Injectable()
 export class RejectionAcceptanceScoreCalculator implements ScoreCalculator {
   name = 'acceptanceRate';
@@ -941,29 +1023,66 @@ export class RejectionAcceptanceScoreCalculator implements ScoreCalculator {
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
     // Both counts for the whole pool arrive in one grouped query; the per-candidate pair below
-    // remains for standalone use.
+    // remains for standalone use. `total` there is ANSWERED offers — see ANSWERED_OFFER_STATUSES.
     const shared = context?.branchFacts?.assignmentTotalsByAssayer[assayer.id];
-    if (shared) {
-      if (shared.total === 0) return 85;
-      return Math.round((shared.accepted / shared.total) * 100);
-    }
+    if (shared) return acceptanceRateScore(shared.total, shared.accepted);
 
-    const totalDispatched = await this.assignmentRepository.count({
-      where: { assayerId: assayer.id, isActive: true },
+    const answered = await this.assignmentRepository.count({
+      where: { assayerId: assayer.id, status: In(ANSWERED_OFFER_STATUSES), isActive: true },
     });
-
-    if (totalDispatched === 0) return 85; // Baseline default for new assayers
-
-    const acceptedCount = await this.assignmentRepository.count({
-      where: {
-        assayerId: assayer.id,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]),
-        isActive: true,
-      },
+    if (answered === 0) return 85; // Baseline default for assayers who have answered nothing yet
+    const accepted = await this.assignmentRepository.count({
+      where: { assayerId: assayer.id, status: In(ACCEPTED_OFFER_STATUSES), isActive: true },
     });
-
-    return Math.round((acceptedCount / totalDispatched) * 100);
+    return acceptanceRateScore(answered, accepted);
   }
+}
+
+/** One finished job, as the delivery-speed score reads it. */
+export interface DeliveryRow {
+  completionDate: Date | string | null;
+  scheduledDate: Date | string | null;
+  checkedInAt?: Date | string | null;
+}
+
+/** How many completed jobs per assayer the delivery-speed score looks at (newest first). */
+export const DELIVERY_HISTORY_PER_ASSAYER = 20;
+
+/**
+ * Whole days from when the work could start to when it was completed, or null when unmeasurable.
+ *
+ * F15 (2026-09-25): this used to run from `createdAt` — the moment the OFFER was made — so an
+ * assayer given a job three weeks ahead of its audit date was scored as a three-week deliverer,
+ * and one handed a same-day job looked instant. The clock now starts when the work could start:
+ * the check-in when there is one, else the scheduled audit date. `completion_date` is a date, so
+ * the measure is in calendar days (IST keys), not hours.
+ */
+export function deliveryDays(row: DeliveryRow): number | null {
+  if (!row.completionDate) return null;
+  const startSource = row.checkedInAt ?? row.scheduledDate;
+  if (!startSource) return null;
+  const endKey = typeof row.completionDate === 'string' ? row.completionDate.slice(0, 10) : businessDateKey(row.completionDate);
+  const startKey = row.checkedInAt
+    ? businessDateKey(row.checkedInAt)
+    : (typeof row.scheduledDate === 'string' ? row.scheduledDate.slice(0, 10) : businessDateKey(row.scheduledDate as Date));
+  const ms = Date.parse(`${endKey}T00:00:00Z`) - Date.parse(`${startKey}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return null;
+  return Math.max(0, Math.round(ms / 86_400_000));
+}
+
+/** Same-day 100, next day 80, two days 60, later 40; unmeasurable rows count 75 (no signal). */
+export function deliverySpeedScore(rows: DeliveryRow[]): number {
+  if (rows.length === 0) return 80;
+  let total = 0;
+  for (const r of rows) {
+    const d = deliveryDays(r);
+    if (d === null) total += 75;
+    else if (d <= 0) total += 100;
+    else if (d <= 1) total += 80;
+    else if (d <= 2) total += 60;
+    else total += 40;
+  }
+  return Math.round(total / rows.length);
 }
 
 @Injectable()
@@ -976,35 +1095,17 @@ export class DeliverySpeedScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    // The whole pool's completed history arrives in one query; this per-candidate fetch stays
-    // for standalone use.
-    const completedAssignments = context?.branchFacts
+    // The whole pool's recent completed history arrives in one query (20 per assayer, cut in
+    // SQL); this per-candidate fetch stays for standalone use.
+    const completed: DeliveryRow[] = context?.branchFacts
       ? (context.branchFacts.completedByAssayer[assayer.id] ?? [])
       : await this.assignmentRepository.find({
-          where: {
-            assayerId: assayer.id,
-            status: AssignmentStatus.COMPLETED,
-            isActive: true,
-          },
-          take: 20,
+          where: { assayerId: assayer.id, status: AssignmentStatus.COMPLETED, isActive: true },
+          select: ['completionDate', 'scheduledDate', 'checkedInAt'] as any,
+          order: { completionDate: 'DESC' } as any,
+          take: DELIVERY_HISTORY_PER_ASSAYER,
         });
-
-    if (completedAssignments.length === 0) return 80;
-
-    let totalScore = 0;
-    for (const a of completedAssignments) {
-      if (a.completionDate && a.createdAt) {
-        const diffHours = (new Date(a.completionDate).getTime() - new Date(a.createdAt).getTime()) / (1000 * 3600);
-        if (diffHours <= 24) totalScore += 100;
-        else if (diffHours <= 48) totalScore += 80;
-        else if (diffHours <= 72) totalScore += 60;
-        else totalScore += 40;
-      } else {
-        totalScore += 75;
-      }
-    }
-
-    return Math.round(totalScore / completedAssignments.length);
+    return deliverySpeedScore(completed);
   }
 }
 
@@ -1247,17 +1348,18 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
 
     // 2. Same-Day Route Grouping Boost (for maximizing auditor utilization in one day)
     if (context.scheduledDate) {
-      // Where this assayer is already booked that day. Preloaded for the whole pool in one
-      // query; the per-candidate fallback keeps standalone use working. Note the fallback
-      // compares the `date` column against a Date carrying a time, which Postgres never
-      // matches — the preloaded path uses the date-only key and therefore actually fires.
+      // Where this assayer is already booked that day — ASSIGNED work only (offered, accepted,
+      // on site or done; never a declined or cancelled row, F16). Preloaded for the whole pool in
+      // one query; the per-candidate fallback keeps standalone use working, and matches on the
+      // date-only business key just as the preload does.
       const sameDayPoints = context.branchFacts
         ? (context.branchFacts.sameDayBranchPointsByAssayer[assayer.id] ?? [])
         : (
             await this.assignmentRepository.find({
               where: {
                 assayerId: assayer.id,
-                scheduledDate: context.scheduledDate,
+                scheduledDate: businessDateKey(context.scheduledDate) as any,
+                status: In(ASSIGNED_ASSIGNMENT_STATUSES),
                 isActive: true,
               },
               relations: ['projectBranch', 'projectBranch.branch'],
@@ -1322,29 +1424,10 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
       }
     }
 
-    // 2. Same-Day Task Load (Overload increases SLA breach risk)
-    if (context.scheduledDate) {
-      // Preloaded for the whole pool; see sameDayAcceptedCountByAssayer for why the
-      // per-candidate fallback below never actually counted anything.
-      const activeSameDayCount = context.branchFacts
-        ? (context.branchFacts.sameDayAcceptedCountByAssayer[assayer.id] ?? 0)
-        : await this.assignmentRepository.count({
-            where: {
-              assayerId: assayer.id,
-              scheduledDate: context.scheduledDate,
-              status: In([AssignmentStatus.ACCEPTED]),
-              isActive: true,
-            },
-          });
-
-      if (activeSameDayCount >= 3) {
-        score -= 40; // Heavy schedule risks missing SLA target
-      } else if (activeSameDayCount === 2) {
-        score -= 20;
-      } else if (activeSameDayCount === 0) {
-        score += 10; // Unencumbered schedule ensures SLA guarantee
-      }
-    }
+    // 2. Same-day load: deliberately NOT scored (owner decision 2026-09-24, E2). An assayer may do
+    //    several branches in one day; this used to subtract 20/40 for two/three accepted jobs that
+    //    day and add 10 for none, ranking somebody already working nearby below an idle candidate.
+    //    Day capacity is the day planner's job, not a ranking penalty.
 
     // 3. Branch Risk Score & Assayer Seniority / SLA Track Record
     const branchRisk = Number(context.branch.riskScore) || 0;
@@ -1614,6 +1697,8 @@ export interface RecommendOptions {
   relaxClientEligibility?: boolean;
   /** See `PlanningContext.relaxDistancePrefilter`. */
   relaxDistancePrefilter?: boolean;
+  /** See `PlanningContext.projectId`. */
+  projectId?: string | null;
 }
 
 /**
@@ -1721,10 +1806,14 @@ export class RecommendationEngine {
      */
     private readonly remarksServiceForFacts: AssayerRemarksService,
     private readonly platformSettings: PlatformSettingsService,
+    /** Re-checks over time — see ComplianceHoldFilter. Optional so older specs build unchanged. */
+    @Optional() private readonly complianceHoldFilter?: ComplianceHoldFilter,
   ) {
     this.filters.push(
       // First: "can this person be sent anywhere at all?" — see DeployabilityFilter.
       this.deployabilityFilter,
+      // Then: are they held from new work on compliance grounds? Equally unconditional.
+      ...(this.complianceHoldFilter ? [this.complianceHoldFilter] : []),
       /**
        * Second, ahead of every policy/skills/rotation check below: this loop stops at the
        * FIRST filter a candidate fails, and DistancePolicyFilter's minDistanceKm floor is a
@@ -1932,8 +2021,17 @@ export class RecommendationEngine {
       });
 
     if (!rows) return null; // query failed — fall back to the full pool
-    if (rows.length === 0) return null; // nobody in range — fall back rather than return empty
+    /**
+     * Nobody in range is an ANSWER, not a failure: an empty set (F7, 2026-09-25).
+     *
+     * This returned null here too, which the batch path read as "no usable pre-filter" and kept
+     * the whole national pool — so a coverage plan could deploy somebody 1,500 km away with no
+     * distance exclusion recorded anywhere, exactly what the batch path's own comment says it
+     * must not do. The interactive path still widens an empty result to the full pool itself (it
+     * has the explanation panel to show the distances); that decision is now the caller's.
+     */
     const kept = new Set(rows.map((r) => r.id));
+    if (kept.size === 0) return kept;
 
     /**
      * Who was dropped, and how far away they are.
@@ -1985,18 +2083,31 @@ export class RecommendationEngine {
    * The date clash a relaxed candidate still carries, phrased for the operator, or null when
    * they are genuinely free that day. Reads only facts already resolved for the whole pool.
    */
-  private describeDateConflict(assayer: AssayerEntity, context: PlanningContext): string | null {
-    const booking = context.branchFacts?.doubleBookedByAssayer[assayer.id];
-    if (booking) return `Already booked that day on ${booking}.`;
-
+  describeDateConflict(assayer: AssayerEntity, context: PlanningContext): string | null {
+    /**
+     * Every date check `AvailabilityFilter` relaxed, not only leave (F12, 2026-09-25).
+     *
+     * This reported leave alone, so with "Ignore date availability" on, a holiday or a date outside
+     * the project's engagement window let every candidate through with `dateConflict: null` —
+     * the list read as clean, and the refusal arrived at confirm time. The holiday and timeline
+     * answers are the same for every candidate and were already resolved for the pool.
+     */
+    const parts: string[] = [];
+    const facts = context.branchFacts;
+    if (facts && !facts.holidayResult.passed) {
+      parts.push(facts.holidayResult.reason || 'Holiday on this date.');
+    }
+    if (facts && !facts.timelineResult.passed) {
+      parts.push(facts.timelineResult.reason || "Outside the project's engagement window.");
+    }
     const dateKey = businessDateKey(context.scheduledDate);
     const leave = ((assayer as any).leaves ?? []).find(
       (l: { startDate?: string; endDate?: string }) =>
-        l?.startDate && l?.endDate && l.startDate <= dateKey && dateKey <= l.endDate,
+        l?.startDate && l?.endDate && String(l.startDate).slice(0, 10) <= dateKey && dateKey <= String(l.endDate).slice(0, 10),
     );
-    if (leave) return `On leave ${leave.startDate} to ${leave.endDate}.`;
+    if (leave) parts.push(`On leave ${String(leave.startDate).slice(0, 10)} to ${String(leave.endDate).slice(0, 10)}.`);
 
-    return null;
+    return parts.length > 0 ? parts.join(' ') : null;
   }
 
   async recommend(
@@ -2027,6 +2138,7 @@ export class RecommendationEngine {
       relaxAvailability: options?.relaxAvailability === true,
       relaxClientEligibility: options?.relaxClientEligibility === true,
       relaxDistancePrefilter: options?.relaxDistancePrefilter === true,
+      projectId: options?.projectId ?? null,
     };
 
     // Bound the candidate pool by geography before any scoring — see CANDIDATE_PREFILTER_RADIUS_KM.
@@ -2087,7 +2199,9 @@ export class RecommendationEngine {
         { ...extra, isActive: true, status: AssayerStatus.ACTIVE },
         { ...extra, isActive: true, lifecycleStatus: In(ONBOARDING_LIFECYCLE_STATES) },
       ];
-      assayers = nearbyIds
+      // An EMPTY in-range set widens to the full pool here (and only here): the interactive list
+      // ranks the whole workforce by distance rather than showing nothing — see F7 above.
+      assayers = nearbyIds && nearbyIds.size > 0
         ? await this.assayerRepository.find({ where: deployableOrOnboarding({ id: In([...nearbyIds]) }) })
         : await this.assayerRepository.find({ where: deployableOrOnboarding({}) });
       await this.assayerService.hydrateAllWorkforceAttributes(assayers);
@@ -2106,12 +2220,7 @@ export class RecommendationEngine {
     const workloadWeekStart = new Date(workloadWeekAnchor);
     workloadWeekStart.setDate(workloadWeekAnchor.getDate() - ((workloadWeekAnchor.getDay() + 6) % 7));
 
-    const [lastAssignment, workloadRows, projectBranchRow, holidayResult] = await Promise.all([
-      this.assignmentRepository.findOne({
-        where: { projectBranch: { branchId: branch.id }, isActive: true },
-        order: { createdAt: 'DESC' },
-        relations: ['projectBranch'],
-      }).catch(() => null),
+    const [workloadRows, projectBranchRow, holidayResult] = await Promise.all([
       this.assignmentRepository
         .createQueryBuilder('a')
         .select('a.assayerId', 'assayerId')
@@ -2134,7 +2243,8 @@ export class RecommendationEngine {
         .getRawMany()
         .catch(() => []),
       this.engineProjectBranchRepository.findOne({
-        where: { branchId: branch.id, isActive: true },
+        // The project being planned when the caller named one — a branch can sit in several.
+        where: { branchId: branch.id, isActive: true, ...(options?.projectId ? { projectId: options.projectId } : {}) },
         relations: ['project'],
       }).catch(() => null),
       // Identical for every candidate on this branch/date, so resolved once here rather than
@@ -2168,6 +2278,7 @@ export class RecommendationEngine {
      * That path is also what a routing double that only stubs `calculateRoute` exercises.
      */
     const routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number; source: RouteSource }> = {};
+    const homeRouteByAssayer: Record<string, { distanceKm: number; durationMinutes: number; source: RouteSource }> = {};
     if (branch.latitude && branch.longitude) {
       const origin = { latitude: Number(branch.latitude), longitude: Number(branch.longitude) };
       const destinations = assayers
@@ -2196,13 +2307,38 @@ export class RecommendationEngine {
       if (batched) {
         for (const d of destinations) keep(d.id, batched[d.id]);
       } else {
-        const routed = await Promise.all(
-          destinations.map(async (d) => {
-            const route = await this.engineRoutingService.calculateRoute(origin, d).catch(() => null);
-            return [d.id, route] as const;
-          }),
-        );
+        // Per-candidate fallback, bounded (F9): a pool of hundreds must not become hundreds of
+        // simultaneous router calls.
+        const routed = await mapWithConcurrency(destinations, CELL_REROUTE_CONCURRENCY, async (d) => {
+          const route = await this.engineRoutingService.calculateRoute(origin, d).catch(() => null);
+          return [d.id, route] as const;
+        });
         for (const [id, route] of routed) keep(id, route);
+      }
+
+      /**
+       * The route from HOME, for every candidate whose ranking position is a live GPS fix (F2).
+       *
+       * Live location is a RANKING signal only. The fee quote, the client's service-limit warning
+       * and the assign form's quote are all priced from home, exactly as `AssignmentService.create`
+       * prices the job — so a card ranked by "currently 6 km away" must not warn, or quote, from
+       * those 6 km when the job will be billed from a home 140 km off. For everyone else the two
+       * are the same point and the route above is reused.
+       */
+      const homeDestinations = assayers
+        .filter((a) => a.homeLatitude != null && a.homeLongitude != null && isRankedFromLive(a))
+        .map((a) => ({ id: a.id, latitude: Number(a.homeLatitude), longitude: Number(a.homeLongitude) }));
+      if (homeDestinations.length > 0) {
+        const homeBatch = await this.engineRoutingService
+          .calculateDistances(origin, homeDestinations, 'driving')
+          .catch(() => null as Record<string, { distanceKm: number; durationMinutes: number; source?: RouteSource }> | null);
+        for (const d of homeDestinations) {
+          const r = homeBatch?.[d.id];
+          if (r) homeRouteByAssayer[d.id] = { distanceKm: r.distanceKm, durationMinutes: r.durationMinutes, source: r.source ?? 'ESTIMATE' };
+        }
+      }
+      for (const a of assayers) {
+        if (!isRankedFromLive(a) && routeByAssayer[a.id]) homeRouteByAssayer[a.id] = routeByAssayer[a.id];
       }
     }
 
@@ -2219,7 +2355,6 @@ export class RecommendationEngine {
       queryRows,
       totalRows,
       acceptedRows,
-      doubleBookedRows,
       completedRows,
       rules,
       priorVisitRows,
@@ -2246,12 +2381,15 @@ export class RecommendationEngine {
             .getRawMany()
             .catch(() => [])
         : Promise.resolve([]),
+      // Offers ANSWERED per candidate (F14): accepted-or-later, or declined. A pending offer and a
+      // desk-cancelled one say nothing about the person, so neither is in the denominator.
       assayerIds.length
         ? this.assignmentRepository
             .createQueryBuilder('a')
             .select('a.assayerId', 'assayerId')
             .addSelect('COUNT(*)::int', 'count')
             .where('a.isActive = true')
+            .andWhere('a.status IN (:...answered)', { answered: ANSWERED_OFFER_STATUSES })
             .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
             .groupBy('a.assayerId')
             .getRawMany()
@@ -2263,44 +2401,39 @@ export class RecommendationEngine {
             .select('a.assayerId', 'assayerId')
             .addSelect('COUNT(*)::int', 'count')
             .where('a.isActive = true')
-            .andWhere('a.status IN (:...statuses)', {
-              statuses: [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED],
-            })
+            .andWhere('a.status IN (:...statuses)', { statuses: ACCEPTED_OFFER_STATUSES })
             .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
             .groupBy('a.assayerId')
             .getRawMany()
             .catch(() => [])
         : Promise.resolve([]),
-      // Who is already committed on this date. One query answers it for the whole pool; it
-      // was previously a findOne per candidate asking the same date question.
+      // Completed history for the delivery-speed score — the newest 20 per assayer, cut IN SQL
+      // (F9). This loaded every completed job the whole pool had ever done and threw all but 20
+      // per person away in memory; on a national roster with years of history that is most of the
+      // table, on every recommendation.
       assayerIds.length
-        ? this.assignmentRepository.find({
-            where: {
-              assayerId: In(assayerIds),
-              // The column is `date`; comparing it to a full Date-with-time is always false in
-              // Postgres (a mid-afternoon `new Date()` never equals a midnight date), which
-              // silently emptied this set and defeated the double-booking guard. Match on the
-              // date-only business key so it actually fires.
-              scheduledDate: businessDateKey(scheduledDate) as any,
-              // Same set as ConstraintEvaluator.checkDoubleBooking — a day is committed from
-              // acceptance through completion, so a checked-in assayer is not offered again.
-              status: In(COMMITTED_ASSIGNMENT_STATUSES),
-              isActive: true,
-            },
-            select: ['assayerId', 'assignmentNumber'] as any,
-          }).catch(() => [])
-        : Promise.resolve([]),
-      // Completed history for the delivery-speed score.
-      assayerIds.length
-        ? this.assignmentRepository.find({
-            where: {
-              assayerId: In(assayerIds),
-              status: AssignmentStatus.COMPLETED,
-              isActive: true,
-            },
-            select: ['assayerId', 'completionDate', 'createdAt'] as any,
-            order: { createdAt: 'DESC' },
-          }).catch(() => [])
+        ? this.assignmentRepository
+            .query(
+              `/* engine:delivery-history */
+               SELECT t.assayer_id, t.completion_date, t.scheduled_date, t.checked_in_at
+                 FROM (
+                   SELECT a.assayer_id,
+                          to_char(a.completion_date, 'YYYY-MM-DD') AS completion_date,
+                          to_char(a.scheduled_date, 'YYYY-MM-DD') AS scheduled_date,
+                          a.checked_in_at,
+                          ROW_NUMBER() OVER (
+                            PARTITION BY a.assayer_id
+                            ORDER BY a.completion_date DESC NULLS LAST, a.created_at DESC, a.id DESC
+                          ) AS rn
+                     FROM assignments a
+                    WHERE a.is_active = true
+                      AND a.status = 'COMPLETED'
+                      AND a.assayer_id = ANY($1::uuid[])
+                 ) t
+                WHERE t.rn <= $2`,
+              [assayerIds, DELIVERY_HISTORY_PER_ASSAYER],
+            )
+            .catch(() => [])
         : Promise.resolve([]),
       // The rules for this branch and client. Identical for every candidate, so loaded once —
       // through the engine's own loader, so the two paths cannot drift apart.
@@ -2339,6 +2472,8 @@ export class RecommendationEngine {
             .addSelect('br.longitude', 'longitude')
             .where('a.isActive = true')
             .andWhere('a.scheduledDate = :day', { day: businessDateKey(scheduledDate) })
+            // Assigned work only (F16): a declined or cancelled job is not a trip they are making.
+            .andWhere('a.status IN (:...sameDayStatuses)', { sameDayStatuses: ASSIGNED_ASSIGNMENT_STATUSES })
             .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
             .getRawMany()
             .catch(() => [])
@@ -2387,12 +2522,8 @@ export class RecommendationEngine {
       return acc;
     }, {});
 
-    const sameDayAcceptedCountByAssayer: Record<string, number> = {};
     const sameDayBranchPointsByAssayer: Record<string, Array<{ latitude: number; longitude: number }>> = {};
     for (const row of sameDayRows as any[]) {
-      if (row.status === AssignmentStatus.ACCEPTED) {
-        sameDayAcceptedCountByAssayer[row.assayerId] = (sameDayAcceptedCountByAssayer[row.assayerId] ?? 0) + 1;
-      }
       if (row.latitude != null && row.longitude != null) {
         (sameDayBranchPointsByAssayer[row.assayerId] ??= []).push({
           latitude: Number(row.latitude),
@@ -2401,15 +2532,12 @@ export class RecommendationEngine {
       }
     }
 
-    const doubleBookedByAssayer = (doubleBookedRows as any[]).reduce<Record<string, string>>((acc, r) => {
-      acc[r.assayerId] = r.assignmentNumber ?? 'an existing assignment';
-      return acc;
-    }, {});
-
-    // Capped at 20 per assayer, matching the `take: 20` the per-candidate query applied.
-    const completedByAssayer = (completedRows as any[]).reduce<Record<string, any[]>>((acc, r) => {
-      const list = (acc[r.assayerId] ||= []);
-      if (list.length < 20) list.push({ completionDate: r.completionDate ?? null, createdAt: r.createdAt });
+    // Already cut to 20 per assayer in SQL; the guard here only keeps a misbehaving double honest.
+    const completedByAssayer = (completedRows as any[]).reduce<Record<string, DeliveryRow[]>>((acc, r) => {
+      const list = (acc[r.assayer_id] ||= []);
+      if (list.length < DELIVERY_HISTORY_PER_ASSAYER) {
+        list.push({ completionDate: r.completion_date ?? null, scheduledDate: r.scheduled_date ?? null, checkedInAt: r.checked_in_at ?? null });
+      }
       return acc;
     }, {});
 
@@ -2444,10 +2572,16 @@ export class RecommendationEngine {
       ? this.constraintEvaluator.checkProjectTimeline(projectBranchRow.project, scheduledDate)
       : { passed: true };
 
+    // The rotation rule's "last auditor" — from an EARLIER project than the one being planned;
+    // the same helper the assignment write path enforces with (assignment/branch-rotation.ts).
+    const lastAuditor = await findLastBranchAuditor(
+      this.assignmentRepository,
+      branch.id,
+      options?.projectId ?? projectBranchRow?.projectId ?? null,
+    ).catch(() => null);
+
     context.branchFacts = {
-      lastAssignment: lastAssignment
-        ? { assayerId: lastAssignment.assayerId, status: lastAssignment.status }
-        : null,
+      lastAuditor,
       holidayResult,
       timelineResult,
       activeWorkloadByAssayer: (workloadRows as any[]).reduce<Record<string, number>>((acc, r) => {
@@ -2459,11 +2593,9 @@ export class RecommendationEngine {
       commercialProfilesByAssayer,
       queryCountByAssayer,
       assignmentTotalsByAssayer,
-      doubleBookedByAssayer,
       completedByAssayer,
       rules: rules as BusinessRuleEntity[],
       priorVisitsByAssayer,
-      sameDayAcceptedCountByAssayer,
       sameDayBranchPointsByAssayer,
       remarksByAssayer: remarksByAssayer as Record<string, RemarkForScoring[]>,
       recentOffersByAssayer,
@@ -2530,6 +2662,7 @@ export class RecommendationEngine {
       overridable?: boolean;
     }[] = [];
 
+    await this.complianceHoldFilter?.prime(assayers.map((a) => a.id));
     for (const assayer of assayers) {
       let blockedBy: string | null = null;
       for (const filter of this.filters) {
@@ -2577,19 +2710,25 @@ export class RecommendationEngine {
             `${assayer.displayName} lives inside the client's minimum-distance rule for this branch — a `
             + "compliance control against auditing one's own doorstep. This cannot be waived with a reason "
             + 'here; only a platform admin can lift it (Platform Settings → rule bypass), for every branch at once.';
+        } else if (blockedBy === this.consecutiveBranchAuditFilter.name) {
+          // Which audit made them the last auditor — the sentence the write path refuses with.
+          detail = await this.consecutiveBranchAuditFilter.explain(assayer, context);
         } else if (blockedBy === this.ruleEngineEligibilityFilter.name) {
           detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
         } else if (blockedBy === this.deployabilityFilter.name) {
           // Which onboarding stage they are stuck at, and the click that unsticks them.
           detail = this.deployabilityFilter.explain(assayer);
+        } else if (this.complianceHoldFilter && blockedBy === this.complianceHoldFilter.name) {
+          // Which check, since when — and it is not waived by a reason typed here.
+          overridable = false;
+          detail = await this.complianceHoldFilter.explain(assayer);
         } else if (blockedBy === this.clientEligibilityFilter.name) {
           // The specific standing (or its absence), not the generic sentence — "RESIGNED from
           // AXIS" tells the operator exactly which vetting row to change.
           detail = (await this.clientEligibilityFilter.exclusionReason(assayer, context)) ?? undefined;
         } else if (blockedBy === this.availabilityFilter.name) {
-          // Which of holiday / project-timeline / double-booking / leave actually fired — see
-          // exclusionReason's own comment for why the shared "already booked or on leave"
-          // sentence cannot stand in for all four.
+          // Which of holiday / project-timeline / leave actually fired — see exclusionReason's
+          // own comment for why one shared sentence cannot stand in for all three.
           const r = await this.availabilityFilter.exclusionReason(assayer, context);
           if (r) {
             reasonOverride = r.reason;
@@ -2609,12 +2748,8 @@ export class RecommendationEngine {
            * those projects can only ever match one person, 1,200 km away — and the screen said
            * nothing about why.
            */
-          const pb = context.branchFacts?.projectBranch;
-          if (pb?.project) {
-            detail = this.constraintEvaluator
-              .checkSkillsAndCertifications(assayer, pb.project, context.scheduledDate)
-              .reason;
-          }
+          // Project and client requirements alike, through the filter's own `failure()`.
+          detail = (await this.requiredSkillsFilter.failure(assayer, context))?.reason;
         }
 
         // DATE-kind exclusions are candidates for ANOTHER day, and ops needs enough to act on
@@ -2629,9 +2764,8 @@ export class RecommendationEngine {
               l?.startDate && l?.endDate && l.startDate <= dateKey && dateKey <= l.endDate,
           );
           if (leave) {
-            const after = new Date(`${leave.endDate}T00:00:00`);
-            after.setDate(after.getDate() + 1);
-            nextAvailableDate = businessDateKey(after);
+            // Calendar arithmetic on the key itself (F20) — no server-local midnight in between.
+            nextAvailableDate = addDaysToDateKey(String(leave.endDate).slice(0, 10), 1) || null;
           }
         }
 
@@ -2710,7 +2844,9 @@ export class RecommendationEngine {
          * screen having hinted at it. Assigning them is now allowed with a stated reason, and
          * this is what lets the card say so BEFORE the click rather than after it.
          */
-        exceedsClientRange: this.exceedsClientRange(context, routeByAssayer[assayer.id]?.distanceKm ?? null),
+        // Measured from HOME (F2): the ceiling is a billing and service question, and the write
+        // path measures it from home. A live fix near the branch must not hide it.
+        exceedsClientRange: this.exceedsClientRange(context, homeRouteByAssayer[assayer.id]?.distanceKm ?? null),
         /**
          * The standing this candidate is on the list in spite of.
          *
@@ -2737,6 +2873,13 @@ export class RecommendationEngine {
          * the OSRM fallback honest. Returning the same object closes both.
          */
         route: context.branchFacts?.routeByAssayer[assayer.id] ?? null,
+        /**
+         * The route from the assayer's HOME — what the job is priced from (F2). Equal to `route`
+         * unless the ranking used a live GPS fix; null when home is not located.
+         */
+        homeRoute: homeRouteByAssayer[assayer.id] ?? null,
+        /** True when `route` (and the ranking) used the live position rather than home. */
+        rankedFromLive: isRankedFromLive(assayer),
       });
     }
 

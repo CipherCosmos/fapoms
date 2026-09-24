@@ -1,3 +1,4 @@
+import { decimalNumberTransformer } from '../../infrastructure/database/decimal-number.transformer';
 import { Entity, Column, Index, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -66,10 +67,10 @@ export class BranchEntity extends BaseEntity {
   @Column({ name: 'operating_hours', type: 'jsonb', nullable: true })
   operatingHours: Record<string, any> | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, transformer: decimalNumberTransformer })
   latitude: number | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, transformer: decimalNumberTransformer })
   longitude: number | null;
 
   @Column({

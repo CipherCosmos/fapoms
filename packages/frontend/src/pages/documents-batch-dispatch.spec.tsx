@@ -21,6 +21,7 @@ jest.mock('../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../services/socket', () => ({ connectSocket: () => null, getSocket: () => null }));
 jest.mock('../services/http', () => ({ fetchWithTimeout: jest.fn() }));
 jest.mock('../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['DESK'],
   useCurrentPermissions: () => [],
   canReadCustomerMaster: () => false,

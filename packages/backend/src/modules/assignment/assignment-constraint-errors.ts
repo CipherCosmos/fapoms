@@ -22,8 +22,6 @@ import { withCode } from '../../infrastructure/http/api-error';
 export const ASSIGNMENT_CONSTRAINT_MESSAGES: Record<string, string> = {
   idx_assignments_single_active_branch:
     'Branch Busy: another in-flight assignment already exists for this branch.',
-  idx_assignments_single_active_assayer_day:
-    'Assayer double booking: this assayer already holds an in-flight assignment on that date.',
   UQ_7c08693fc11883cd6b712a1fed2:
     'Assignment number collision: two assignments were numbered at once. Retry.',
   assignment_idempotency_records_pkey:

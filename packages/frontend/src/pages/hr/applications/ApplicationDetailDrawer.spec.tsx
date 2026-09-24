@@ -18,6 +18,7 @@ import { api } from '../../../services/api';
 
 jest.mock('../../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   useCurrentUserId: () => 'hr-user-123',
   canManageAssayers: () => true,
@@ -145,6 +146,96 @@ describe('what the documents are called', () => {
 });
 
 /**
+ * ONE FILE BACK, NOT THE WHOLE APPLICATION.
+ *
+ * HR can send back a single document requirement with a structured reason — the candidate
+ * re-uploads just that file on the same link — and can tick exactly which documents and fields
+ * they need instead of writing one free-text note the candidate has to decode.
+ */
+describe('sending back one file instead of the whole application', () => {
+  const submittedWithDocs = () => {
+    (api.request as jest.Mock).mockImplementation((url: string) => {
+      if (url === '/hr/applications/app-draft-1') {
+        return Promise.resolve({
+          application: { ...draft, status: ApplicationStatus.PENDING_VALIDATION },
+          documents: [{
+            id: 'd1', requirement: 'PAN_CARD', filePaths: ['a/pan.jpg'],
+            reviewStatus: 'NEEDS_RESUBMIT', rejectionReason: 'ILLEGIBLE', rejectionNote: null,
+          }],
+          gaps: [],
+          invitedMobile: null,
+          documentsRequested: ['PHOTOGRAPH', 'PAN_CARD'],
+          infoRequests: [
+            { kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'Retake in daylight.' },
+          ],
+        });
+      }
+      if (url.endsWith('/review')) return Promise.resolve({ id: 'd1' });
+      if (url.endsWith('/request-info')) return Promise.resolve({ id: 'app-draft-1' });
+      return Promise.resolve([]);
+    });
+  };
+
+  it('flags the sent-back file with its reason and lists the outstanding ask', async () => {
+    submittedWithDocs();
+    draw();
+    await waitFor(() => expect(screen.getByText(/sent back — needs resubmit/i)).toBeInTheDocument());
+    expect(screen.getByText(/Too blurred or dark to read/i)).toBeInTheDocument();
+    expect(screen.getByText('Waiting on candidate')).toBeInTheDocument();
+    expect(screen.getByText(/Retake in daylight/i)).toBeInTheDocument();
+  });
+
+  it('opens the targeted request dialog from Request info', async () => {
+    submittedWithDocs();
+    draw();
+    fireEvent.click(await screen.findByRole('button', { name: /^Request info$/i }));
+    await waitFor(() => expect(screen.getByText(/Request from/i)).toBeInTheDocument());
+    expect(screen.getByText('Documents')).toBeInTheDocument();
+    expect(screen.getByText('Fields')).toBeInTheDocument();
+  });
+
+  it('sends the ticked documents and fields as one structured request', async () => {
+    submittedWithDocs();
+    draw();
+    fireEvent.click(await screen.findByRole('button', { name: /^Request info$/i }));
+    await screen.findByText(/Request from/i);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /PAN card/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /IFSC code/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /^Send 2 requests$/i }));
+    await waitFor(() => expect(api.request).toHaveBeenCalledWith(
+      '/hr/applications/app-draft-1/request-info',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          documents: [{ requirement: 'PAN_CARD' }],
+          fields: [{ key: 'ifscCode' }],
+        }),
+      }),
+    ));
+  });
+
+  it('sends back one file with a structured reason', async () => {
+    submittedWithDocs();
+    draw();
+    fireEvent.click(await screen.findByRole('button', { name: /send back/i }));
+    await waitFor(() => expect(screen.getByText(/Why is PAN card being sent back/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('combobox', { name: /Why this document is being sent back/i }));
+    fireEvent.click(await screen.findByRole('option', { name: /Too blurred or dark to read/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, send it back$/i }));
+
+    await waitFor(() => expect(api.request).toHaveBeenCalledWith(
+      '/hr/applications/app-draft-1/documents/PAN_CARD/review',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ decision: 'NEEDS_RESUBMIT', reason: 'ILLEGIBLE' }),
+      }),
+    ));
+  });
+});
+/**
  * A fixed 640px on every screen squeezed each document row — a long name beside three buttons in a
  * row that could not wrap — until it scrolled the drawer sideways.
  */
@@ -217,5 +308,60 @@ describe('what the interviewer said, where the decision is made', () => {
     await screen.findByRole('dialog');
     await waitFor(() => expect(screen.queryByText('Registration Incomplete (Draft)')).not.toBeInTheDocument());
     expect(screen.queryByTestId('application-interview')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * WHO VOUCHES FOR THEM.
+ *
+ * Submit refuses an application with nobody ringable on it, so a queue row normally carries at
+ * least one reference — and the reviewer approving the person should see the names, not
+ * discover them on the record afterwards.
+ */
+describe('the references the candidate named', () => {
+  it('lists them beside the identity facts', async () => {
+    (api.request as jest.Mock).mockImplementation((url: string) => {
+      if (url === '/hr/applications/app-draft-1') {
+        return Promise.resolve({
+          application: {
+            ...draft,
+            status: ApplicationStatus.PENDING_VALIDATION,
+            extendedProfile: {
+              references: [
+                { fullName: 'Meera Rao', phone: '9822014455', relationship: 'Former manager', email: 'meera@example.com' },
+              ],
+            },
+          },
+          documents: [],
+          gaps: [],
+          invitedMobile: null,
+        });
+      }
+      return Promise.resolve([]);
+    });
+    draw();
+
+    await waitFor(() => expect(screen.getByText('References')).toBeInTheDocument());
+    expect(screen.getByText('Meera Rao')).toBeInTheDocument();
+    expect(screen.getByText(/Former manager/)).toBeInTheDocument();
+    expect(screen.getByText(/meera@example.com/)).toBeInTheDocument();
+  });
+
+  it('says so when nobody is on file yet', async () => {
+    (api.request as jest.Mock).mockImplementation((url: string) => {
+      if (url === '/hr/applications/app-draft-1') {
+        return Promise.resolve({
+          application: { ...draft, status: ApplicationStatus.PENDING_VALIDATION },
+          documents: [],
+          gaps: [],
+          invitedMobile: null,
+        });
+      }
+      return Promise.resolve([]);
+    });
+    draw();
+
+    await waitFor(() => expect(screen.getByText('References')).toBeInTheDocument());
+    expect(screen.getByText(/No references yet/)).toBeInTheDocument();
   });
 });

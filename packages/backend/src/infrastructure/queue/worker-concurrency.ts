@@ -31,6 +31,10 @@
  * default is `PROCESS_ROLE=all` (`.env.production.example`), meaning the API and all twenty-nine
  * of those slots live in one process and draw from that one pool.
  *
+ * On 2026-09-24 the branch, roster and customer-master import queues (one slot each) were folded
+ * into the two shared `tracked-jobs` slots; `totalWorkerSlots()` is the live number, and it is still
+ * above the pool, which is why the boot-time warning below still matters.
+ *
  * ## What that does and does not mean
  *
  * It does **not** mean the pool is exhausted today, and this module is not a claim that it is.
@@ -64,10 +68,11 @@ import { Logger } from '@nestjs/common';
 /**
  * Slots per worker, one key per `@Processor` class.
  *
- * That is also one key per queue: `imports`, `rosterImports` and `customerMasterImports` used to be
- * three classes on the one `import-jobs` queue, until 2026-09-17 showed that three handlers on a
- * queue are three shared loops, not three one-at-a-time lanes (see their rows below). The key is
- * the class because the class is what the fitness test can count from the source.
+ * That is also one key per queue: the three spreadsheet imports used to be three classes on the one
+ * `import-jobs` queue, until 2026-09-17 showed that three handlers on a queue are three shared
+ * loops, not three one-at-a-time lanes; they now share the `tracked-jobs` queue, where "one at a
+ * time" is a rule on the row, not a slot count. The key is the class because the class is what the
+ * fitness test can count from the source.
  *
  * **This is a mirror, not the definition.** The running values are the `@Process` decorators in
  * the worker classes, where each sits next to the comment explaining why it is what it is;
@@ -88,7 +93,7 @@ export const WORKER_CONCURRENCY = {
    * queue — a few short reads and two updates, no gateway call — and only for events an
    * administrator has switched SMS on for, so it is idle on a default deployment.
    */
-  notifications: { deliver: 5, deliverEmail: 3, deliverSms: 2, sweep: 1, failAbandoned: 1, markExhausted: 1 },
+  notifications: { deliver: 5, deliverEmail: 3, deliverSms: 2, sweep: 1, failAbandoned: 1 },
 
   /**
    * The emails an action asks for — invites, setup links, approval letters, bulk credentials —
@@ -119,19 +124,13 @@ export const WORKER_CONCURRENCY = {
   workforceBulk: { run: 1 },
 
   /**
-   * Report exports. One per report kind, so a slow roster export cannot block a billing export.
-   *
-   * `assayerRosterPdf` joined on 2026-09-12 with the Appraiser Recruitment work. It is the same
-   * roster as `assayerRoster` rendered by pdfkit instead of xlsx, and it is a separate `@Process`
-   * — hence a separate slot — because the two share an enqueue dedupe key derived from the job
-   * name: one name for both would let an Excel request and a PDF request of the same roster
-   * deduplicate onto each other and hand the second caller the wrong file type.
-   *
-   * It does not newly cross the pool line (the total has been past `DB_POOL_MAX` since August
-   * 2026, which the boot warning below already says out loud), and it is the same kind of slot as
-   * its siblings: idle almost always, and holding no connection while pdfkit serialises.
+   * Report exports: ONE `'*'` loop for every export kind. It used to be five named handlers, with a
+   * comment claiming "one per report kind, so a slow roster export cannot block a billing export" —
+   * false: Bull's loops are per queue and take any job name, so five handlers were five shared
+   * loops and up to five synchronous `xlsx.write` builds at once, each one freezing the process.
+   * One slot is the correct number for a CPU-blocking build (see `ReportJobsWorker`).
    */
-  reports: { assignments: 1, billing: 1, commandCenter: 1, assayerRoster: 1, assayerRosterPdf: 1 },
+  reports: { run: 1 },
 
   /** OCR. Bounded by CPU on the host rather than by the pool. */
   ocr: { extract: 3 },
@@ -151,10 +150,19 @@ export const WORKER_CONCURRENCY = {
    */
   planningWrites: { run: 1 },
 
-  /** Scheduled scans. */
+  /**
+   * Scheduled scans. Two named handlers are two SHARED loops, so two scans could run at once (a
+   * retry's backoff landing on the next tick); the scan takes a Postgres advisory lock and a tick
+   * that finds one running skips (`SlaScannerWorker.runScan`).
+   */
   slaScanner: { scan: 1, digest: 1 },
 
-  /** Single-slot workers, each for its own reason documented at its `@Process`. */
+  /**
+   * Single-slot workers, each for its own reason documented at its `@Process` — except `billing`,
+   * which is TWO shared loops (reconcile + booking are two named handlers on one queue), not one of
+   * each. Two reconciles cannot overlap anyway: reconcile runs through `BackgroundJobTracker`, whose
+   * per-queue advisory lock serialises tracked runs cluster-wide.
+   */
   retention: { purge: 1 },
   outbox: { drain: 1 },
   billing: { reconcile: 1, bookAssignment: 1 },
@@ -167,44 +175,13 @@ export const WORKER_CONCURRENCY = {
    */
   billingBulk: { run: 1 },
   documents: { autoDispatch: 1 },
-  /**
-   * Branch imports, alone on `import-jobs`. One slot, and one handler on the queue, so a
-   * re-upload queues behind the first attempt instead of racing it into the same rows.
+  /*
+   * `rosterImports` and `customerMasterImports` (and, before them, `imports` for branches) had
+   * queues of their own here until 2026-09-24, when all three uploads moved onto the tracked
+   * background-job foundation (`trackedJobs` below). Their one-at-a-time rule is now the kind's
+   * `exclusive: 'kind'`, enforced by a unique index over RUNNING rows across every replica, and
+   * customer master's "a stalled run is failed, never re-run" is its `idempotent: false`.
    */
-  imports: { branchImport: 1 },
-  /**
-   * The appraiser roster, on its own `roster-import-jobs` queue with a single handler.
-   *
-   * It joined on 2026-09-02, when the roster stopped running inside its upload request; the web
-   * client had been holding that request open for **fifteen minutes** to accommodate it.
-   *
-   * It first joined as a second class on `import-jobs`, with a note here claiming its one slot
-   * stopped two roster imports running at once. It did not: Bull's loops belong to the queue and
-   * pop the next job of any name, so the three import handlers on that queue were three shared
-   * loops, and two roster uploads could run side by side writing the same people. Moved to a queue
-   * of its own on 2026-09-17, which is the only shape in which one slot means one at a time.
-   *
-   * Running alongside a branch import is still possible and still safe, for the reason the
-   * `geoPrecision` note below gives: `politely()` chains calls per host across the whole process,
-   * so two concurrent importers still produce one geocode per second at the provider, not two.
-   */
-  rosterImports: { rosterImport: 1 },
-  /**
-   * The customer master, on its own `customer-master-import-jobs` queue with a single handler.
-   *
-   * It joined on 2026-09-05, when reconciliation stopped running inside its upload request: a
-   * daily file is walked row by row against the client's branches by SOL ID and then registered as
-   * a version, and a socket timeout on that made a still-running import look like a failed one.
-   *
-   * One slot, so two uploads for the same project cannot reconcile and register versions at the
-   * same time, each unaware of the other's version number. That was claimed while this sat as the
-   * third class on `import-jobs`, where it was false (three shared loops, as above); it is true
-   * since the 2026-09-17 move to its own queue. It spends its time on database reads rather than on
-   * a rate-limited provider, so unlike the geocoding workers the slot is a correctness bound, not a
-   * politeness one — which is also why that queue fails a stalled job instead of re-running it
-   * (`maxStalledCount: 0`, see `import.module.ts`).
-   */
-  customerMasterImports: { customerMasterImport: 1 },
   /**
    * Audit chain sealing, ticked by cron every minute (see `AuditModule`). One slot: `sealOnce`
    * is already a single-writer pass, serialised cluster-wide by a Redis lock plus a Postgres
@@ -213,7 +190,16 @@ export const WORKER_CONCURRENCY = {
    * exists solely to stop the every-minute cron from overlapping itself if a pass ever runs long.
    */
   auditSeal: { seal: 1 },
-  generic: { catchAll: 1 },
+  /**
+   * Tracked background jobs (`BackgroundJobsWorker`, queue `tracked-jobs`) — the uploads and other
+   * work whose progress lives on a `background_jobs` row the Jobs tray reads back after a refresh.
+   * ONE `'*'` loop at concurrency 2: every kind shares it, so one long import (a 5,000-branch file
+   * geocoding at one lookup a second) does not hold every other upload behind it. A kind that must
+   * run one at a time says so on its definition (`exclusive`), enforced by a unique index over
+   * RUNNING rows — which holds across replicas, where a slot count holds only inside one process.
+   * Joined 2026-09-24; idle except while somebody's upload is being processed.
+   */
+  trackedJobs: { run: 2 },
   /**
    * Coordinate precision. Three named handlers — an import's targeted backfill, the nightly
    * coordinate sweep, and the address-enrichment sweep (district/pincode/city + zone/territory/
@@ -265,11 +251,8 @@ const QUEUE_NAME_BY_WORKER_KEY: Record<keyof typeof WORKER_CONCURRENCY, string> 
   billing: 'billing-jobs',
   billingBulk: 'billing-bulk-jobs',
   documents: 'document-dispatch',
-  imports: 'import-jobs',
-  rosterImports: 'roster-import-jobs',
-  customerMasterImports: 'customer-master-import-jobs',
   auditSeal: 'audit-seal',
-  generic: 'background-jobs',
+  trackedJobs: 'tracked-jobs',
   geoPrecision: 'geo-precision',
 };
 

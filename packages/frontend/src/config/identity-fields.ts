@@ -1,4 +1,4 @@
-import {
+import { BANK_ACCOUNT_NUMBER_RULE,
   identifierFormatIssue, normaliseIdentifierOnBlur, PHONE_FIELD_KEYS as SHARED_PHONE_FIELD_KEYS,
   type IdentifierFormatIssue,
 } from '@fapoms/shared';
@@ -26,6 +26,7 @@ const FORMAT_HINTS: Record<IdentifierFormatIssue, string> = {
   aadhaarChecksum: 'These 12 digits do not add up to a real Aadhaar number — check them against the card.',
   aadhaarLength: 'An Aadhaar number is 12 digits.',
   pincode: 'A pincode is exactly 6 digits.',
+  bankAccount: BANK_ACCOUNT_NUMBER_RULE,
 };
 
 export function identityFormatHint(key: string, value: string): string | null {

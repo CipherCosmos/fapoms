@@ -87,55 +87,22 @@ describe('ConstraintEvaluator', () => {
       expect(result.reason).toMatch(/Timeline Conflict/);
     });
 
-    it('does not let an assignment double-book against itself when it is moved', async () => {
-      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-1', assignmentNumber: 'A-1' });
-
-      const clash = await evaluator.checkDateAvailability({
-        assayerId: 'as-1',
-        scheduledDate: AUDIT_DATE,
-      });
-      expect(clash.passed).toBe(false);
-
-      const moving = await evaluator.checkDateAvailability({
-        assayerId: 'as-1',
-        scheduledDate: AUDIT_DATE,
-        excludeAssignmentId: 'asn-1',
-      });
-      expect(moving.passed).toBe(true);
-    });
-  });
-
-  describe('checkDoubleBooking', () => {
     /**
-     * The guard used to look only for ACCEPTED assignments. Checking in moves an assignment to
-     * CHECKED_IN, so the moment an assayer arrived at their first branch they became invisible
-     * to it and could be booked a second branch for the same day — while standing in the first.
+     * Owner decision 2026-09-24 (E2): one assayer may hold several branches on the same day. The
+     * date is available whatever else they are booked for that day — the evaluator does not even
+     * look (leave, holiday and the project dates are still checked, above).
      */
-    it('counts every status that means the day is already committed, not just ACCEPTED', async () => {
-      await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE);
+    it('lets an assayer already booked that day take another branch', async () => {
+      mockAssignmentRepo.findOne.mockClear();
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-other', assignmentNumber: 'A-1', status: 'CHECKED_IN' });
 
-      const where = mockAssignmentRepo.findOne.mock.calls[0][0].where;
-      // `In([...])` keeps the values it was given on `_value`.
-      const statuses = (where.status as any)._value as string[];
-      expect(statuses).toEqual(expect.arrayContaining(['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS']));
-    });
-
-    it('refuses a second booking for an assayer already checked in that day', async () => {
-      mockAssignmentRepo.findOne.mockResolvedValue({
-        id: 'asn-existing',
-        assignmentNumber: 'ASN-001',
-        status: 'CHECKED_IN',
+      const result = await evaluator.checkDateAvailability({
+        assayerId: 'as-1',
+        scheduledDate: AUDIT_DATE,
       });
-
-      const result = await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE);
-      expect(result.passed).toBe(false);
-    });
-
-    it('does not treat the assignment being moved as a conflict with itself', async () => {
-      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-1', assignmentNumber: 'ASN-001', status: 'ACCEPTED' });
-
-      const result = await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE, 'asn-1');
       expect(result.passed).toBe(true);
+      expect(mockAssignmentRepo.findOne).not.toHaveBeenCalled();
+      expect((evaluator as any).checkDoubleBooking).toBeUndefined();
     });
   });
 
@@ -225,4 +192,52 @@ describe('ConstraintEvaluator', () => {
     });
   });
 
+
+  /**
+   * Owner decision 2026-09-25: the CLIENT's required skills and certifications are a hard
+   * requirement (overridable with a reason at create/reassign), checked exactly like a project's.
+   */
+  describe('checkClientRequirements', () => {
+    const assayer = (skills: string[], certifications: Array<{ name: string; expiryDate?: string | null }>) => ({ id: 'a', skills, certifications }) as any;
+
+    it('refuses a missing client skill, naming it and the rule', () => {
+      const r = evaluator.checkClientRequirements(assayer(['silver'], []), { requiredSkills: ['Gold'] }, AUDIT_DATE);
+      expect(r).toMatchObject({ passed: false, rule: 'SKILLS_AND_CERTIFICATIONS' });
+      expect(r.reason).toMatch(/client requires skills this assayer lacks: Gold/);
+    });
+
+    it('refuses an expired certification the client requires', () => {
+      const r = evaluator.checkClientRequirements(assayer([], [{ name: 'XRF', expiryDate: '2026-01-01' }]), { requiredCertifications: ['xrf'] }, AUDIT_DATE);
+      expect(r.passed).toBe(false);
+      expect(r.reason).toMatch(/missing or expired.*xrf/);
+    });
+
+    it('passes when both are held, case-insensitively', () => {
+      const r = evaluator.checkClientRequirements(assayer(['GOLD'], [{ name: 'Xrf', expiryDate: '2099-01-01' }]), { requiredSkills: ['gold'], requiredCertifications: ['XRF'] }, AUDIT_DATE);
+      expect(r.passed).toBe(true);
+    });
+
+    it('ignores preferences that are not a list of names — jsonb the API does not type-check', () => {
+      expect(evaluator.checkClientRequirements(assayer([], []), { requiredSkills: 'Gold', requiredCertifications: [null, 7, ''] }, AUDIT_DATE).passed).toBe(true);
+      expect(evaluator.checkClientRequirements(assayer([], []), null, AUDIT_DATE).passed).toBe(true);
+    });
+  });
+
+  /**
+   * F20: the project window is compared on IST calendar days, both ends inclusive — the last day
+   * of an engagement is inside it, whatever time of day the check runs.
+   */
+  describe('checkProjectTimeline — calendar days, both ends inclusive', () => {
+    const project = { startDate: '2026-10-01', endDate: '2026-10-31' } as any;
+    it('accepts the last day at any hour', () => {
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-10-31T17:00:00+05:30')).passed).toBe(true);
+    });
+    it('accepts the first day early in the IST morning', () => {
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-09-30T19:00:00Z')).passed).toBe(true); // 00:30 IST on 1 Oct
+    });
+    it('refuses the day after the end, and the day before the start', () => {
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-11-01T06:30:00Z')).reason).toMatch(/after project end date 2026-10-31/);
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-09-30T06:30:00Z')).reason).toMatch(/before project start date 2026-10-01/);
+    });
+  });
 });

@@ -5,7 +5,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsEmail, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { SystemRole, ApplicationStatus, OnboardingDocument } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
@@ -13,6 +13,8 @@ import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
 import { UpdateDraftRequestDto } from './public-registration.controller';
 import { RegistrationApplicationService } from './registration-application.service';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 const staffUploadMulterOptions = {
   storage: memoryStorage(),
@@ -22,18 +24,16 @@ const staffUploadMulterOptions = {
 /**
  * The desk filling a candidate's own form in for them.
  *
- * Every box the candidate has, plus the three groups only a desk decides. Those three are left
- * loose for the reason `ApproveApplicationDto` below states: each is filtered server-side against
- * an allow-list, so re-declaring them as twenty decorators here is how the controller drifted from
- * the service in the first place.
+ * Every box the candidate has (references included — they ride the same normalized rule),
+ * plus the two groups only a desk decides. Those two are left loose for the reason
+ * `ApproveApplicationDto` below states: each is filtered server-side against an allow-list,
+ * so re-declaring them as twenty decorators here is how the controller drifted from the
+ * service in the first place.
  */
 export class StaffDraftRequestDto extends UpdateDraftRequestDto {
   /** The rate card, filed in the same draft. */
   @IsOptional() @IsObject()
   commercial?: Record<string, unknown>;
-
-  @IsOptional() @IsArray()
-  references?: Array<Record<string, unknown>>;
 
   /** Client standing, filed in the same draft. */
   @IsOptional() @IsArray()
@@ -81,8 +81,28 @@ class UpdateMobileDto {
 }
 
 class RequestMoreInfoDto {
-  @IsString() @MinLength(1) @MaxLength(2000)
-  notes: string;
+  /** Overall note. Optional now: a request can be only ticked documents/fields. */
+  @IsOptional() @IsString() @MaxLength(2000)
+  notes?: string;
+
+  /** Document requirements to send back, each with its own instruction. */
+  @IsOptional() @IsArray()
+  documents?: Array<{ requirement: string; reason?: string; note?: string }>;
+
+  /** Form fields to correct, each with its own instruction. */
+  @IsOptional() @IsArray()
+  fields?: Array<{ key: string; message?: string }>;
+}
+
+class ReviewApplicationDocumentDto {
+  @IsString() @IsIn(['APPROVED', 'NEEDS_RESUBMIT'])
+  decision: 'APPROVED' | 'NEEDS_RESUBMIT';
+
+  @IsOptional() @IsString() @MaxLength(40)
+  reason?: string;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  note?: string;
 }
 
 /**
@@ -106,6 +126,10 @@ export class OpenWithoutInterviewDto {
 
   @IsString() @MinLength(10) @MaxLength(500)
   reason: string;
+
+  /** Who referred the candidate. Checked in full by the shared `normalizeSourceReferral`. */
+  @IsOptional() @IsObject()
+  sourceReferral?: Record<string, unknown> | null;
 }
 
 /**
@@ -128,21 +152,34 @@ export class OpenWithoutInterviewDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('hr/applications')
 export class HrApplicationsController {
-  constructor(private readonly registrationApplications: RegistrationApplicationService) {}
+  /**
+   * The region ceiling (audit F5, 2026-09-24). The hiring pipeline carried none: a region-assigned
+   * account could list, open, approve or reject a candidate from anywhere in India, while the
+   * roster those candidates join was already scoped. A candidate's region is their application's
+   * state — see `RegionGuardService.assertApplicationInScope`. Reads honour
+   * `security.regionScope.mode`; writes always enforce. Every `:id` route asserts before it
+   * touches the row, so a refusal says "not yours" rather than disclosing the row's state.
+   */
+  constructor(
+    private readonly registrationApplications: RegistrationApplicationService,
+    private readonly regionGuard: RegionGuardService,
+  ) {}
 
   @Get()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'List self-registration applications, optionally filtered by status' })
-  async list(@Query('status') status?: ApplicationStatus) {
-    return await this.registrationApplications.listApplications(status);
+  async list(@Query('status') status?: ApplicationStatus, @GlobalScopeFilter() scope?: GlobalScope) {
+    const rows = await this.registrationApplications.listApplications(status);
+    return await this.regionGuard.narrowApplicationsToScope(rows, scope);
   }
 
   @Get(':id')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'One application, with its uploaded documents' })
-  async get(@Param('id', ParseUUIDPipe) id: string) {
+  async get(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'read');
     return await this.registrationApplications.getApplication(id);
   }
 
@@ -181,7 +218,9 @@ export class HrApplicationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: StaffDraftRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.updateStaffDraft(id, dto, req.user.id);
   }
 
@@ -193,7 +232,9 @@ export class HrApplicationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateMobileDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.updateApplicationMobile(id, dto.mobile, req.user.id);
   }
 
@@ -208,7 +249,9 @@ export class HrApplicationsController {
     @Param('requirement') requirement: string,
     @UploadedFile() file: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
@@ -243,7 +286,10 @@ export class HrApplicationsController {
     @Param('requirement') requirement: string,
     @Param('index', ParseIntPipe) index: number,
     @Res() res: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
+    // Before the file is looked up, so another region's candidate is refused, not described.
+    await this.regionGuard.assertApplicationInScope(id, scope, 'read');
     const { key, fileName } = await this.registrationApplications.documentFileKey(
       id, requirement as OnboardingDocument, index,
     );
@@ -263,7 +309,9 @@ export class HrApplicationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ApproveApplicationDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     const userRoles = (req.user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
     const { assayer, gaps } = await this.registrationApplications.approve(
       id, req.user.id, userRoles, req.user.organizationId, dto,
@@ -277,7 +325,8 @@ export class HrApplicationsController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Send the candidate a fresh registration link, invalidating any earlier one' })
-  async resendInvite(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async resendInvite(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.resendInvite(id, req.user.id);
   }
 
@@ -285,15 +334,60 @@ export class HrApplicationsController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Decline the application' })
-  async reject(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RejectApplicationDto, @Req() req: any) {
+  async reject(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectApplicationDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.reject(id, req.user.id, dto.reason);
   }
 
   @Post(':id/request-info')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Ask the candidate for a correction or an additional document' })
-  async requestMoreInfo(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RequestMoreInfoDto, @Req() req: any) {
-    return await this.registrationApplications.requestMoreInfo(id, req.user.id, dto.notes);
+  @ApiOperation({ summary: 'Ask the candidate for specific documents or corrections on the same link' })
+  async requestMoreInfo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RequestMoreInfoDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
+    return await this.registrationApplications.requestMoreInfo(id, req.user.id, {
+      notes: dto.notes,
+      documents: (dto.documents ?? []).map((d) => ({
+        requirement: d.requirement as OnboardingDocument,
+        reason: d.reason,
+        note: d.note,
+      })),
+      fields: (dto.fields ?? []).map((f) => ({ key: f.key, message: f.message })),
+    });
+  }
+
+  /**
+   * One document requirement judged on its own — approve the scans, or send just this file
+   * back with a structured reason so the candidate re-uploads it on the same link.
+   */
+  @Post(':id/documents/:requirement/review')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Approve or send back one document of a candidate application' })
+  async reviewDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('requirement') requirement: string,
+    @Body() dto: ReviewApplicationDocumentDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
+    return await this.registrationApplications.reviewApplicationDocument(
+      id,
+      requirement as OnboardingDocument,
+      dto.decision,
+      { reason: dto.reason, note: dto.note },
+      req.user.id,
+    );
   }
 }

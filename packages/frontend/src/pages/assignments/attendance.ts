@@ -25,6 +25,12 @@ export interface AttendanceRead {
   gap: AttendanceGap;
   /** The stated reason for whichever end is missing, if one was recorded. */
   gapReason: string | null;
+  /**
+   * Non-null when the office checked the assayer in, not the assayer's phone — with the reason the
+   * office wrote. The arrival then records who vouched for it, not a GPS fix from the assayer, and
+   * the screen has to say so rather than draw it like any other check-in.
+   */
+  officeCheckIn: { reason: string } | null;
 }
 
 const parse = (value: string | null | undefined): Date | null => {
@@ -44,7 +50,7 @@ export const readAttendance = (
   assignment: Pick<
     Assignment,
     'checkedInAt' | 'checkedOutAt' | 'completedWithoutCheckInReason' | 'completedWithoutCheckOutReason'
-  >,
+  > & Partial<Pick<Assignment, 'checkInOfficeReason'>>,
 ): AttendanceRead => {
   const arrival = parse(assignment.checkedInAt);
   const departure = parse(assignment.checkedOutAt);
@@ -74,6 +80,11 @@ export const readAttendance = (
     durationLabel: minutesOnSite == null ? null : formatMinutesOnSite(minutesOnSite),
     gap,
     gapReason: gapReason && gapReason.trim() ? gapReason.trim() : null,
+    // Only meaningful alongside an arrival; a reason with no check-in would be a stray field.
+    officeCheckIn:
+      arrival && assignment.checkInOfficeReason != null
+        ? { reason: assignment.checkInOfficeReason.trim() || 'no reason recorded' }
+        : null,
   };
 };
 
@@ -93,7 +104,9 @@ export const formatAttendanceMoment = (d: Date): string => d.toLocaleString('en-
  */
 export const attendanceSummary = (read: AttendanceRead): string => {
   if (read.gap === 'NO_ARRIVAL') return 'No check-in on record for this assignment.';
-  const arrived = `Checked in ${formatAttendanceMoment(read.arrival as Date)}`;
+  const arrived = read.officeCheckIn
+    ? `Checked in by the office (reason: ${read.officeCheckIn.reason}) ${formatAttendanceMoment(read.arrival as Date)}`
+    : `Checked in ${formatAttendanceMoment(read.arrival as Date)}`;
   if (read.gap === 'NO_DEPARTURE') {
     return `${arrived} — never checked out, so there is no time on site on record.`;
   }

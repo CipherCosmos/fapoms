@@ -15,7 +15,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Pill } from '../../components/ui/settings';
 import { FilterSelect, AlertBanner, PrimaryButton, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
-import { useCurrentUserId } from '../../hooks/useCurrentRoles';
+import { useCurrentUserId, useCurrentRoles, canManageRoles } from '../../hooks/useCurrentRoles';
 import { useClientOptions } from '../../hooks/useClients';
 import { UserActivityList } from './ActivityFeed';
 import { StyledInput } from '../../components/ui/inputs';
@@ -106,6 +106,14 @@ export const DirectoryPanel: React.FC = () => {
    * `sortValue` on each is the point of moving to `DataTable`: the old hand-rolled table could not
    * be sorted at all, so finding "everybody who has never signed in" meant reading the whole list.
    */
+  /*
+    Every write here — add, edit, roles, status, bulk status, reset, unlock, setup link — is
+    `@Roles(ADMIN)` on the server with no permission fallback (a user write one step from granting
+    ADMIN itself; see user.controller.ts). A custom role granted user:view reads this list, so the
+    controls that could only 403 for it are not drawn, and a row does not open the account drawer.
+  */
+  const canEdit = canManageRoles(useCurrentRoles());
+
   const columns: Column<UserProfile>[] = [
     {
       key: 'displayName',
@@ -187,20 +195,21 @@ export const DirectoryPanel: React.FC = () => {
         </span>
       ),
     },
-    {
+    ...(!canEdit ? [] : [{
       key: 'actions',
       header: '',
-      align: 'right',
-      render: (u) => (
+      align: 'right' as const,
+      render: (u: UserProfile) => (
         <button
           onClick={(e) => { e.stopPropagation(); startEditUser(u); }}
           className="btn btn-secondary"
+          title={`Open ${u.displayName}'s account settings`}
           style={{ padding: '5px 12px', fontSize: 'var(--text-xs)' }}
         >
           Manage
         </button>
       ),
-    },
+    }]),
   ];
 
   const filteredUsers = users.filter((u) => {
@@ -542,6 +551,7 @@ export const DirectoryPanel: React.FC = () => {
               <button
                 type="button"
                 onClick={() => { setFilterStatus('LOCKED'); setSearchText(''); }}
+                title="Show only accounts that are locked out"
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: '5px', cursor: 'pointer',
                   background: 'transparent', border: 'none', padding: 0,
@@ -562,11 +572,13 @@ export const DirectoryPanel: React.FC = () => {
           { value: 'SUSPENDED', label: 'Suspended' },
           { value: 'LOCKED', label: 'Locked out' },
         ]} />
-        <div style={{ marginLeft: 'auto' }}>
-          <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
-            <span>Add someone</span>
-          </PrimaryButton>
-        </div>
+        {canEdit && (
+          <div style={{ marginLeft: 'auto' }}>
+            <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />} title="Create a new staff user account or invite a colleague">
+              <span>Add someone</span>
+            </PrimaryButton>
+          </div>
+        )}
       </FilterBar>
 
       {selectedIds.size > 0 && (
@@ -584,13 +596,16 @@ export const DirectoryPanel: React.FC = () => {
               { value: 'SUSPENDED', label: 'Suspend' },
             ]}
             placeholder="Set status…"
+            title="Choose new account status to apply in bulk"
             style={{ minWidth: '160px' }}
           />
           <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary"
+            title={`Apply status change to ${selectedIds.size} selected user account(s)`}
             style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
             {bulkBusy ? 'Applying…' : 'Apply'}
           </button>
           <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary"
+            title="Deselect all accounts"
             style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
         </div>
       )}
@@ -615,9 +630,9 @@ export const DirectoryPanel: React.FC = () => {
         columns={columns}
         rows={filteredUsers}
         rowKey={(u) => u.id}
-        onRowClick={(u) => startEditUser(u)}
+        onRowClick={canEdit ? (u) => startEditUser(u) : undefined}
         loading={isLoading}
-        selectable
+        selectable={canEdit}
         selected={selectedIds}
         onToggleSelect={toggleSelect}
         onSelectAll={(checked) => setSelectedIds(() => {
@@ -635,8 +650,8 @@ export const DirectoryPanel: React.FC = () => {
               message={searchText || filterStatus !== 'ALL'
                 ? 'Try a different name, or clear the filters.'
                 : 'Add your colleagues and they will each get an email to set their own password.'}
-              action={searchText || filterStatus !== 'ALL' ? undefined : (
-                <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
+              action={searchText || filterStatus !== 'ALL' || !canEdit ? undefined : (
+                <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />} title="Create the first staff account">
                   <span>Add someone</span>
                 </PrimaryButton>
               )}
@@ -682,6 +697,7 @@ export const DirectoryPanel: React.FC = () => {
                 {!editingSelf && (
                   <button type="button" onClick={() => void toggleUserStatus(editingUser)}
                     className="btn btn-secondary"
+                    title={editingUser.status === 'ACTIVE' ? `Suspend ${editingUser.displayName}'s account so they cannot sign in` : `Reactivate ${editingUser.displayName}'s account`}
                     style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', padding: '6px 12px', whiteSpace: 'nowrap' }}>
                     {editingUser.status === 'ACTIVE' ? 'Suspend this account' : 'Reactivate'}
                   </button>
@@ -695,6 +711,7 @@ export const DirectoryPanel: React.FC = () => {
                     <strong style={{ color: 'var(--danger)' }}>Locked out</strong> — {editingUser.failedLoginAttempts} failed login attempt(s).
                   </div>
                   <button type="button" onClick={handleUnlock} disabled={unlocking} className="btn btn-secondary"
+                    title={`Unlock ${editingUser.displayName}'s account after failed sign-in attempts`}
                     style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}>
                     <LockOpen size={12} /> {unlocking ? 'Unlocking…' : 'Unlock'}
                   </button>
@@ -703,10 +720,10 @@ export const DirectoryPanel: React.FC = () => {
 
               <form onSubmit={handleUpdateUser} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
-                  <div><label className="form-label">First Name</label><StyledInput type="text" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} required /></div>
-                  <div><label className="form-label">Last Name</label><StyledInput type="text" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} required /></div>
+                  <div><label className="form-label">First Name</label><StyledInput type="text" value={editFirstName} title="Type this person's first name" onChange={(e) => setEditFirstName(e.target.value)} required /></div>
+                  <div><label className="form-label">Last Name</label><StyledInput type="text" value={editLastName} title="Type this person's last name" onChange={(e) => setEditLastName(e.target.value)} required /></div>
                 </div>
-                <div><label className="form-label">Phone Number</label><StyledInput type="text" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} /></div>
+                <div><label className="form-label">Phone Number</label><StyledInput type="text" value={editPhone} title="Type this person's phone number" onChange={(e) => setEditPhone(e.target.value)} /></div>
 
                 <div>
                   {/*
@@ -748,6 +765,7 @@ export const DirectoryPanel: React.FC = () => {
                         <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: 'var(--text-sm)', cursor: lockedSelfAdmin ? 'not-allowed' : 'pointer', opacity: lockedSelfAdmin ? 0.6 : 1 }}
                           title={lockedSelfAdmin ? 'You cannot remove your own Super Administrator role' : undefined}>
                           <input type="checkbox" checked={isChecked} disabled={lockedSelfAdmin}
+                            title={`${isChecked ? 'Remove' : 'Give'} the ${roleLabel(r.name)} role ${isChecked ? 'from' : 'to'} ${editingUser.displayName}`}
                             onChange={() => setEditRoleIds(isChecked ? editRoleIds.filter((id) => id !== r.id) : [...editRoleIds, r.id])} />
                           <span>{roleLabel(r.name)}</span>
                           {lockedSelfAdmin && <Lock size={11} style={{ color: 'var(--text-muted)' }} />}
@@ -770,6 +788,7 @@ export const DirectoryPanel: React.FC = () => {
                       return (
                         <label key={r} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
                           <input type="checkbox" checked={isChecked}
+                            title={`${isChecked ? 'Stop limiting' : 'Limit'} ${editingUser.displayName} to the ${REGION_LABELS[r]} region`}
                             onChange={() => setEditRegions(isChecked ? editRegions.filter((v) => v !== r) : [...editRegions, r])} />
                           <span>{REGION_LABELS[r]}</span>
                         </label>
@@ -801,6 +820,7 @@ export const DirectoryPanel: React.FC = () => {
                         onChange={setEditClientId}
                         options={(clientOptions ?? []).map((c): SelectOption => ({ value: c.id, label: c.name }))}
                         placeholder="No client — staff account"
+                        title="Choose which client this account belongs to"
                         clearable
                         error={needsClient && !editClientId}
                       />
@@ -809,8 +829,8 @@ export const DirectoryPanel: React.FC = () => {
                 })()}
 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
-                  <button type="submit" disabled={submitting} style={{ flex: 1, background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>{submitting ? 'Saving…' : 'Save Modifications'}</button>
-                  <button type="button" onClick={() => setEditingUser(null)} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '10px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>Cancel</button>
+                  <button type="submit" disabled={submitting} title="Save changes to this account" style={{ flex: 1, background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>{submitting ? 'Saving…' : 'Save Modifications'}</button>
+                  <button type="button" onClick={() => setEditingUser(null)} title="Close without saving changes" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '10px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>Cancel</button>
                 </div>
               </form>
 
@@ -835,11 +855,13 @@ export const DirectoryPanel: React.FC = () => {
                 </p>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                   <button type="button" onClick={handleSendSetupLink} disabled={sendingLink || !editingUser.email}
+                    title={`Email ${editingUser.displayName} a link to choose a new password`}
                     className="btn btn-primary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                     <Mail size={14} /> {sendingLink ? 'Sending…' : 'Email a password link'}
                   </button>
                   {!showManualReset && (
                     <button type="button" onClick={() => setShowManualReset(true)}
+                      title="Type a password for this person yourself instead of emailing a link"
                       style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-xs)', textDecoration: 'underline' }}>
                       or set one by hand
                     </button>
@@ -847,8 +869,9 @@ export const DirectoryPanel: React.FC = () => {
                 </div>
                 {showManualReset && (
                   <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-                    <StyledInput type="text" placeholder="New password (min 10 characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ flex: 1 }} />
+                    <StyledInput type="text" placeholder="New password (min 10 characters)" value={newPassword} title="Type a new password with at least 10 characters" onChange={(e) => setNewPassword(e.target.value)} style={{ flex: 1 }} />
                     <button type="button" onClick={handleResetPassword} disabled={resetting || newPassword.length < 10}
+                      title={`Set this password for ${editingUser.displayName}`}
                       className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
                       {resetting ? 'Resetting…' : 'Set it'}
                     </button>

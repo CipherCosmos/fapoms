@@ -289,7 +289,7 @@ export const RulesSection: React.FC = () => {
           open assignments someone may hold. Rules apply to everyone unless you point one at a
           single client or branch.
         </p>
-        {canManage && <PrimaryButton onClick={openCreate}>Add a rule</PrimaryButton>}
+        {canManage && <PrimaryButton onClick={openCreate} title="Create a new rule for who can be sent to a job">Add a rule</PrimaryButton>}
       </div>
 
       {err && (
@@ -388,10 +388,10 @@ export const RulesSection: React.FC = () => {
         <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Business Rule' : 'Create Business Rule'} width="540px" asForm onSubmit={handleSubmit}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', width: '100%' }}>
-              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+              <button type="button" onClick={() => setShowModal(false)} title="Close without saving this rule" className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
                 Cancel
               </button>
-              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 20px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
+              <button type="submit" disabled={submitting} title={editingId ? 'Save changes to this rule' : 'Create this new rule'} className="btn btn-primary" style={{ padding: '8px 20px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
                 {submitting ? 'Saving Rule...' : '✓ Save Rule'}
               </button>
             </div>
@@ -399,7 +399,7 @@ export const RulesSection: React.FC = () => {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
             <Field label="Rule Name">
-              <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required placeholder="e.g. Require Gold Assayer Certification" style={inputStyle} />
+              <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required placeholder="e.g. Require Gold Assayer Certification" title="Type a short name describing what this rule does" style={inputStyle} />
             </Field>
 
             <Field label="Scope">
@@ -449,7 +449,7 @@ export const RulesSection: React.FC = () => {
                 {/* Still loading, or the HR-scoped vocabulary is not readable by this role: keep the
                     old free-text box so a rule can always be recorded, rather than blocking the form. */}
                 {skillOptions === null || skillOptions.length === 0 ? (
-                  <input type="text" required value={form.requiredSkill} onChange={(e) => setForm({ ...form, requiredSkill: e.target.value })} placeholder="e.g. Gold Assaying" style={inputStyle} />
+                  <input type="text" required value={form.requiredSkill} onChange={(e) => setForm({ ...form, requiredSkill: e.target.value })} placeholder="e.g. Gold Assaying" title="Type the exact skill the assayer must have" style={inputStyle} />
                 ) : (
                   <ChipMultiSelect
                     aria-label="Required skill"
@@ -466,7 +466,7 @@ export const RulesSection: React.FC = () => {
             {form.ruleType === 'CERTIFICATION' && (
               <Field label="Required Certification">
                 {certOptions === null || certOptions.length === 0 ? (
-                  <input type="text" required value={form.requiredCertification} onChange={(e) => setForm({ ...form, requiredCertification: e.target.value })} placeholder="e.g. Certified Gold Assayer" style={inputStyle} />
+                  <input type="text" required value={form.requiredCertification} onChange={(e) => setForm({ ...form, requiredCertification: e.target.value })} placeholder="e.g. Certified Gold Assayer" title="Type the exact certification the assayer must hold" style={inputStyle} />
                 ) : (
                   <ChipMultiSelect
                     aria-label="Required certification"
@@ -500,7 +500,7 @@ export const RulesSection: React.FC = () => {
             )}
             {form.ruleType === 'CAPACITY' && (
               <Field label="Max Weekly Capacity">
-                <input type="number" min={1} required value={form.maxWeeklyCapacity} onChange={(e) => setForm({ ...form, maxWeeklyCapacity: e.target.value })} placeholder="e.g. 5" style={inputStyle} />
+                <input type="number" min={1} required value={form.maxWeeklyCapacity} onChange={(e) => setForm({ ...form, maxWeeklyCapacity: e.target.value })} placeholder="e.g. 5" title="Type how many open assignments a person may hold at once" style={inputStyle} />
               </Field>
             )}
 
@@ -509,7 +509,7 @@ export const RulesSection: React.FC = () => {
             </Field>
             {form.actionType === 'SCORE_ADJUSTMENT' && (
               <Field label="Score Adjustment Value">
-                <input type="number" value={form.actionValue} onChange={(e) => setForm({ ...form, actionValue: e.target.value })} placeholder="e.g. -10 or 10" style={inputStyle} />
+                <input type="number" value={form.actionValue} onChange={(e) => setForm({ ...form, actionValue: e.target.value })} placeholder="e.g. -10 or 10" title="Type points to add or subtract from the match score" style={inputStyle} />
               </Field>
             )}
           </div>

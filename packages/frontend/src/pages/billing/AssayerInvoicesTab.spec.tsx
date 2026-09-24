@@ -21,6 +21,8 @@ import type { AssayerInvoiceSummary, AssayerInvoiceInvitation } from '@fapoms/sh
 // `services/billing.ts` imports `./api`, which pulls in a Vite-only `import.meta.env` that
 // ts-jest cannot parse. Stubbing `services/api` cuts that chain — nothing here calls the real API.
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
+// Reached through PayoutsTab's Jobs-tray lookup (useBackgroundJob); the real module reads Vite's import.meta.
+jest.mock('../../services/socket', () => ({ connectSocket: () => null, subscribeToConnection: () => () => undefined }));
 // The real poller, with a short interval so a test is not waiting 1.5 s per read.
 jest.mock('../../services/queued-job', () => {
   const actual = jest.requireActual('../../services/queued-job');

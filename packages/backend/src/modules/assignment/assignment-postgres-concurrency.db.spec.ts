@@ -159,34 +159,26 @@ describe('Phase 2 PostgreSQL Concurrency, Invariants & Failure Injection Integra
   // Requirement 10: Production Constraint Preflight & Real DB Invariants
   // =========================================================================
   describe('PostgreSQL Partial Unique Constraint Enforcement', () => {
-    it('enforces idx_assignments_single_active_assayer_day on concurrent insert', async () => {
+    /**
+     * Owner decision 2026-09-24 (E2): one assayer may hold several branches on the same day, so the
+     * database no longer refuses the second one — migration 1800800000000 drops
+     * idx_assignments_single_active_assayer_day.
+     */
+    it('accepts a second in-flight assignment for the same assayer on the same date', async () => {
       const assayerId = await createAssayerFixture('DBL-BKG');
       const fixture1 = await createBranchAndProjectFixture('DBL-1');
       const fixture2 = await createBranchAndProjectFixture('DBL-2');
       const scheduledDate = '2026-10-15';
 
-      // Insert first active assignment
       const asn1Id = await createAssignmentFixture(assayerId, fixture1, scheduledDate, AssignmentStatus.ACCEPTED);
+      const asn2Id = await createAssignmentFixture(assayerId, fixture2, scheduledDate, AssignmentStatus.PENDING);
       expect(asn1Id).toBeDefined();
+      expect(asn2Id).toBeDefined();
 
-      // Second insert on the same date for the same assayer MUST fail with 23505
-      let duplicateError: any = null;
-      try {
-        const asn2Id = crypto.randomUUID();
-        const asn2Number = `ASN-FAIL-${Date.now()}`;
-        await ds.query(
-          `INSERT INTO assignments (id, assignment_number, assayer_id, project_id, project_branch_id, scheduled_date, status, is_active, entity_version, version)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, true, 1, 1)`,
-          [asn2Id, asn2Number, assayerId, fixture2.projectId, fixture2.projectBranchId, scheduledDate, AssignmentStatus.PENDING],
-        );
-        createdAssignmentIds.push(asn2Id);
-      } catch (err: any) {
-        duplicateError = err;
-      }
-
-      expect(duplicateError).toBeDefined();
-      expect(duplicateError.code).toBe('23505');
-      expect(duplicateError.message).toContain('idx_assignments_single_active_assayer_day');
+      const [{ n }] = await ds.query(
+        `SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'idx_assignments_single_active_assayer_day'`,
+      );
+      expect(n).toBe(0);
     });
 
     it('enforces idx_assignments_single_active_branch on concurrent branch assignment', async () => {

@@ -1,12 +1,13 @@
+import { decimalNumberTransformer } from '../../infrastructure/database/decimal-number.transformer';
 import { Entity, Column, Index, BeforeInsert, BeforeUpdate } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import {
   AssayerStatus, AssayerLifecycleStatus,
-  AssayerEngagementType, AssayerUnavailableReason,
+  AssayerEngagementType, AssayerUnavailableReason, type SourceReferral, type ComplianceHold,
   EmploymentCategory,
   operationalStatusFor,
 } from '@fapoms/shared';
-import { encryptedColumn, fieldFingerprint } from '../../infrastructure/security/field-encryption';
+import { encryptedColumn, fieldFingerprint, bankAccountFingerprint } from '../../infrastructure/security/field-encryption';
 
 @Entity('assayers')
 /**
@@ -132,10 +133,10 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   pincode: string | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, transformer: decimalNumberTransformer })
   latitude: number | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, transformer: decimalNumberTransformer })
   longitude: number | null;
 
   /**
@@ -182,10 +183,10 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'is_live_enabled', type: 'boolean', default: false })
   isLiveEnabled: boolean;
 
-  @Column({ name: 'live_latitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  @Column({ name: 'live_latitude', type: 'decimal', precision: 10, scale: 7, nullable: true, transformer: decimalNumberTransformer })
   liveLatitude: number | null;
 
-  @Column({ name: 'live_longitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  @Column({ name: 'live_longitude', type: 'decimal', precision: 10, scale: 7, nullable: true, transformer: decimalNumberTransformer })
   liveLongitude: number | null;
 
   @Column({ name: 'live_location', type: 'geometry', spatialFeatureType: 'Point', srid: 4326, nullable: true })
@@ -277,6 +278,18 @@ export class AssayerEntity extends BaseEntity {
   @Index({ where: '"aadhaar_fingerprint" IS NOT NULL' })
   @Column({ name: 'aadhaar_fingerprint', type: 'varchar', length: 64, nullable: true })
   aadhaarFingerprint: string | null;
+
+  /**
+   * The same keyed fingerprint, of the bank account number (normalised: no spaces, dots or dashes).
+   *
+   * For the one question money asks of it (2026-09-24 audit, owner's decision): is the account a
+   * payout is about to be approved to ALSO on another assayer's record? Approval is refused when it
+   * is. Without this the only way to ask was to decrypt the whole roster on every approval.
+   * Indexed by name so the entity and `BankAccountFingerprint1801300000000` agree.
+   */
+  @Index('idx_assayers_bank_account_fingerprint', { where: '"bank_account_fingerprint" IS NOT NULL' })
+  @Column({ name: 'bank_account_fingerprint', type: 'varchar', length: 64, nullable: true })
+  bankAccountFingerprint: string | null;
 
   /**
    * What this person agreed to when they registered, and which wording of it.
@@ -383,6 +396,22 @@ export class AssayerEntity extends BaseEntity {
   unavailableReason: AssayerUnavailableReason | null;
 
   /**
+   * Who referred this person to us — the source reference. Not one of the references they gave
+   * for background verification (those vouch for them; this brought them in). Written only through
+   * `AssayerService.setSourceReferral`, so it is always in the shared shape and on the audit trail.
+   */
+  @Column({ name: 'source_referral', type: 'jsonb', nullable: true })
+  sourceReferral: SourceReferral | null;
+
+  /**
+   * Held from NEW work because a re-check came back adverse while they were working — until a
+   * senior decides to keep them or suspend them. Set by `recordBackgroundCheck`, cleared only by
+   * `ComplianceReviewService.decide`. Work already assigned is untouched.
+   */
+  @Column({ name: 'compliance_hold', type: 'jsonb', nullable: true })
+  complianceHold: ComplianceHold | null;
+
+  /**
    * The roster says somebody other than this person is doing their audits.
    *
    * Twenty-one rows say it — "Staff doing audit", "Friend is doing audit", "Husband doing
@@ -463,8 +492,8 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'working_hours', type: 'jsonb', nullable: true })
   workingHours: { start: string; end: string } | null;
 
-  @Column({ name: 'max_daily_workload', type: 'int', default: 3 })
-  maxDailyWorkload: number;
+  // The per-day job cap ("Most jobs per day") column was removed on 2026-09-25 — owner decision; an
+  // assayer may take several branches a day with no cap. See migration 1801700000000.
 
   @Column({ name: 'max_weekly_workload', type: 'int', default: 15 })
   maxWeeklyWorkload: number;
@@ -557,6 +586,7 @@ export class AssayerEntity extends BaseEntity {
   deriveIdentifierFingerprints(): void {
     this.panFingerprint = fieldFingerprint(this.panNumber);
     this.aadhaarFingerprint = fieldFingerprint(this.aadhaarNumber);
+    this.bankAccountFingerprint = bankAccountFingerprint(this.bankAccountNumber);
   }
 }
 

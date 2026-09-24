@@ -41,6 +41,33 @@ export const REPORT_JOB = {
 export type ReportJobName = (typeof REPORT_JOB)[keyof typeof REPORT_JOB];
 
 /**
+ * The `scopeType` each export is tracked under (kind `REPORT_EXPORT`, `scopeId` null) — the
+ * report's name, which the Jobs tray maps back to the page it came from (`REPORT_EXPORT_ROUTES`
+ * in `@fapoms/shared`).
+ */
+export const REPORT_EXPORT_SCOPE: Record<ReportJobName, string> = {
+  [REPORT_JOB.ASSIGNMENTS]: 'ASSIGNMENTS',
+  [REPORT_JOB.BILLING]: 'BILLING',
+  [REPORT_JOB.COMMAND_CENTER]: 'COMMAND_CENTER',
+  [REPORT_JOB.ASSAYER_ROSTER]: 'ASSAYER_ROSTER',
+  [REPORT_JOB.ASSAYER_ROSTER_PDF]: 'ASSAYER_ROSTER_PDF',
+};
+
+/** What the Jobs tray calls each export. */
+export const REPORT_EXPORT_TITLE: Record<ReportJobName, string> = {
+  [REPORT_JOB.ASSIGNMENTS]: 'Assignments export',
+  [REPORT_JOB.BILLING]: 'Billing export',
+  [REPORT_JOB.COMMAND_CENTER]: 'Command Center export',
+  [REPORT_JOB.ASSAYER_ROSTER]: 'Assayer roster export',
+  [REPORT_JOB.ASSAYER_ROSTER_PDF]: 'Assayer roster (PDF)',
+};
+
+/** The route that serves a finished export's bytes — what the Jobs tray's Download button follows. */
+export function reportDownloadPath(jobId: string | number): string {
+  return `/reports/jobs/${jobId}/download`;
+}
+
+/**
  * The principal, reduced to what the export actually needs.
  *
  * `assayerRoster` scopes PII by role (`scopeAssayerListForRoles` / `rolesOf`), so the worker

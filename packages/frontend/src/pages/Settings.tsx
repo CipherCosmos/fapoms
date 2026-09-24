@@ -176,6 +176,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('PROFILE')}
           className={`btn ${activeTab === 'PROFILE' ? 'btn-primary' : 'btn-ghost'}`}
+          title="View and update your personal contact details and name"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <User size={16} />
@@ -184,6 +185,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('SECURITY')}
           className={`btn ${activeTab === 'SECURITY' ? 'btn-primary' : 'btn-ghost'}`}
+          title="Change account password and configure multi-factor authentication (MFA)"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <Lock size={16} />
@@ -192,6 +194,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('SESSIONS')}
           className={`btn ${activeTab === 'SESSIONS' ? 'btn-primary' : 'btn-ghost'}`}
+          title="Inspect and revoke active browser sessions and logged-in devices"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <MonitorSmartphone size={16} />
@@ -200,6 +203,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('APPEARANCE')}
           className={`btn ${activeTab === 'APPEARANCE' ? 'btn-primary' : 'btn-ghost'}`}
+          title="Customize color theme, dark/light mode, and accent colors"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <Palette size={16} />
@@ -287,6 +291,7 @@ export const Settings: React.FC = () => {
                   type="text"
                   required
                   value={firstName}
+                  title="Type your first name as it should appear on records"
                   onChange={(e) => setFirstName(e.target.value)}
                   style={{
                     padding: '10px 14px',
@@ -306,6 +311,7 @@ export const Settings: React.FC = () => {
                   type="text"
                   required
                   value={lastName}
+                  title="Type your last name as it should appear on records"
                   onChange={(e) => setLastName(e.target.value)}
                   style={{
                     padding: '10px 14px',
@@ -326,6 +332,7 @@ export const Settings: React.FC = () => {
                 <input
                   type="tel"
                   value={phone}
+                  title="Type your mobile number so colleagues can reach you"
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="+91 98765 43210"
                   style={{
@@ -346,6 +353,7 @@ export const Settings: React.FC = () => {
                   type="email"
                   disabled
                   value={email}
+                  title="Your sign-in email address, set by your administrator and not editable here"
                   style={{
                     padding: '10px 14px',
                     background: 'var(--bg-tertiary)',
@@ -366,6 +374,7 @@ export const Settings: React.FC = () => {
                   type="text"
                   disabled
                   value={username}
+                  title="Your sign-in username, set by your administrator and not editable here"
                   style={{
                     padding: '10px 14px',
                     background: 'var(--bg-tertiary)',
@@ -395,6 +404,7 @@ export const Settings: React.FC = () => {
                 type="submit"
                 disabled={savingProfile}
                 className="btn btn-primary"
+                title="Save changes to your personal name and contact phone number"
                 style={{ gap: '8px', padding: '10px 24px', fontWeight: 600 }}
               >
                 <Save size={16} />
@@ -439,6 +449,7 @@ export const Settings: React.FC = () => {
                 type="password"
                 required
                 value={currentPassword}
+                title="Type the password you use to sign in right now"
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="Enter current password"
                 style={{
@@ -460,6 +471,7 @@ export const Settings: React.FC = () => {
                 required
                 minLength={8}
                 value={newPassword}
+                title="Choose a new password with at least 8 characters"
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Enter new password (min. 8 characters)"
                 style={{
@@ -481,6 +493,7 @@ export const Settings: React.FC = () => {
                 required
                 minLength={8}
                 value={confirmPassword}
+                title="Type the new password again to confirm it matches"
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Re-enter new password"
                 style={{
@@ -500,6 +513,7 @@ export const Settings: React.FC = () => {
                 type="submit"
                 disabled={changingPassword}
                 className="btn btn-primary"
+                title="Change your current password and update account authentication credentials"
                 style={{ gap: '8px', padding: '10px 24px', fontWeight: 600 }}
               >
                 <KeyRound size={16} />
@@ -545,6 +559,7 @@ export const Settings: React.FC = () => {
                     <div
                       key={t.id}
                       onClick={() => setTheme(t.id)}
+                      title={`Use the ${t.label} colour theme`}
                       style={{
                         padding: '14px',
                         borderRadius: 'var(--radius-md)',

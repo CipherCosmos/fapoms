@@ -5,7 +5,8 @@ import { AppText, Badge, Button, Card, EmptyState, FadeIn, GroupedRow, GroupedSe
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { relativeDay, RelativeDay } from '../utils/dates';
-import { useT, t } from '../i18n';
+import { useT, t, serverErrorText } from '../i18n';
+import { acceptView, canSendReturn, checkInView, todaysOpenJobs } from './job-actions';
 import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
 import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
@@ -105,7 +106,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const t = useTheme();
   const tr = useT();
 
-  const { current, offers, todays, openQueries, resolvedQueries } = useMemo(() => {
+  const { current, todayJobs, offers, todays, openQueries, resolvedQueries } = useMemo(() => {
     const today = new Date();
     const todaysJobs = assignments.filter((a) => isSameDay(a.scheduledDate, today));
 
@@ -128,8 +129,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       .sort((a, b) => +new Date(a.scheduledDate) - +new Date(b.scheduledDate));
     const nextToday = accepted.find((a) => isSameDay(a.scheduledDate, today));
 
+    /**
+     * Every open job on today (IST), not just the first: several branches in one day is normal
+     * (owner decision E1), and showing only one left the rest reachable only from Schedule.
+     */
+    const todayOpen = todaysOpenJobs(assignments, today);
+
     return {
       current: inFlight || nextToday || accepted[0] || null,
+      todayJobs: todayOpen,
       offers: pendingOffers,
       todays: todaysJobs,
       // Both from the shared helper — the tab badge reads the same one.
@@ -207,15 +215,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       )}
 
       {current ? (
-        <CurrentJobCard
-          assignment={current}
-          busy={busyActionId === current.id}
-          onOpen={() => onOpenAssignment(current)}
-          onCheckIn={() => onCheckIn(current)}
-          onCheckOut={onCheckOut && !current.checkedOutAt ? () => onCheckOut(current) : undefined}
-          onScan={() => onScan(current)}
-          onNavigate={() => onNavigate(current)}
-        />
+        // Today's open jobs, every one of them; when there are none today, the next job alone.
+        (todayJobs.length > 0 ? todayJobs : [current]).map((job) => (
+          <CurrentJobCard
+            key={job.id}
+            assignment={job}
+            busy={busyActionId === job.id}
+            onOpen={() => onOpenAssignment(job)}
+            onCheckIn={() => onCheckIn(job)}
+            onCheckOut={onCheckOut && !job.checkedOutAt ? () => onCheckOut(job) : undefined}
+            onScan={() => onScan(job)}
+            onNavigate={() => onNavigate(job)}
+          />
+        ))
       ) : offers.length === 0 ? (
         <Card level={1}>
           <EmptyState
@@ -392,6 +404,9 @@ const OfferCard: React.FC<{
   // Accepting an offer is a commitment to a date; "Tomorrow" and "In 3 days" are different
   // decisions, and the bare date left that arithmetic to the assayer.
   const when = relativeDay(assignment.scheduledDate);
+  // The server's own ACCEPT verdict (on leave that day, account not active, on hold): shown
+  // disabled with its reason, instead of an Accept that can only be refused.
+  const accept = acceptView(assignment);
 
   return (
     <Card level={2} style={{ gap: t.space.lg }}>
@@ -408,9 +423,14 @@ const OfferCard: React.FC<{
       <AssignmentMeta assignment={assignment} when={when} />
 
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-        <Button label={tr('home.accept')} icon="checkmark" loading={busy} disabled={busy} onPress={onAccept} style={{ flex: 1 }} />
+        <Button label={tr('home.accept')} icon="checkmark" loading={busy} disabled={busy || !accept.allowed} onPress={onAccept} style={{ flex: 1 }} />
         <Button label={tr('home.decline')} icon="close" variant="neutral" disabled={busy} onPress={onDecline} style={{ flex: 1 }} />
       </View>
+      {!accept.allowed && (
+        <AppText variant="small" tone="warning">
+          {serverErrorText(accept.reason, 'home.acceptNotAvailable', accept.code)}
+        </AppText>
+      )}
     </Card>
   );
 };
@@ -433,6 +453,12 @@ const CurrentJobCard: React.FC<{
   // The bare date this replaces answered "when is it?" but not the question the hero card
   // exists for: "is this now?".
   const when = relativeDay(assignment.scheduledDate);
+  const now = new Date();
+  // Only on the job's own day (IST), or as the server's verdict says — never a Check-in for a
+  // job that is on another day, which the server can only refuse.
+  const checkIn = checkInView(assignment, now);
+  // A reopened job closed without an arrival: only its papers remain to send.
+  const returnOnly = !checkedIn && canSendReturn(assignment, now);
 
   return (
     <Card level={2} style={{ gap: t.space.lg, borderColor: t.colors.primary + '40' }}>
@@ -467,8 +493,18 @@ const CurrentJobCard: React.FC<{
         {/* The one glowing CTA on the screen — the next real-world step for the current job. */}
         {checkedIn ? (
           <Button label={tr('home.scanReturn')} icon="scan-outline" onPress={onScan} glow full />
+        ) : returnOnly ? (
+          <Button label={tr('home.redoPapers')} icon="scan-outline" onPress={onScan} glow full />
+        ) : checkIn.kind === 'allowed' ? (
+          <Button label={tr('home.checkIn')} icon="location-outline" onPress={onCheckIn} loading={busy} disabled={busy} glow full />
+        ) : checkIn.kind === 'other-day' ? (
+          <AppText variant="bodyStrong" tone="muted">
+            {tr('home.jobOnDate', { date: formatDateOnly(checkIn.date, { weekday: 'long', day: 'numeric', month: 'long' }) })}
+          </AppText>
         ) : (
-          <Button label={tr('home.checkIn')} icon="location-outline" onPress={onCheckIn} glow full />
+          <AppText variant="small" tone="warning">
+            {serverErrorText(checkIn.reason, 'home.checkInNotAvailable', checkIn.code)}
+          </AppText>
         )}
         {/*
           Directions disappear once the assayer is checked in — they are standing in the

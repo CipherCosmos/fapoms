@@ -67,7 +67,8 @@ export const CustomerMasterVersions: React.FC = () => {
   useEffect(() => {
     const query = withScope(scopeParams);
     api
-      .request<ProjectOption[]>(`/projects${query ? `?${query}` : ''}`, { method: 'GET' })
+      // `limit=200` is the server's ceiling; the default page of 50 hid every later project.
+      .request<ProjectOption[]>(`/projects?limit=200${query ? `&${query}` : ''}`, { method: 'GET' })
       .then((list) => {
         setProjects(list);
         // The header's project, when it has fixed one — that is the narrowing rule, and it is why
@@ -273,11 +274,11 @@ export const CustomerMasterVersions: React.FC = () => {
         />
         {recordsTotal > RECORDS_PAGE_SIZE && recordsFor && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
-            <button type="button" disabled={recordsPage <= 1 || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage - 1)} style={btnStyle('var(--text-muted)')}>
+            <button type="button" disabled={recordsPage <= 1 || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage - 1)} title="Go to the previous page of records" style={btnStyle('var(--text-muted)')}>
               Previous
             </button>
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Page {recordsPage} of {totalRecordPages}</span>
-            <button type="button" disabled={recordsPage >= totalRecordPages || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage + 1)} style={btnStyle('var(--text-muted)')}>
+            <span title={`Page ${recordsPage} of ${totalRecordPages}`} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Page {recordsPage} of {totalRecordPages}</span>
+            <button type="button" disabled={recordsPage >= totalRecordPages || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage + 1)} title="Go to the next page of records" style={btnStyle('var(--text-muted)')}>
               Next
             </button>
           </div>

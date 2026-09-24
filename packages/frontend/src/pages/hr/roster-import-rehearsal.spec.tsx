@@ -2,28 +2,31 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { BackgroundJobSummary } from '@fapoms/shared';
 
 import { AssayerRoster } from './AssayerRoster';
 import { api } from '../../services/api';
 
 /**
- * The roster import's rehearsal, as the page runs it.
+ * The roster import as the page runs it now: a background job (`ROSTER_IMPORT`) the server keeps.
  *
- * It used to be one awaited `POST /assayers/roster/import?dryRun=true`. The server read `dryRun` from
- * the multipart body, not the URL, so that "rehearsal" was queued as a REAL import before anyone had
- * confirmed a thing — and its 202 carried no `rowsRead`, so the page then threw and showed an error
- * while the import ran. And a genuine rehearsal is the whole import rolled back: minutes for a full
- * roster, beyond the three-minute upload timeout. The rehearsal is now queued on the server and
- * followed here with the same hook the import uses.
+ * Every import is rehearsed first. The upload goes to `POST /assayers/roster/import` with the
+ * rehearsal flag in the job's params and is answered at once; the rehearsal (the whole import,
+ * rolled back) runs on the server and ends waiting for review; the page shows what it would do and
+ * offers the import, which commits the reviewed rehearsal (`POST /jobs/:id/commit`).
  *
- * These pin the page to that: the flag goes where the server reads it, the import is offered only
- * once the queued rehearsal has actually answered, and a rehearsal that fails offers nothing.
- * The hook and the progress panel are real; only the network and the confirm dialog are stubbed.
+ * The point of the move is that none of this lives in the tab: after a refresh or a hard refresh the
+ * page reads `GET /jobs` and shows the same run — still going, or still waiting for its answer. The
+ * hook and the job card are real; only the network, the socket and the confirm dialog are stubbed.
  */
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
-jest.mock('../../services/socket', () => ({ connectSocket: () => null }));
+jest.mock('../../services/socket', () => ({
+  connectSocket: () => null,
+  subscribeToConnection: (cb: (live: boolean) => void) => { cb(true); return () => undefined; },
+}));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   canManageAssayers: () => true,
   canCreateAssayers: () => true,
@@ -40,53 +43,67 @@ jest.mock('../../components/ui', () => {
 
 const mockRequest = api.request as jest.Mock;
 
-const IMPORT_URL = '/assayers/roster/import';
-const REHEARSAL_STATUS = '/assayers/roster/import-jobs/r-1';
-const IMPORT_STATUS = '/assayers/roster/import-jobs/i-1';
+const JOBS_URL = '/jobs?status=active%2Crecent&kind=ROSTER_IMPORT&scopeType=ROSTER&limit=5';
 
 const summary = (dryRun: boolean) => ({
-  rowsRead: 2, created: 1, updated: 1, skipped: 0, references: 0, onboardingDocuments: 0,
-  backgroundChecks: 0, empanelments: 0, issues: 0, notes: [], dryRun,
+  rowsRead: 1155, created: 40, updated: 1115, skipped: 2, references: 0, onboardingDocuments: 0,
+  backgroundChecks: 0, empanelments: 0, issues: 3, notes: ['ICICI will be created as a client.'], dryRun,
 });
 
-const deferred = <T,>() => {
-  let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => { resolve = r; });
-  return { promise, resolve };
-};
+const job = (over: Partial<BackgroundJobSummary> = {}): BackgroundJobSummary => ({
+  id: 'job-r',
+  kind: 'ROSTER_IMPORT',
+  status: 'RUNNING',
+  title: 'Check 1,155 roster row(s) from roster.xlsx',
+  requestedBy: 'u-1',
+  scopeType: 'ROSTER',
+  scopeId: null,
+  progress: { processed: 400, total: 1155, percent: 34, stage: 'Checking rows', message: null },
+  result: null,
+  error: null,
+  inputFileName: 'roster.xlsx',
+  inputSize: 2048,
+  parentJobId: null,
+  cancelRequested: false,
+  hasResultFile: false,
+  resultFileName: null,
+  createdAt: '2026-09-24T10:00:00.000Z',
+  startedAt: '2026-09-24T10:00:01.000Z',
+  finishedAt: null,
+  updatedAt: '2026-09-24T10:01:00.000Z',
+  ...over,
+});
 
-/** The two POSTs to the import route, in order, as the multipart bodies the page sent. */
-const importPosts = () =>
-  mockRequest.mock.calls.filter(([url]) => String(url).startsWith(IMPORT_URL) && !String(url).includes('import-jobs'));
+const awaitingReview = () => job({
+  status: 'AWAITING_REVIEW',
+  progress: { processed: 1155, total: 1155, percent: 100, stage: 'Needs your review', message: null },
+  result: { summary: 'Checked 1,155 row(s).', counts: { rowsRead: 1155 }, details: summary(true) },
+  finishedAt: '2026-09-24T10:05:00.000Z',
+});
 
-/**
- * Answers the import route as the server now does — 202 and a job to watch, for a rehearsal and an
- * import alike — and hands each job's status read to `status`.
- */
-const serve = (status: (url: string) => Promise<unknown>) => {
-  mockRequest.mockImplementation((url: string, init?: { method?: string; body?: FormData }) => {
-    if (url === IMPORT_URL && init?.method === 'POST') {
-      const rehearsal = init.body?.get('dryRun') === 'true';
-      return Promise.resolve({
-        queued: true, jobId: rehearsal ? 'r-1' : 'i-1', statusUrl: rehearsal ? REHEARSAL_STATUS : IMPORT_STATUS,
-        totalRows: 2, message: rehearsal ? 'Checking what importing it would do.' : 'Importing in the background.',
+/** Answers the page's reads; `/jobs` for this page's own roster jobs comes from `jobs`. */
+const serve = (initial: { active: BackgroundJobSummary[]; recent: BackgroundJobSummary[] }) => {
+  let jobs = initial;
+  mockRequest.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+    if (url === JOBS_URL) return Promise.resolve(jobs);
+    if (url.startsWith('/jobs/') && url.endsWith('/commit') && init?.method === 'POST') {
+      // As the server does: a child job starts, and the rehearsal it was reviewed from is closed.
+      const child = job({
+        id: 'job-i', parentJobId: 'job-r', status: 'QUEUED', title: 'Import 1,155 roster row(s) from roster.xlsx',
+        progress: { processed: 0, total: 1155, percent: 0, stage: 'Waiting to start', message: null },
+        createdAt: '2026-09-24T10:06:00.000Z', updatedAt: '2026-09-24T10:06:00.000Z', startedAt: null,
       });
+      jobs = { active: [child], recent: [{ ...jobs.active[0], status: 'SUCCEEDED', updatedAt: '2026-09-24T10:06:00.000Z' }] };
+      return Promise.resolve({ job: child, deduplicated: false });
     }
-    if (url.startsWith('/assayers/roster/import-jobs/')) return status(url);
+    if (url.startsWith('/jobs')) return Promise.resolve({ active: [], recent: [] });
     return Promise.resolve({ data: [], meta: { pagination: { total: 0 } } });
   });
 };
 
-const uploadWorkbook = async () => {
+const mount = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  render(<QueryClientProvider client={client}><MemoryRouter><AssayerRoster /></MemoryRouter></QueryClientProvider>);
-  fireEvent.click(await screen.findByRole('button', { name: /^Import$/ }));
-  const input = await waitFor(() => {
-    const el = document.querySelector('input[type="file"]');
-    expect(el).not.toBeNull();
-    return el as HTMLInputElement;
-  });
-  fireEvent.change(input, { target: { files: [new File(['xlsx'], 'roster.xlsx')] } });
+  return render(<QueryClientProvider client={client}><MemoryRouter><AssayerRoster /></MemoryRouter></QueryClientProvider>);
 };
 
 beforeEach(() => {
@@ -94,57 +111,125 @@ beforeEach(() => {
   mockConfirm.mockReset();
 });
 
-describe('AssayerRoster — rehearsing a roster import', () => {
-  it('sends the rehearsal flag in the form, where the server reads it, not in the URL', async () => {
-    serve(() => Promise.resolve({ state: 'active', progress: null, result: null, error: null, totalRows: 2 }));
-    await uploadWorkbook();
+/** A controllable XMLHttpRequest — the upload goes by XHR so it can report real progress. */
+class FakeXhr {
+  static last: FakeXhr | null = null;
+  upload: { onprogress: unknown } = { onprogress: null };
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+  status = 0;
+  responseText = '';
+  url = '';
+  body: FormData | null = null;
+  open(_method: string, url: string) { this.url = url; }
+  setRequestHeader() { /* the token */ }
+  send(body: FormData) { this.body = body; FakeXhr.last = this; }
+  abort() { this.onabort?.(); }
+  respond(status: number, body: unknown) { this.status = status; this.responseText = JSON.stringify(body); this.onload?.(); }
+}
 
-    await waitFor(() => expect(importPosts()).toHaveLength(1));
-    const [url, init] = importPosts()[0];
-    expect(url).toBe(IMPORT_URL);
-    expect(init.body.get('dryRun')).toBe('true');
-    expect(init.body.get('overwrite')).toBe('false');
+describe('AssayerRoster — uploading a roster', () => {
+  const realXhr = global.XMLHttpRequest;
+  beforeEach(() => { (global as any).XMLHttpRequest = FakeXhr; FakeXhr.last = null; });
+  afterEach(() => { (global as any).XMLHttpRequest = realXhr; });
+
+  it('uploads for a REHEARSAL, with the flags in the job params the route reads, and shows the accepted job', async () => {
+    serve({ active: [], recent: [] });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /^Import$/ }));
+    const input = await waitFor(() => {
+      const el = document.querySelector('input[type="file"]');
+      expect(el).not.toBeNull();
+      return el as HTMLInputElement;
+    });
+    fireEvent.change(input, { target: { files: [new File(['xlsx'], 'roster.xlsx')] } });
+
+    await waitFor(() => expect(FakeXhr.last).not.toBeNull());
+    const xhr = FakeXhr.last!;
+    expect(xhr.url).toBe('/api/v1/assayers/roster/import');
+    expect(xhr.body!.get('kind')).toBe('ROSTER_IMPORT');
+    expect(xhr.body!.get('scopeType')).toBe('ROSTER');
+    expect(JSON.parse(String(xhr.body!.get('params')))).toEqual({ dryRun: true, overwrite: false });
+    expect((xhr.body!.get('file') as File).name).toBe('roster.xlsx');
+
+    xhr.respond(202, { job: job({ status: 'QUEUED', progress: { processed: 0, total: 1155, percent: 0, stage: 'Waiting to start', message: null } }), deduplicated: false });
+
+    expect(await screen.findByText('Check 1,155 roster row(s) from roster.xlsx')).toBeInTheDocument();
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+});
+
+describe('AssayerRoster — the roster import after a refresh', () => {
+  it('shows a run still going on the server, read back from GET /jobs on mount', async () => {
+    serve({ active: [job()], recent: [] });
+    mount();
+
+    expect(await screen.findByText('Check 1,155 roster row(s) from roster.xlsx')).toBeInTheDocument();
+    expect(screen.getByText('Checking rows')).toBeInTheDocument();
+    expect(screen.getByText(/400 of 1,155/)).toBeInTheDocument();
+    expect(screen.getByText(/you can leave or refresh this page/)).toBeInTheDocument();
+    expect(mockRequest).toHaveBeenCalledWith(JOBS_URL, expect.anything());
   });
 
-  it('offers the import only once the queued rehearsal has answered, then queues the real import', async () => {
-    const rehearsalAnswer = deferred<unknown>();
-    serve((url) => (url === REHEARSAL_STATUS
-      ? rehearsalAnswer.promise
-      : Promise.resolve({ state: 'completed', progress: null, result: summary(false), error: null, totalRows: 2 })));
+  it('offers a rehearsal that finished while the page was closed, with what it would do', async () => {
+    serve({ active: [awaitingReview()], recent: [] });
+    mount();
+
+    const review = await screen.findByTestId('roster-import-review');
+    expect(review).toHaveTextContent('roster.xlsx was checked — nothing has been saved yet');
+    expect(review).toHaveTextContent(/will add 40 and update 1,115 appraisers/);
+    expect(review).toHaveTextContent(/2 row\(s\) without appraiser code will be skipped/);
+    expect(review).toHaveTextContent('ICICI will be created as a client.');
+    expect(screen.getByRole('button', { name: 'Import 1,155 appraisers' })).toBeInTheDocument();
+  });
+
+  it('imports only after the same confirmation, by committing the reviewed rehearsal as a real run', async () => {
+    serve({ active: [awaitingReview()], recent: [] });
     mockConfirm.mockResolvedValue(true);
-    await uploadWorkbook();
+    mount();
 
-    // Accepted and running on the server — worded as a check, and nothing offered yet.
-    expect(await screen.findByText(/Checking roster\.xlsx/)).toBeInTheDocument();
-    expect(mockConfirm).not.toHaveBeenCalled();
-
-    rehearsalAnswer.resolve({ state: 'completed', progress: null, result: summary(true), error: null, totalRows: 2 });
+    fireEvent.click(await screen.findByRole('button', { name: 'Import 1,155 appraisers' }));
 
     await waitFor(() => expect(mockConfirm).toHaveBeenCalledTimes(1));
-    expect(mockConfirm.mock.calls[0][0].title).toMatch(/Import 2 appraisers/);
-    await waitFor(() => expect(importPosts()).toHaveLength(2));
-    expect(importPosts()[1][1].body.get('dryRun')).toBeNull();
+    expect(mockConfirm.mock.calls[0][0].title).toMatch(/Import 1,155 appraisers from this workbook/);
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/jobs/job-r/commit', expect.objectContaining({ method: 'POST' })));
+    const [, init] = mockRequest.mock.calls.find(([url]) => url === '/jobs/job-r/commit')!;
+    expect(JSON.parse(init.body)).toEqual({ params: { dryRun: false } });
+    // The real run shows at once, from the commit's answer.
+    expect(await screen.findByText('Import 1,155 roster row(s) from roster.xlsx')).toBeInTheDocument();
   });
 
-  it('offers nothing when the rehearsal fails, and shows the reason it failed', async () => {
-    serve(() => Promise.resolve({
-      state: 'failed', progress: null, result: null, error: 'This does not look like the appraiser roster.', totalRows: 2,
-    }));
-    await uploadWorkbook();
+  it('starts nothing when the operator backs out of the confirmation', async () => {
+    serve({ active: [awaitingReview()], recent: [] });
+    mockConfirm.mockResolvedValue(false);
+    mount();
 
-    expect(await screen.findByText(/could not be checked/)).toBeInTheDocument();
-    expect(screen.getByText(/does not look like the appraiser roster/)).toBeInTheDocument();
-    expect(mockConfirm).not.toHaveBeenCalled();
-    expect(importPosts()).toHaveLength(1);
+    fireEvent.click(await screen.findByRole('button', { name: 'Import 1,155 appraisers' }));
+
+    await waitFor(() => expect(mockConfirm).toHaveBeenCalledTimes(1));
+    expect(mockRequest.mock.calls.some(([url]) => String(url).endsWith('/commit'))).toBe(false);
   });
 
-  /** A "check" that the server ran for real must never be followed by an offer to import it again. */
-  it('does not offer a second import when the check came back as a real import', async () => {
-    serve(() => Promise.resolve({ state: 'completed', progress: null, result: summary(false), error: null, totalRows: 2 }));
-    await uploadWorkbook();
+  /** A "check" the server ran for real must never be followed by an offer to import it again. */
+  it('does not offer an import for a review whose result was not a rehearsal', async () => {
+    serve({ active: [job({ ...awaitingReview(), result: { summary: 'x', details: summary(false) } })], recent: [] });
+    mount();
 
     expect(await screen.findByText(/imported this workbook instead of only checking it/)).toBeInTheDocument();
-    expect(mockConfirm).not.toHaveBeenCalled();
-    expect(importPosts()).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /^Import 1,155/ })).toBeNull();
+  });
+
+  it('says what a finished import did, in the page\'s own words', async () => {
+    serve({
+      active: [],
+      recent: [job({
+        id: 'job-i', parentJobId: 'job-r', status: 'SUCCEEDED', finishedAt: '2026-09-24T10:20:00.000Z',
+        result: { summary: 'Roster imported.', details: summary(false) },
+      })],
+    });
+    mount();
+
+    expect(await screen.findByTestId('roster-import-outcome')).toHaveTextContent('Roster imported — 40 new, 1,115 updated.');
   });
 });

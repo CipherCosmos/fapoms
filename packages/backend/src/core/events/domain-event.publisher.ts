@@ -3,7 +3,16 @@ import { randomUUID } from 'crypto';
 import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from '../../infrastructure/redis/redis-client.module';
 
-export type EventCallback = (eventName: string, payload: any) => any;
+/**
+ * How an event reached this process. `remote` is true when it arrived over the Redis bridge from
+ * another process, which has already run the named listeners and already emitted the socket
+ * broadcast (the Socket.IO Redis adapter fans that out cluster-wide) — see `handleRemoteMessage`.
+ */
+export interface DeliveryMeta {
+  remote: boolean;
+}
+
+export type EventCallback = (eventName: string, payload: any, meta?: DeliveryMeta) => any;
 export type EventListener = (payload: any) => any;
 
 /** Channel every process publishes domain events to and subscribes on. One channel, not one per event name. */
@@ -85,6 +94,9 @@ export const EVENTS_REQUIRING_A_NAMED_SUBSCRIBER: ReadonlySet<string> = new Set(
   'user:role-changed',
   'user:password-changed',
 ]);
+
+const LOCAL: DeliveryMeta = Object.freeze({ remote: false });
+const REMOTE: DeliveryMeta = Object.freeze({ remote: true });
 
 @Injectable()
 export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
@@ -236,12 +248,17 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     }
 
     for (const cb of this.globalCallbacks) {
-      await cb(eventName, payload);
+      await cb(eventName, payload, LOCAL);
     }
     return { named: list.length, global: this.globalCallbacks.length };
   }
 
-  /** The listener/global-callback fan-out. Shared by a local publish() and a remote message. */
+  /**
+   * The listener/global-callback fan-out for a publish() in THIS process.
+   *
+   * A message from another process goes through `deliverRemote` instead, which never runs named
+   * listeners — see there.
+   */
   private deliverLocally(eventName: string, payload: any): void {
     const list = this.listeners[eventName] || [];
     for (const cb of list) {
@@ -257,9 +274,39 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    this.callGlobals(eventName, payload, LOCAL);
+  }
+
+  /**
+   * An event another process published, arriving over the bridge.
+   *
+   * ## Named listeners do NOT run here
+   *
+   * They used to: every process delivered every remote event through the same path as a local
+   * publish, so with an api and a worker process every named business listener ran once PER
+   * PROCESS — `BillingEngineService`'s fee-updated reprice ran twice, its completion booking
+   * enqueue ran twice, and each auth/HR cache invalidation was issued twice. The booking was saved
+   * only by Bull's jobId dedupe; a reprice has no such guard. The origin process has already run
+   * every named listener for the event (it registers the same modules), and every such listener
+   * today writes to shared state — Redis caches, Postgres, Bull — so once is the whole job.
+   *
+   * ## Global callbacks run, told the delivery is remote
+   *
+   * The only global callback is the realtime gateway, and it has one duty that genuinely must run
+   * in every process: dropping THIS process's live sockets for a user whose authority changed
+   * (its socket map is per process). Its broadcast, on the other hand, must NOT be repeated: the
+   * origin process's `server.to(room).emit` already reaches every replica's sockets through the
+   * Socket.IO Redis adapter, so re-emitting here delivered each socket event once per process.
+   * The gateway decides that with `meta.remote` — see `EventsGateway`.
+   */
+  private deliverRemote(eventName: string, payload: any): void {
+    this.callGlobals(eventName, payload, REMOTE);
+  }
+
+  private callGlobals(eventName: string, payload: any, meta: DeliveryMeta): void {
     for (const cb of this.globalCallbacks) {
       try {
-        const res = cb(eventName, payload);
+        const res = cb(eventName, payload, meta);
         if (res && typeof (res as Promise<any>).catch === 'function') {
           (res as Promise<any>).catch((err) => {
             this.logger.error(`Error in global async callback for event ${eventName}`, err);
@@ -271,8 +318,11 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** A message received over the Redis channel — from this process or another one. */
-  private handleRemoteMessage(raw: string): void {
+  /**
+   * A message received over the Redis channel — from this process or another one. Public so a
+   * test can play two processes against one simulated channel.
+   */
+  handleRemoteMessage(raw: string): void {
     let envelope: EventEnvelope;
     try {
       envelope = JSON.parse(raw);
@@ -286,6 +336,6 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     // just as readily as in a split one, since this process subscribes to its own channel too.
     if (envelope.originId === this.originId) return;
 
-    this.deliverLocally(envelope.eventName, envelope.payload);
+    this.deliverRemote(envelope.eventName, envelope.payload);
   }
 }

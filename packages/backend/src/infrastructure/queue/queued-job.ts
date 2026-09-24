@@ -26,15 +26,16 @@
  *
  * ## What it deliberately does NOT do
  *
- * It does not wrap `BullQueueManager`. That manager adds *named* jobs to the 'background-jobs'
- * queue while `BullProcessor` declares an unnamed `@Process()`, which in Bull means "handle only
- * jobs added with no name" — so every job routed through it currently dead-letters. Each queue
+ * It did not wrap `BullQueueManager` (deleted 2026-09-24 with its 'background-jobs' queue, which
+ * nothing enqueued onto). That manager added *named* jobs while `BullProcessor` declared an unnamed
+ * `@Process()`, which in Bull means "handle only jobs added with no name" — so every job routed
+ * through it dead-lettered. Each queue
  * introduced here registers its own processor with `@Process({ name })` handlers whose names
  * match exactly what is enqueued, which is the whole reason that defect cannot repeat here.
  */
 
 import { NotFoundException } from '@nestjs/common';
-import type { Job, JobStatus, KeepJobsOptions } from 'bull';
+import type { Job, JobStatus, KeepJobsOptions, Queue } from 'bull';
 
 /**
  * The four states a caller has to be able to act on.
@@ -86,6 +87,13 @@ export interface QueuedJobEnvelope {
   requestedBy: string;
   /** Stable fingerprint of (job name + inputs + requester) — see `dedupeKeyFor`. */
   dedupeKey: string;
+  /**
+   * The `background_jobs` row that tracks this run, when it was enqueued through
+   * `BackgroundJobsService.enqueueTracked` — what lets a refreshed page and the Jobs tray find it
+   * again. Absent on a job queued before tracking existed; `BackgroundJobTracker` then runs it
+   * untracked, exactly as before.
+   */
+  backgroundJobId?: string;
 }
 
 /**
@@ -112,6 +120,39 @@ export const FAILED_JOB_RETENTION: KeepJobsOptions = { age: 7 * 86_400, count: 5
  * list is normally single digits; 200 is a ceiling, not an expectation.
  */
 export const IN_FLIGHT_SCAN_LIMIT = 200;
+
+/**
+ * An identical request (same job name and `dedupeKey`) that has not finished yet, or null.
+ *
+ * Only unfinished states are considered. Matching a *completed* job would be worse than no
+ * deduplication at all: for the retention window every re-request would return the first run's
+ * answer — an operator who changed something and pressed again would be told nothing had changed.
+ *
+ * A failure here never blocks the enqueue. The scan is an optimisation — the worst consequence of
+ * skipping it is one redundant run — whereas refusing to accept the work because a list read failed
+ * would turn a Redis hiccup into an outage of the endpoint.
+ *
+ * The one implementation of the rule; every queue that de-duplicates by fingerprint uses it
+ * (through `BackgroundJobsService.enqueueTracked`, and directly by any queue that is not tracked).
+ */
+export async function findInFlightDuplicate(
+  queue: Pick<Queue, 'getJobs'>,
+  name: string,
+  dedupeKey: string,
+  logger?: { warn(message: string): void },
+): Promise<Job | null> {
+  try {
+    const jobs = await queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
+    return (
+      jobs.find(
+        (j) => j?.name === name && (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
+      ) ?? null
+    );
+  } catch (err) {
+    logger?.warn(`Could not scan for an in-flight ${name} job (${(err as Error).message}); enqueuing anyway.`);
+    return null;
+  }
+}
 
 /**
  * Canonical fingerprint of a job request, used to collapse duplicate submissions.

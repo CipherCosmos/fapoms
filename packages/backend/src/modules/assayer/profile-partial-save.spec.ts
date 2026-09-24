@@ -56,7 +56,7 @@ describe('assayer profile partial save', () => {
     skills: 'gold, silver', languages: 'Hindi', preferredRegions: 'WEST', experienceYears: 4,
     // Read-only / HR-maintained, present on the screen's state but never sendable.
     panNumber: 'ABCDE1234F', bankAccountNumber: '111122223333', joiningDate: '2024-01-01',
-    maxDailyWorkload: 3, totalAssignments: 40, averageRating: 4.6,
+    maxWeeklyWorkload: 15, totalAssignments: 40, averageRating: 4.6,
   };
 
   it('sends only the field that changed', () => {
@@ -78,7 +78,7 @@ describe('assayer profile partial save', () => {
 
   it('never sends a field the assayer is not allowed to edit', () => {
     // Even if the screen's copy has drifted from the server's, these must not be written back.
-    const next = { ...base, panNumber: 'ZZZZZ9999Z', bankAccountNumber: '999', joiningDate: '2020-01-01', maxDailyWorkload: 99 };
+    const next = { ...base, panNumber: 'ZZZZZ9999Z', bankAccountNumber: '999', joiningDate: '2020-01-01', maxWeeklyWorkload: 99 };
     expect(changedFields(next, base)).toEqual({});
   });
 

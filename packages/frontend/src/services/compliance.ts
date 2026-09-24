@@ -69,6 +69,36 @@ export const INCIDENT_CATEGORIES = [
 ];
 export const INCIDENT_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
+/**
+ * The words the compliance register shows. The panel printed the stored codes as they came —
+ * `IN_PROGRESS`, `AWAITING_INFO`, `UNAUTHORISED_ACCESS` — beside plain-English copy everywhere
+ * else. Every code the backend can send has a word here; anything newer falls back to sentence
+ * case rather than the raw code.
+ */
+const COMPLIANCE_WORDS: Record<string, string> = {
+  // incident + rights-request statuses
+  OPEN: 'Open', INVESTIGATING: 'Investigating', CONTAINED: 'Contained', RESOLVED: 'Resolved', CLOSED: 'Closed',
+  RECEIVED: 'Received', IN_PROGRESS: 'In progress', AWAITING_INFO: 'Waiting for information',
+  COMPLETED: 'Completed', REJECTED: 'Rejected',
+  // incident categories
+  UNAUTHORISED_ACCESS: 'Unauthorised access', DATA_BREACH: 'Data breach', MALWARE: 'Malware',
+  DOS: 'Denial of service', PHISHING: 'Phishing', SYSTEM_COMPROMISE: 'System compromise',
+  IDENTITY_THEFT: 'Identity theft', OTHER: 'Other',
+  // severities
+  LOW: 'Low', MEDIUM: 'Medium', HIGH: 'High', CRITICAL: 'Critical',
+  // rights-request types
+  ACCESS: 'Access to data', CORRECTION: 'Correction', ERASURE: 'Erasure', GRIEVANCE: 'Grievance',
+  NOMINATION: 'Nomination',
+};
+
+export function complianceLabel(code?: string | null): string {
+  if (!code) return '—';
+  const known = COMPLIANCE_WORDS[code];
+  if (known) return known;
+  const words = code.toLowerCase().split('_').join(' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export const getComplianceHealth = () => api.request<ComplianceHealth>('/admin/compliance/health');
 export const listIncidents = () => api.request<SecurityIncident[]>('/admin/compliance/incidents');
 

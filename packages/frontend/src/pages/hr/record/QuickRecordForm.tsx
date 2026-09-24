@@ -66,6 +66,8 @@ export const QuickRecordForm: React.FC<{
   const [bankHint, setBankHint] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The account number typed a second time — only asked for once a new number has been typed. */
+  const [accountConfirm, setAccountConfirm] = useState('');
 
   const fields = EDIT_FIELDS.filter((f) => boxes.some((b) => b.key === f.key));
   const set = (key: string, value: string) => setForm((f) => ({ ...f, [key]: value }));
@@ -107,7 +109,10 @@ export const QuickRecordForm: React.FC<{
 
   const save = async () => {
     setError(null);
-    const { body, problems } = buildAssayerEditBody(fields, Object.fromEntries(typed), assayer);
+    // The second typing rides along for the check only — `buildAssayerEditBody` never puts it in the body.
+    const { body, problems } = buildAssayerEditBody(
+      fields, { ...Object.fromEntries(typed), bankAccountNumberConfirm: accountConfirm }, assayer,
+    );
     if (problems.length) { setError(problems.join(' ')); return; }
     setSaving(true);
     try {
@@ -115,6 +120,7 @@ export const QuickRecordForm: React.FC<{
       if (typed.some(([k]) => BANK_KEYS.has(k))) void invalidateBankMutation(queryClient, assayer.id);
       setForm({});
       setBankHint(null);
+      setAccountConfirm('');
       onSaved();
     } catch (e) {
       setError(`Not saved. ${userMessage(e)}`);
@@ -165,6 +171,27 @@ export const QuickRecordForm: React.FC<{
           );
         })}
       </div>
+      {typed.some(([k]) => k === 'bankAccountNumber') && (
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: 'var(--text-xs)', maxWidth: '320px' }}>
+          <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Re-enter account number</span>
+          <input
+            value={accountConfirm}
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="Type it again, from the passbook"
+            onChange={(e) => setAccountConfirm(e.target.value)}
+            // A pasted copy repeats the slip it is meant to catch.
+            onPaste={(e) => e.preventDefault()}
+            style={{
+              padding: '7px 9px', fontSize: 'var(--text-xs)', borderRadius: '6px', fontFamily: 'monospace',
+              background: 'var(--bg-surface)', color: 'var(--text-primary)', border: '1px solid var(--border-color)',
+            }}
+          />
+          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>
+            Typed, not pasted — the only check that catches a wrong digit.
+          </span>
+        </label>
+      )}
       {error && <div role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>{error}</div>}
       <div>
         <button

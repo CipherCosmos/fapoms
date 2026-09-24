@@ -15,13 +15,20 @@ import { AssayerScoreOverrideEntity } from './assayer-score-override.entity';
 import { AssayerIdempotencyEntity } from './assayer-idempotency.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerInterviewEntity } from './assayer-interview.entity';
+import { AssayerOnboardingApprovalEntity } from './assayer-onboarding-approval.entity';
+import { OnboardingApprovalService } from './onboarding-approval.service';
+import { OnboardingApprovalController } from './onboarding-approval.controller';
+import { ComplianceStandingService } from './compliance-standing.service';
+import { ComplianceReviewService } from './compliance-review.service';
+import { ComplianceController } from './compliance.controller';
+import { IdCardService } from './id-card.service';
+import { MyIdCardController, PublicIdCardController } from './id-card.controller';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
 import { QualificationScoreService } from './qualification-score.service';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
-import { RosterImportWorker } from './roster-import.worker';
-import { ImportModule } from '../import/import.module';
+import { RosterImportJob } from './roster-import.job';
 import { RosterRecordsService } from './roster-records.service';
 import { DataIntegrityService } from './data-integrity.service';
 import { StorageModule } from '../../infrastructure/storage/storage.module';
@@ -33,6 +40,7 @@ import { AssayerController } from './assayer.controller';
 import { RosterQueryService } from './roster-query.service';
 import { AssayerSelfServiceController } from './assayer-self-service.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { DayTravelModule } from '../assignment/day-travel.module';
 import { GeoModule } from '../geo/geo.module';
 import { RegistrationApplicationService } from './registration-application.service';
 import { AssayerInterviewService } from './assayer-interview.service';
@@ -46,12 +54,11 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
 
 @Module({
   imports: [
-    // The shared import queue — a leaf module, so this cannot introduce a cycle. Roster imports
-    // are queued for the same reason branch imports are: they are long, and the request path
-    // was being kept open for up to fifteen minutes to hold one.
-    ImportModule,
     // HR and ops learn when someone becomes assignable, and when credentials fall due.
     NotificationsModule,
+    // Travel once per assayer per day: a departure's cancelled jobs re-decide their days. A leaf
+    // module (PricingModule + NotificationsModule only), so no cycle.
+    DayTravelModule,
     StorageModule,
     // For `GeoPrecisionService.enqueueBackfill` — the roster importer hands freshly imported
     // appraisers to the precision worker instead of leaving them for the nightly sweep.
@@ -84,6 +91,7 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
       AssayerImportIssueEntity,
       AssayerScoreOverrideEntity,
       AssayerInterviewEntity,
+      AssayerOnboardingApprovalEntity,
       AssayerApplicationEntity,
       AssayerApplicationDocumentEntity,
       ClientEntity,
@@ -94,16 +102,20 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
   // long-established routes first means a new self-service path can never shadow one of them.
   controllers: [
     AssayerController, HrController, AssayerSelfServiceController,
-    AssayerInterviewController, PublicRegistrationController, HrApplicationsController,
+    AssayerInterviewController, PublicRegistrationController, HrApplicationsController, OnboardingApprovalController, ComplianceController, MyIdCardController, PublicIdCardController,
   ],
   providers: [
-    AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker,
+    AssayerService, HrWorkforceService, LocationTrailService, RosterImportService,
+    // The roster import's background job (`ROSTER_IMPORT`): registered at init, run on the shared
+    // tracked-jobs queue — see roster-import.job.ts. BackgroundJobsModule is global.
+    RosterImportJob,
     RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService,
-    RegistrationApplicationService, AssayerInterviewService, WorkforceBulkJobsService, WorkforceBulkJobsWorker,
+    RegistrationApplicationService, AssayerInterviewService, OnboardingApprovalService, ComplianceStandingService, ComplianceReviewService, IdCardService, WorkforceBulkJobsService, WorkforceBulkJobsWorker,
   ],
   exports: [
     AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService,
     QualificationScoreService, DataIntegrityService, RosterQueryService, RegistrationApplicationService,
+    ComplianceStandingService,
     TypeOrmModule,
   ],
 })

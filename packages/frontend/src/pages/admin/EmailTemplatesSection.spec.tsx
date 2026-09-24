@@ -308,3 +308,18 @@ describe('the publish gate', () => {
     expect(screen.queryByText(/Send yourself a test first/i)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The referee email, built from the editor's own defaults, must carry every token its contract
+ * requires — or an administrator's first "Publish" from the visual editor would be refused.
+ */
+describe('the referee email in the visual editor', () => {
+  it('builds from its defaults with every required token and no button', () => {
+    const html = compileVisualToHtml('reference-notice', VISUAL_DEFAULTS['reference-notice']);
+    for (const token of ['{{refereeName}}', '{{candidateName}}', '{{contactLine}}', '{{logoUrl}}']) {
+      expect(html).toContain(token);
+    }
+    expect(html).not.toContain('</a>');
+  });
+});
+

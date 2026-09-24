@@ -12,11 +12,16 @@ import { DocumentController } from './document.controller';
  */
 describe('PATCH /documents/:id/status', () => {
   const updateStatus = jest.fn(async (_id: string, status: DocumentStatus) => ({ id: 'doc-1', status }));
+  // The route now carries the region ceiling (asserted in document-data-entry-guards.spec.ts);
+  // here it is a pass-through so this file keeps pinning only the status rule.
+  const findOne = jest.fn(async () => ({ id: 'doc-1', assessment: { branch: { region: 'NORTH' } } }));
+  const regionGuard = { assertRegionAllowedStaged: jest.fn(async () => undefined) };
   const controller = new DocumentController(
-    { updateStatus } as any,
+    { updateStatus, findOne } as any,
     null as any, null as any, null as any, null as any,
     null as any, null as any, null as any, null as any, null as any,
-    null as any, null as any,
+    regionGuard as any, null as any,
+    null as any, // backgroundJobs
   );
   const req = { user: { id: 'u-1' } };
 

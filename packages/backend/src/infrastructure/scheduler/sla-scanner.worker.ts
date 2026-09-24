@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Processor, Process } from '@nestjs/bull';
+import { CHECK_TYPE_LABELS } from '@fapoms/shared';
+import { ComplianceStandingService } from '../../modules/assayer/compliance-standing.service';
 import { Job } from 'bull';
 import { AssignmentService } from '../../modules/assignment/assignment.service';
 import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
@@ -12,6 +14,10 @@ import { DataIntegrityService } from '../../modules/assayer/data-integrity.servi
 import { EmailDigestService } from './email-digest.service';
 import { BillingEngineService } from '../../modules/billing-engine/billing-engine.service';
 import { businessTodayDateKey } from '@fapoms/shared';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource } from 'typeorm';
+import { withAdvisoryLock } from '../queue/advisory-lock';
+import { errorAlerter, type ErrorAlerter } from '../observability/error-alerter';
 
 @Injectable()
 @Processor('sla-scanner')
@@ -45,7 +51,14 @@ export class SlaScannerWorker {
     private readonly dataIntegrity: DataIntegrityService,
     private readonly emailDigest: EmailDigestService,
     private readonly billingEngine: BillingEngineService,
+    /** Re-checks over time — who is due soon, due, or held from work. Optional for older specs. */
+    @Optional() private readonly compliance?: ComplianceStandingService,
+    /** For the one-scan-at-a-time lock. Optional so older specs construct the worker by hand. */
+    @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
+
+  /** Where a tick whose phases failed is reported. Replaceable in tests. */
+  alerter: Pick<ErrorAlerter, 'report'> = errorAlerter;
 
   /**
    * The morning email digest, on its own schedule (default 08:30 IST — see the module).
@@ -72,6 +85,32 @@ export class SlaScannerWorker {
    */
   @Process('scan')
   async runScan(_job: Job) {
+    /*
+      One scan at a time, cluster-wide. The queue's two loops (scan + digest) are shared by both
+      job names, a retry's backoff can land on the next tick, and every replica runs this worker —
+      so two scans could overlap and each send the same escalations before either had recorded
+      them. A tick that finds a scan still running skips; the next tick is fifteen minutes away.
+    */
+    if (!this.dataSource) return this.scanWithAlert();
+    const run = await withAdvisoryLock(this.dataSource, 'sla-scanner:scan', () => this.scanWithAlert());
+    if (!run.acquired) this.logger.warn('SLA scan skipped: the previous scan is still running.');
+  }
+
+  /** A tick with failed phases is reported through the alerter, then rethrown for Bull's retry. */
+  private async scanWithAlert(): Promise<void> {
+    try {
+      await this.scanOnce();
+    } catch (err) {
+      this.alerter.report({
+        method: 'JOB',
+        route: '/sla-scanner/scan',
+        errorName: err instanceof AggregateError ? 'AggregateError' : (err as Error)?.constructor?.name ?? 'Error',
+      });
+      throw err;
+    }
+  }
+
+  private async scanOnce() {
     const failures: Array<{ phase: string; error: unknown }> = [];
     let totalPhases = 0;
     const runPhase = async (phase: string, fn: () => Promise<unknown>) => {
@@ -110,6 +149,44 @@ export class SlaScannerWorker {
      * the figure was chosen for "long enough to actually renew, short enough that HR keeps
      * reading", and that reasoning does not change with the kind of credential.
      */
+    /**
+     * Re-checks over time (2026-09-23): tell HR as each check comes due, falls due, and starts
+     * holding somebody from new work. One notification per person, check and due date per step —
+     * the dedupe key carries all four — so this 15-minute pass says each thing once, and a check
+     * recorded moves the due date and so starts the cycle afresh. Collapsed per recipient in the
+     * catalog, because the first round falls due for the whole roster on one date.
+     */
+    await runPhase('re-check reminders', async () => {
+      if (!this.compliance) return;
+      const TYPE_FOR: Record<string, string> = {
+        DUE_SOON: 'ASSAYER_RECHECK_DUE_SOON', DUE: 'ASSAYER_RECHECK_DUE', BLOCKED: 'ASSAYER_RECHECK_BLOCKED',
+      };
+      let sent = 0;
+      for (const person of await this.compliance.attentionList(undefined, null)) {
+        for (const st of person.standings) {
+          const type = TYPE_FOR[st.status];
+          if (!type) continue;
+          this.notificationDispatch.emitSafe({
+            type,
+            entityType: 'ASSAYER',
+            entityId: person.assayerId,
+            assayerId: person.assayerId,
+            organizationId: person.organizationId ?? undefined,
+            dedupeKey: `${type}:${person.assayerId}:${st.type}:${st.dueOn}`,
+            payload: {
+              assayerName: person.displayName,
+              assayerId: person.assayerId,
+              checkLabel: CHECK_TYPE_LABELS[st.type],
+              dueOn: st.dueOn,
+              blockFrom: st.blockFrom,
+            },
+          });
+          sent += 1;
+        }
+      }
+      if (sent > 0) this.logger.log(`Re-check reminders considered for ${sent} check(s).`);
+    });
+
     await runPhase('credential expiry scan', async () => {
       const expiring = await this.hrWorkforceService.credentialsExpiringWithin(
         SlaScannerWorker.DOCUMENT_EXPIRY_LEAD_DAYS,

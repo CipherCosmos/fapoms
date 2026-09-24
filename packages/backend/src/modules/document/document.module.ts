@@ -8,6 +8,7 @@ import { DocumentDispatchWorker } from './document-dispatch.worker';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
 import { DocumentDispatchJobsService } from './document-dispatch-jobs.service';
+import { GeneratedDocumentBatchJob } from './generated-document-batch.job';
 import { DOCUMENT_DISPATCH_JOB, DOCUMENT_DISPATCH_QUEUE } from './document-dispatch-jobs.contract';
 import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable-schedules';
 import { DocumentEntity } from './document.entity';
@@ -48,6 +49,9 @@ import { AssignmentModule } from '../assignment/assignment.module';
     DocumentService,
     DocumentDispatchWorker,
     DocumentDispatchJobsService,
+    // Registers GENERATED_DOCUMENT_BATCH: a day's packets, stored by the upload route and filed
+    // (scanned, typed, matched, recorded) in the background worker.
+    GeneratedDocumentBatchJob,
     DocumentAccessTokenService,
     ChunkedUploadService,
   ],

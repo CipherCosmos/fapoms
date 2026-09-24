@@ -3,7 +3,8 @@ import { View } from 'react-native';
 import { parseRupeeInput, formatRupees } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { MobileApiService } from '../services/api.service';
-import { Button, ChipSelector, FieldLabel, Input, ModalSheet } from './ui/primitives';
+import { generateClientRequestId } from '../services/action-queue';
+import { AppText, Button, ChipSelector, FieldLabel, Input, ModalSheet } from './ui/primitives';
 import { useT, type TranslationKey } from '../i18n';
 
 export type ExpenseCategory = 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER';
@@ -39,7 +40,18 @@ export interface ExpenseModalProps {
   onSubmit?: () => void;
   onCancel?: () => void;
   onClose?: () => void;
-  onAddExpense?: (category: ExpenseCategory, amount: string, description: string) => void | Promise<void>;
+  /**
+   * `requestKey` is minted once each time the sheet opens and passed on every press, so a second
+   * press on the same form is recognised as the same claim (it is the server's `clientRequestId`).
+   */
+  onAddExpense?: (category: ExpenseCategory, amount: string, description: string, requestKey: string, jobId: string | null) => void | Promise<void>;
+  /**
+   * The jobs a claim may be filed against (checked in, working, completed — see
+   * `expenseJobChoices`). When given, the assayer picks one here; without a pick nothing is sent.
+   */
+  jobs?: { id: string; label: string }[];
+  /** Preselected job, when the form was opened from one that can take a claim. */
+  initialJobId?: string | null;
 }
 
 export const ExpenseModal: React.FC<ExpenseModalProps> = ({
@@ -54,6 +66,8 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   onCancel,
   onClose,
   onAddExpense,
+  jobs,
+  initialJobId,
 }) => {
   const t = useTheme();
   const tr = useT();
@@ -62,15 +76,21 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   const [internalAmt, setInternalAmt] = useState('');
   const [internalDesc, setInternalDesc] = useState('');
   const [busy, setBusy] = useState(false);
+  const [requestKey, setRequestKey] = useState(generateClientRequestId);
+  const [jobId, setJobId] = useState<string | null>(initialJobId ?? null);
 
   // Clear the form each time the sheet opens, so a claim is never pre-filled with the
   // previous one's amount and silently filed against a different assignment.
   useEffect(() => {
     if (!visible) return;
+    setRequestKey(generateClientRequestId());
     setInternalCat('TRAVEL_KM');
     setInternalAmt('');
     setInternalDesc('');
     setBusy(false);
+    setJobId(initialJobId ?? null);
+    // Reset per opening only; a later change to the list must not undo the assayer's pick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   /**
@@ -129,11 +149,13 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
   const overLimit = amountValue !== null && maxClaim !== null && amountValue > maxClaim;
   const amountValid = amountValue !== null && !overLimit;
+  // With a job list, a job must be picked (and still be on it) before anything can be sent.
+  const jobChosen = !jobs || (jobId !== null && jobs.some((j) => j.id === jobId));
 
   const handleSubmit = async () => {
     // Block empty/zero claims, over-limit claims, and double-taps; the parent only validated the
     // assignment.
-    if (!amountValid || busy) return;
+    if (!amountValid || !jobChosen || busy) return;
     setBusy(true);
     try {
       if (onAddExpense) {
@@ -141,7 +163,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
         // and this is a no-op; but a rejected claim or a "no assignment selected" early-return
         // left the sheet open with `busy` stuck true forever — a permanently spinning, unusable
         // Submit that the previous fire-and-forget call could not recover from.
-        await onAddExpense(cat, amt, desc);
+        await onAddExpense(cat, amt, desc, requestKey, jobId);
       } else {
         onSubmit?.();
       }
@@ -160,6 +182,20 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
   return (
     <ModalSheet visible={visible} onClose={handleClose} title={tr('expense.title')} avoidKeyboard>
+      {jobs && (
+        <View style={{ gap: t.space.sm, marginBottom: t.space.lg }}>
+          <FieldLabel>{tr('expense.jobLabel')}</FieldLabel>
+          {jobs.length === 0 ? (
+            <AppText variant="small" tone="muted">{tr('expense.noClaimableJobs')}</AppText>
+          ) : (
+            <ChipSelector
+              options={jobs.map((j) => ({ key: j.id, label: j.label }))}
+              value={jobId ?? ''}
+              onChange={(k) => setJobId(k)}
+            />
+          )}
+        </View>
+      )}
       <View style={{ gap: t.space.sm }}>
         <FieldLabel>{tr('expense.categoryLabel')}</FieldLabel>
         <ChipSelector
@@ -195,7 +231,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
       <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.lg }}>
         <View style={{ flex: 1 }}>
-          <Button label={tr('expense.submit')} icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} full />
+          <Button label={tr('expense.submit')} icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || !jobChosen || busy} full />
         </View>
         <View style={{ flex: 1 }}>
           <Button label={tr('common.cancel')} variant="neutral" onPress={handleClose} full />

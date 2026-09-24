@@ -683,6 +683,15 @@ export class NotificationDispatchService {
           link: row.link,
           isRead: false,
           createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
+          /*
+            The catalog type and what it is about, so a client can react to the KIND of notice —
+            the phone reloads its job list on ASSIGNMENT_REASSIGNED_AWAY / ASSIGNMENT_CANCELLED /
+            ASSIGNMENT_REOPENED — without parsing the title. Named `type`, not `eventType`: the
+            gateway routes on `eventType`.
+          */
+          type: row.type ?? opts.type,
+          entityType: row.entityType ?? null,
+          entityId: row.entityId ?? null,
         });
       } catch (err: any) {
         this.logger.warn(`Could not publish real-time notification ${row.id}: ${err?.message}`);
@@ -703,6 +712,9 @@ export class NotificationDispatchService {
             name: 'deliver',
             data: { notificationId: row.id },
             opts: {
+              // One job per notification: a sweeper re-queue of a row whose job still exists is
+              // then a no-op instead of a second push.
+              jobId: pushDeliveryJobId(row.id),
               attempts: 5,
               backoff: { type: 'exponential', delay: 5000 },
               removeOnComplete: true,
@@ -793,4 +805,9 @@ export class NotificationDispatchService {
       this.logger.error(`Notification "${opts.type}" failed: ${err?.message}`),
     );
   }
+}
+
+/** The Bull job id of a notification's push delivery — shared by the dispatch and the sweeper. */
+export function pushDeliveryJobId(notificationId: string): string {
+  return `deliver:${notificationId}`;
 }

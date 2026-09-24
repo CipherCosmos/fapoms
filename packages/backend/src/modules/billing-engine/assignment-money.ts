@@ -14,10 +14,16 @@
  * this file and nowhere else.
  */
 
-import { describeAssignmentFee, type AssignmentFeeInput, type FeeSource } from '@fapoms/shared';
+import { describeAssignmentFee, roundMoney, type AssignmentFeeInput, type FeeSource } from '@fapoms/shared';
 
-/** Money arithmetic is done in paise and rounded once. One `round2`, no epsilon variants. */
-export const round2 = (n: number): number => Math.round(n * 100) / 100;
+/**
+ * Money arithmetic is done in paise and rounded once. One `round2`, no epsilon variants.
+ *
+ * It is the shared `roundMoney`, not a local `Math.round(n * 100) / 100`: that formula multiplies
+ * in binary, so ₹1.005 became 100.49999999999999 paise and rounded DOWN to ₹1.00 — a paisa off a
+ * GST or TDS figure roughly once in every few hundred half-paisa amounts (audit F14, 2026-09-24).
+ */
+export const round2 = (n: number): number => roundMoney(n);
 
 /** Rounding slack when comparing money. Two figures within this are equal. */
 export const MONEY_EPSILON = 0.01;

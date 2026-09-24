@@ -86,6 +86,24 @@ describe('useSocketInvalidation — the assayer roster/workforce entries', () =>
     expect(keys).toContainEqual(['hr', 'workforce']);
   });
 
+  /**
+   * The maps. A person added, placed by the address lookup, pinned by hand, or moved a stage did
+   * not appear on an open map — neither the planning map's pin roster nor the Command Center was
+   * refreshed by any assayer event ("created assayer doesn't come on the map", 2026-09-23).
+   */
+  it.each(['assayer:created', 'assayer:updated', 'AssayerSentForApprovalEvent', 'AssayerActivatedEvent'])(
+    'refreshes both maps on %s', (event) => {
+      mount();
+
+      emit(event);
+      jest.advanceTimersByTime(PAST_SLOW_WAIT_MS);
+
+      const keys = invalidatedKeys();
+      expect(keys).toContainEqual(['assayers']);
+      expect(keys).toContainEqual(['command-center']);
+    },
+  );
+
   it('coalesces a burst of lifecycle events into one invalidation per key, not one per event', () => {
     mount();
 
@@ -103,5 +121,57 @@ describe('useSocketInvalidation — the assayer roster/workforce entries', () =>
     jest.advanceTimersByTime(PAST_SLOW_WAIT_MS - 500);
 
     expect(invalidateQueries).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Event names must be the ones the server actually emits. Project transitions are published under
+ * their class names (`ProjectCompletedEvent`); the hook listened for `ProjectCompleted`, so no
+ * project transition refreshed anything. And several server events reached no listener at all.
+ */
+describe('useSocketInvalidation — server event names are listened for', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    listeners = {};
+    invalidateQueries.mockClear();
+  });
+  afterEach(() => jest.useRealTimers());
+
+  const keysAfter = (event: string): unknown[] => {
+    renderHook(() => useSocketInvalidation());
+    emit(event);
+    jest.advanceTimersByTime(PAST_SLOW_WAIT_MS);
+    return invalidateQueries.mock.calls.map((c: any[]) => c[0].queryKey);
+  };
+
+  it.each([
+    'ProjectCompletedEvent', 'ProjectCancelledEvent', 'ProjectPlanningStartedEvent',
+    'ProjectBranchAssignmentConfirmedEvent', 'project:created', 'project:updated', 'project:deleted',
+  ])('refreshes projects on %s', (event) => {
+    expect(keysAfter(event)).toContainEqual(['projects']);
+  });
+
+  it('no longer listens for the suffix-less project names nothing emits', () => {
+    renderHook(() => useSocketInvalidation());
+    expect(listeners.ProjectCompleted ?? []).toHaveLength(0);
+  });
+
+  it('refreshes assignments and the desk on assignment:reassigned', () => {
+    const keys = keysAfter('assignment:reassigned');
+    expect(keys).toContainEqual(['assignments']);
+    expect(keys).toContainEqual(['assignment-detail']);
+  });
+
+  it.each([
+    ['comment:added', ['assignment-detail']],
+    ['communication:created', ['assignment-detail']],
+    ['query:raised', ['assignment-detail']],
+    ['query:reopened', ['assignment-detail']],
+    ['expense:decided', ['billing']],
+    ['holiday:updated', ['holidays']],
+    ['zone:created', ['zones']],
+    ['user:role-changed', ['users']],
+  ])('%s refreshes %j', (event, key) => {
+    expect(keysAfter(event)).toContainEqual(key);
   });
 });

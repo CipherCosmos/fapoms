@@ -1,12 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Banknote, FileDown, Hourglass, Landmark, PauseCircle, Percent, PlayCircle, Receipt, RotateCcw, Send } from 'lucide-react';
-import { AssayerPayableStatus, PaymentMethod, paymentMethodLabel, businessTodayDateKey } from '@fapoms/shared';
+import { AssayerPayableStatus, PaymentMethod, paymentMethodLabel, businessTodayDateKey, isBackgroundJobInFlight, AWAITING_HOD_MESSAGE } from '@fapoms/shared';
 import { Modal, Pagination, Select, StyledInput, useToast } from '../../components/ui';
 import {
   usePayouts, useApprovePayouts, usePayPayouts, useHoldPayout, useReopenAssignment,
-  useInviteAssayerInvoice, useAssayerInvoiceLookup, useBillingOverview,
+  useInviteAssayerInvoice, useAssayerInvoiceLookup, useBillingOverview, usePayoutDestinationChecks,
 } from '../../hooks/useBilling';
+import { DestinationWarnings } from './DestinationWarnings';
+import { useBackgroundJob } from '../../hooks/useBackgroundJob';
 import { BILLING_PAGE_SIZE, billingApi, isInvoicingNotEnabled } from '../../services/billing';
 import type { PayoutRow, PayoutActionResult, PayPayoutsResult, AssayerInvoiceInviteAllResult } from '../../services/billing';
 import { userMessage } from '../../services/errors';
@@ -55,6 +57,15 @@ export type { PayoutStage };
  * exactly what the payout rows carry; the server re-derives this under lock, so this only decides
  * whether the button is worth pressing, never what the bill contains.
  */
+/**
+ * Ready to pay: approved by the office, given the HOD's final approval (2026-09-24), not held,
+ * still owed. The server's own rule (`recordDisbursement`, the bank file); the screen only uses it
+ * to decide what the pay buttons offer.
+ */
+export const isReadyToPay = (r: PayoutRow): boolean =>
+  r.status === AssayerPayableStatus.APPROVED && !!r.hodApprovedAt && !r.onHold
+  && (Number(r.totalAmount) - Number(r.paidAmount)) > 0;
+
 export const isInviteEligible = (r: PayoutRow): boolean =>
   (r.status === AssayerPayableStatus.PENDING || r.status === AssayerPayableStatus.APPROVED) &&
   !r.onHold && !r.assayerInvoiceId && !r.preInvoicingEra;
@@ -93,12 +104,34 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
    * line ("Approving payouts (7/20)…"); non-null also means "a run is going".
    */
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
-  const bulkBusy = bulkProgress !== null;
+  /**
+   * An approve or pay run this page did NOT start — pressed before a refresh, or in another tab.
+   * The runs are tracked on the server (the Jobs tray), so the tab can still say one is going and
+   * hold the buttons: "did my payment go through?" answered with a second press is how a batch
+   * gets paid under two references. Runs started from this page load are followed above instead.
+   */
+  const approveRuns = useBackgroundJob('BILLING_APPROVE_PAYOUTS');
+  const payRuns = useBackgroundJob('BILLING_PAY_PAYOUTS');
+  const ownRuns = useRef(new Set<string>());
+  const remember = (started: { backgroundJobId?: string | null }) => { if (started.backgroundJobId) ownRuns.current.add(started.backgroundJobId); };
+  const serverRun = [...approveRuns.active, ...payRuns.active]
+    .find((j) => isBackgroundJobInFlight(j.status) && !ownRuns.current.has(j.id)) ?? null;
+  const serverRunLine = serverRun
+    ? `${serverRun.title} is still running on the server (${serverRun.progress.stage})… The list updates when it finishes.`
+    : null;
+  const bulkBusy = bulkProgress !== null || serverRun !== null;
   const followProgress = { onProgress: (p: { stage: string }) => setBulkProgress(`${p.stage}…`) };
   /** A run still going after the give-up time is not a failure — it carries on, and says so. */
   const toastRunError = (title: string, e: unknown) => (e instanceof QueuedJobTimeout
     ? toast({ type: 'info', title: 'Still running on the server', message: e.message })
     : toast({ type: 'error', title, message: userMessage(e) }));
+
+  const serverRunId = serverRun?.id ?? null;
+  const lastServerRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastServerRun.current && !serverRunId) void payouts.refetch();
+    lastServerRun.current = serverRunId;
+  }, [serverRunId]); // eslint-disable-line react-hooks/exhaustive-deps -- refetch on the run finishing only
 
   const rows = useMemo(() => payouts.data?.items ?? [], [payouts.data?.items]);
   const total = payouts.data?.total ?? 0;
@@ -125,10 +158,12 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
    * would be refused by the server — and a control that can only fail is worse than no control:
    * it invites the attempt, then blames the person who made it.
    */
-  const selectable = canAct && (stage === 'NOT_BILLED' || stage === 'TO_PAY');
+  const selectable = canAct && (stage === 'NOT_BILLED' || stage === 'TO_PAY' || stage === 'AWAITING_HOD');
   const selectedRows = rows.filter((r) => selected.has(r.id));
   const approvable = stage === 'NOT_BILLED' ? selectedRows.filter((r) => r.status === AssayerPayableStatus.PENDING && !r.onHold && !r.assayerInvoiceId) : [];
-  const payable = stage === 'TO_PAY' ? selectedRows.filter((r) => r.status === AssayerPayableStatus.APPROVED && !r.onHold) : [];
+  // Payable means approved by the office AND given the HOD's final approval (2026-09-24) — the
+  // server refuses anything else ("Waiting for HOD approval"), so the button never offers it.
+  const payable = stage === 'TO_PAY' ? selectedRows.filter((r) => isReadyToPay(r)) : [];
 
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleGroup = (ids: string[]) => setSelected((s) => {
@@ -153,9 +188,15 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
     setBulkProgress(`Approving ${approvable.length} payout${approvable.length === 1 ? '' : 's'}…`);
     try {
       const started = await approve.mutateAsync({ payableIds: approvable.map((p) => p.id), reason });
+      remember(started);
       const r = await billingApi.followBulkJob<PayoutActionResult>(started, followProgress);
       if (r.refused.length) toast({ type: 'warning', title: `${r.done.length} approved, ${r.refused.length} refused`, message: r.refused.map((x) => x.reason).join(' · ') });
-      else toast('success', `${r.done.length} payout${r.done.length === 1 ? '' : 's'} approved`);
+      else toast('success', `${r.done.length} payout${r.done.length === 1 ? '' : 's'} approved — now waiting for the HOD's final approval`);
+      // Approved, but on a bank account nothing verifies (audit F3) — said after the fact too, so it
+      // is on screen when the approval lands and not only in the dialog that preceded it.
+      if (r.warnings?.length) {
+        toast({ type: 'warning', title: `${r.warnings.length} approved to an unverified bank account`, message: [...new Set(r.warnings.map((w) => w.warning))].join(' · ') });
+      }
       setSelected(new Set());
       void payouts.refetch();
     } catch (e) { toastRunError('Approval failed', e); } finally { setBulkProgress(null); }
@@ -173,9 +214,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
    */
   const downloadBankFile = async () => {
     const vis = visibleSelection(selected, rows, (r) => r.id);
-    const eligible = vis.rows.filter(
-      (r) => r.status === AssayerPayableStatus.APPROVED && !r.onHold && (Number(r.totalAmount) - Number(r.paidAmount)) > 0,
-    );
+    const eligible = vis.rows.filter((r) => isReadyToPay(r));
     if (!eligible.length) { toast('error', 'Tick approved, unpaid payouts to include in a bank file.'); return; }
     setBankBusy(true);
     try {
@@ -188,11 +227,14 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
       ]);
       downloadCsv(datedFilename('assayer_neft_bank_file'), headers, csvRows);
       const missing = res.rows.filter((r) => !r.hasBankDetails).length;
+      const changed = res.rows.filter((r) => r.destinationDiffersFromRecord);
       const parts = [`${res.rows.length} payout${res.rows.length === 1 ? '' : 's'} in the file`];
       if (missing) parts.push(`${missing} missing bank account/IFSC — add them on the assayer record before uploading`);
+      // The file pays the account frozen at approval; say so where the record now says otherwise (F2).
+      if (changed.length) parts.push(...changed.map((r) => r.warning ?? `${r.payableNumber}: bank details changed since approval`));
       if (res.skipped.length) parts.push(`${res.skipped.length} not eligible were skipped`);
       if (vis.hiddenCount) parts.push(`${vis.hiddenCount} ticked but off screen, so not included`);
-      toast({ type: missing || res.skipped.length ? 'warning' : 'success', title: 'Bank file downloaded', message: parts.join(' · ') });
+      toast({ type: missing || changed.length || res.skipped.length ? 'warning' : 'success', title: 'Bank file downloaded', message: parts.join(' · ') });
     } catch (e) {
       toast({ type: 'error', title: 'Could not build the bank file', message: userMessage(e) });
     } finally {
@@ -218,7 +260,8 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
     if (!p || loadFailed(overview)) return undefined;
     return key === 'WITH_ASSAYER' ? p.inClaimReviewCount
       : key === 'NOT_BILLED' ? p.unbilledCount
-      : key === 'TO_PAY' ? p.approvedCount
+      : key === 'AWAITING_HOD' ? p.awaitingHodCount
+      : key === 'TO_PAY' ? p.approvedCount - (p.awaitingHodCount ?? 0)
       : key === 'HELD' ? p.heldCount
       : undefined; // Paid is history, and a count of history is not a call to action.
   };
@@ -268,9 +311,9 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
 
       {/* A queued approve / pay run, in the server's own words. It carries on if this page is
           closed; the lists update as it writes. */}
-      {bulkProgress && (
+      {(bulkProgress ?? serverRunLine) && (
         <div role="status" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '8px 12px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-          {bulkProgress}
+          {bulkProgress ?? serverRunLine}
         </div>
       )}
 
@@ -284,8 +327,18 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
               <AlertTriangle size={14} /> Approve without a bill {approvable.length ? `(${approvable.length} · ${money(approvable.reduce((s, p) => s + Number(p.totalAmount), 0))})` : ''}
             </button>
           )}
+          {stage === 'AWAITING_HOD' && <>
+            {/* Shown, and disabled with the reason, so nobody wonders where "pay" went. */}
+            <button className="btn btn-primary" disabled title={`${AWAITING_HOD_MESSAGE} — these were approved by the office and cannot be paid until the HOD gives the final approval.`} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <Banknote size={14} /> Record payment
+            </button>
+            <button className="btn btn-secondary" disabled title={`${AWAITING_HOD_MESSAGE} — the bank file includes only payouts the HOD has approved.`} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <FileDown size={14} /> Download bank file
+            </button>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{AWAITING_HOD_MESSAGE}</span>
+          </>}
           {stage === 'TO_PAY' && <>
-            <button className="btn btn-primary" disabled={!payable.length || pay.isPending || bulkBusy} onClick={() => setPayOpen(true)} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button className="btn btn-primary" disabled={!payable.length || pay.isPending || bulkBusy} onClick={() => setPayOpen(true)} title={payable.length ? `Record payment for ${payable.length} payout${payable.length === 1 ? '' : 's'}` : 'Tick an approved, unpaid payout first'} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <Banknote size={14} /> Record payment {payable.length ? `(${payable.length} · ${money(payable.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0))})` : ''}
             </button>
             <button className="btn btn-secondary" disabled={!payable.length || bankBusy} onClick={downloadBankFile}
@@ -294,7 +347,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
               <FileDown size={14} /> {bankBusy ? 'Preparing…' : 'Download bank file'}
             </button>
           </>}
-          <button className="btn btn-secondary" onClick={() => setSelected(new Set())}>Clear</button>
+          <button className="btn btn-secondary" onClick={() => setSelected(new Set())} title="Untick everything">Clear</button>
           {selectedRows.length > approvable.length + payable.length && (
             <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Held and already-paid rows are skipped.</span>
           )}
@@ -357,7 +410,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
                         const isReimb = !!r.expenseId;
                         return (
                           <tr key={r.id} style={{ opacity: r.status === AssayerPayableStatus.PAID ? 0.7 : 1 }}>
-                            {selectable && <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>}
+                            {selectable && <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} title={`Tick ${r.assignmentNumber ?? r.payableNumber ?? 'this payout'} for the bulk action`} /></td>}
                             <td style={td}>
                               <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                                 {isReimb && <Receipt size={12} style={{ color: 'var(--text-muted)' }} />}{r.assignmentNumber ?? '—'}
@@ -366,7 +419,13 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
                             </td>
                             <td style={td}>{[r.clientName, r.branchName].filter(Boolean).join(' · ') || '—'}</td>
                             <td style={td}>
-                              <PayoutStatusPill status={r.status} onHold={r.onHold} holdReason={r.holdReason} />
+                              <PayoutStatusPill status={r.status} onHold={r.onHold} holdReason={r.holdReason}
+                                hodApproved={r.status === AssayerPayableStatus.APPROVED ? !!r.hodApprovedAt : undefined} />
+                              {r.status === AssayerPayableStatus.PENDING && r.hodRejectReason && (
+                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--warning)', marginTop: 3 }} title="The HOD sent this back to the office">
+                                  Sent back by the HOD: {r.hodRejectReason}
+                                </div>
+                              )}
                               {r.assayerInvoiceId && (() => {
                                 const inv = invoiceById.get(r.assayerInvoiceId!);
                                 return (
@@ -434,6 +493,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
             setBulkProgress(`Paying ${payable.length} payout${payable.length === 1 ? '' : 's'}…`);
             try {
               const started = await pay.mutateAsync({ payableIds: payable.map((p) => p.id), ...dto });
+              remember(started);
               const r = await billingApi.followBulkJob<PayPayoutsResult>(started, followProgress);
               if (r.refused.length) toast({ type: 'warning', title: `${r.done.length} paid, ${r.refused.length} refused`, message: r.refused.map((x) => x.reason).join(' · ') });
               else toast('success', `${r.done.length} payout${r.done.length === 1 ? '' : 's'} paid`);
@@ -487,6 +547,9 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
  * discussed", which records nothing; a fixed list alone would have blocked the case nobody
  * thought of. "Other…" keeps that case sayable.
  */
+/** The server's own minimum (`DIRECT_APPROVAL_REASON_MIN` in billing-engine.service.ts, audit F6). */
+export const DIRECT_APPROVAL_REASON_MIN = 10;
+
 export const APPROVE_WITHOUT_BILL_REASONS = [
   'Assayer has no smartphone, or the app will not run on theirs',
   'Assayer has left; settling their final dues',
@@ -517,7 +580,11 @@ const ApproveWithoutBillModal: React.FC<{
   const assayers = new Set(payables.map((p) => p.assayerId)).size;
   const phrase = String(Math.round(total));
   const reason = preset === '__other__' ? other.trim() : preset;
-  const ready = !!reason && typed.trim() === phrase;
+  // The server refuses a shorter reason (audit F6); say so here rather than after the run.
+  const reasonShort = preset === '__other__' && reason.length > 0 && reason.length < DIRECT_APPROVAL_REASON_MIN;
+  const ready = reason.length >= DIRECT_APPROVAL_REASON_MIN && typed.trim() === phrase;
+  // Where the money would go: shared with another record (refused), unverified (allowed, said).
+  const checks = usePayoutDestinationChecks(payables.map((p) => p.id));
   return (
     <Modal open onClose={onClose} width="540px" asForm
       title={<><AlertTriangle size={18} style={{ color: 'var(--warning)' }} /> Approve without the assayer&rsquo;s confirmation</>}
@@ -535,6 +602,7 @@ const ApproveWithoutBillModal: React.FC<{
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
         Approving cannot be undone here. To stop one afterwards you must put it on hold before it is paid.
       </div>
+      <DestinationWarnings checks={checks.data} />
       <Select
         value={preset}
         onChange={(v) => setPreset(v)}
@@ -547,6 +615,11 @@ const ApproveWithoutBillModal: React.FC<{
       />
       {preset === '__other__' && (
         <textarea value={other} onChange={(e) => setOther(e.target.value)} rows={2} placeholder="Why can this assayer not confirm? *" style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+      )}
+      {reasonShort && (
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)' }}>
+          Say a little more — at least {DIRECT_APPROVAL_REASON_MIN} characters. It is written to each payout&rsquo;s history.
+        </div>
       )}
       <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
         Type <strong style={{ color: 'var(--text-primary)' }}>{phrase}</strong> to confirm the amount
@@ -625,6 +698,8 @@ const PayModal: React.FC<{
   const [notes, setNotes] = useState('');
   const total = payables.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0);
   const assayers = new Set(payables.map((p) => p.assayerId)).size;
+  // A bank account that changed after approval is still paid on the frozen one (audit F2): say so.
+  const checks = usePayoutDestinationChecks(payables.map((p) => p.id));
   return (
     <Modal open onClose={onClose} title={<><Banknote size={18} /> Record payment of {payables.length} payout{payables.length === 1 ? '' : 's'}</>} width="520px" asForm
       onSubmit={(e) => { e.preventDefault(); if (!reference.trim()) return; void onPay({ paymentReference: reference.trim(), method, paidDate: paidDate || undefined, notes: notes || undefined }); }}
@@ -636,6 +711,7 @@ const PayModal: React.FC<{
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         This records money the bank has already sent — it does not move any. Each payout is settled in full. One bank reference may cover the whole batch.
       </div>
+      <DestinationWarnings checks={checks.data} />
       <StyledInput placeholder="Bank / UTR reference *" value={reference} onChange={(e) => setReference(e.target.value)} style={{ width: '100%' }} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <Select value={method} onChange={(v) => setMethod(v as PaymentMethod)} options={METHODS.map((m) => ({ value: m, label: paymentMethodLabel(m) }))} style={{ width: '100%' }} />

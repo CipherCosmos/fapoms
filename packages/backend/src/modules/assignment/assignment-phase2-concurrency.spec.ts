@@ -370,20 +370,9 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
           useValue: {
             evaluateConstraints: jest.fn().mockResolvedValue({ eligible: true }),
             checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
+            checkClientRequirements: jest.fn().mockReturnValue({ passed: true }),
             checkDistancePolicy: jest.fn().mockReturnValue({ passed: true }),
             checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
-            checkDoubleBooking: jest.fn(async (assayerId: string, date: any) => {
-              const dateKey = typeof date === 'string' ? date : date?.toISOString ? date.toISOString().split('T')[0] : String(date);
-              for (const a of assignmentsDb.values()) {
-                if (a.assayerId === assayerId && a.isActive) {
-                  const aDateKey = typeof a.scheduledDate === 'string' ? a.scheduledDate : a.scheduledDate?.toISOString ? a.scheduledDate.toISOString().split('T')[0] : String(a.scheduledDate);
-                  if (aDateKey === dateKey) {
-                    return { passed: false, reason: `Assayer is already booked on ${dateKey}` };
-                  }
-                }
-              }
-              return { passed: true };
-            }),
           },
         },
         {
@@ -497,8 +486,12 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
     });
   });
 
-  describe('Race B — Schedule vs Schedule (Double Booking Invariant)', () => {
-    it('deterministically rejects concurrent double booking for the same assayer on the same calendar day', async () => {
+  /**
+   * Race B is retired as a refusal: since 2026-09-24 (owner decision E2) one assayer may hold several
+   * branches on the same day. What it pins now is the opposite — a second branch that day is accepted.
+   */
+  describe('Race B — a second branch for the same assayer on the same day (allowed since 2026-09-24)', () => {
+    it('accepts a second branch for an assayer already booked that calendar day', async () => {
       const assayerId = 'assayer-busy';
       const scheduledDate = '2026-09-12';
 
@@ -526,14 +519,14 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
       };
       assignmentsDb.set(existingAssignment.id, existingAssignment);
 
-      // Attempting to schedule a second assignment on the same day throws ConflictException
-      await expect(
-        assignmentService.create({
-          projectBranchId: 'pb-2',
-          assayerId,
-          scheduledDate,
-        } as any, 'ops-user'),
-      ).rejects.toThrow(ConflictException);
+      // A second branch the same day is an ordinary offer now.
+      const second = await assignmentService.create({
+        projectBranchId: 'pb-2',
+        assayerId,
+        scheduledDate,
+      } as any, 'ops-user');
+      expect(second.assayerId).toBe(assayerId);
+      expect(second.status).toBe(AssignmentStatus.PENDING);
     });
   });
 
@@ -825,23 +818,35 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
 
     beforeEach(async () => {
       branchQueryRunnerResults = [];
-      const mockBranchDataSource = {
+      // The closure now runs on one transaction (cancelOpenAssignmentsForClosure): the locked read,
+      // the conditional cancel (ids in $3, reason in $2, RETURNING the new version) and the
+      // branch cascade all go through the transaction's manager.
+      const branchManager: any = {
         query: jest.fn(async (sql: string, params?: any[]) => {
           if (/FROM assignments a/.test(sql)) {
             return branchQueryRunnerResults;
           }
           if (/UPDATE assignments/.test(sql)) {
-            // Apply update to assignmentsDb
-            const id = params?.[1];
-            const asg = assignmentsDb.get(id);
-            if (asg) {
-              asg.status = AssignmentStatus.CANCELLED;
-              asg.cancelReason = 'Branch deactivated by operations';
+            const ids: string[] = params?.[2] ?? [];
+            const rows: any[] = [];
+            for (const id of ids) {
+              const asg = assignmentsDb.get(id);
+              if (asg && [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED].includes(asg.status)) {
+                asg.status = AssignmentStatus.CANCELLED;
+                asg.cancelReason = params?.[1];
+                asg.entityVersion = (asg.entityVersion ?? 1) + 1;
+                rows.push({ id, entity_version: asg.entityVersion });
+              }
             }
-            return [];
+            return [rows, rows.length];
           }
           return [];
         }),
+        getRepository: jest.fn(() => ({ save: jest.fn(async (b: any) => b), update: jest.fn(async () => ({ affected: 0 })) })),
+      };
+      const mockBranchDataSource = {
+        query: branchManager.query,
+        transaction: jest.fn(async (work: any) => work(branchManager)),
       };
 
       const mockBranchRepo = {
@@ -1304,13 +1309,13 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
   });
 
   describe('Operational Integrity Reconciliation Scanner', () => {
-    it('scans all 10 operational rules and reports summary without mutating database records', async () => {
+    it('scans all 9 operational rules and reports summary without mutating database records', async () => {
       const report = await operationalIntegrityService.scan();
 
       expect(report).toBeDefined();
-      // Ten since the departure rule landed: a COMPLETED audit with an arrival and no check-out is
-      // now an integrity finding, because time on site is the attendance evidence.
-      expect(report.scannedRules).toBe(10);
+      // Nine: ten since the departure rule landed, less the per-assayer-per-day rule retired on
+      // 2026-09-24 (several branches per assayer per day are allowed).
+      expect(report.scannedRules).toBe(9);
       expect(report.timestamp).toBeDefined();
       expect(report.totalViolations).toBeGreaterThanOrEqual(0);
       expect(report.summary).toBeDefined();

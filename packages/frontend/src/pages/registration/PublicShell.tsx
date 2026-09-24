@@ -68,26 +68,43 @@ export const FORM_CSS = `
 }
 `;
 
-export const PublicMasthead: React.FC = () => (
+/**
+ * The masthead. `title` is the short name of the one job the page does.
+ *
+ * The candidate's registration form asks for exactly that — the logo and the word "Registration"
+ * (owner, 2026-09-24: "remove UI clutter"). Without a `title` it is the full institutional header
+ * the other public pages (the emailed set-password link) have always had.
+ */
+export const PublicMasthead: React.FC<{ title?: string }> = ({ title }) => (
   <header className="pub-reg-header">
     <div className="pub-reg-header-inner">
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
         <BrandLogo size="md" showSubtext={false} />
-        <div style={{ borderLeft: '1px solid var(--border-hair)', paddingLeft: '14px', display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--accent)' }}>
-            Appraiser Onboarding Portal
-          </span>
-          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
-            Sumeru Global &middot; Bullion &amp; Collateral Verification
-          </span>
-        </div>
+        {title ? (
+          <div style={{ borderLeft: '1px solid var(--border-hair)', paddingLeft: '14px' }}>
+            <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {title}
+            </span>
+          </div>
+        ) : (
+          <div style={{ borderLeft: '1px solid var(--border-hair)', paddingLeft: '14px', display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--accent)' }}>
+              Appraiser Onboarding Portal
+            </span>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
+              Sumeru Global &middot; Bullion &amp; Collateral Verification
+            </span>
+          </div>
+        )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)', padding: '5px 10px', borderRadius: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
-          <Lock size={12} style={{ color: 'var(--success)' }} />
-          <span>Secure Session</span>
+      {!title && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)', padding: '5px 10px', borderRadius: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
+            <Lock size={12} style={{ color: 'var(--success)' }} />
+            <span>Secure Session</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   </header>
 );

@@ -1,3 +1,4 @@
+import { ALL_QUEUE_NAMES } from '../queue/worker-concurrency';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -25,15 +26,12 @@ import { REDIS_CLIENT } from '../redis/redis-client.module';
 export class RuntimeMetricsService {
   private readonly logger = new Logger(RuntimeMetricsService.name);
 
-  /** Queues to sample. Kept in step with ALL_QUEUE_NAMES in main.ts. */
-  private static readonly QUEUE_NAMES = [
-    'background-jobs',
-    'ocr',
-    'sla-scanner',
-    'document-dispatch',
-    'notification-delivery',
-    'outbox',
-  ];
+  /**
+   * Queues to sample: every queue, derived from `WORKER_CONCURRENCY`. This was a hand-kept list of
+   * six that had drifted — it still sampled the deleted `background-jobs` queue and none of the
+   * dozen added since (billing, planning, reports, tracked jobs, the outbound queues).
+   */
+  private static readonly QUEUE_NAMES: readonly string[] = ALL_QUEUE_NAMES;
 
   /**
    * How many statements get their own time series.

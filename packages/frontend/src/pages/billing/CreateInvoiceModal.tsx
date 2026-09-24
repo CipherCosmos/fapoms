@@ -53,25 +53,25 @@ export const CreateInvoiceModal: React.FC<{ client: InvoiceableClient; onClose: 
   return (
     <Modal open onClose={onClose} title={<><FileText size={18} /> Invoice {client.clientName}</>} width="680px" maxHeight="90vh" asForm onSubmit={submit} footer={
       <>
-        <span style={{ marginRight: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+        <span title="Sum of the ticked assignments — taxable plus GST minus TDS" style={{ marginRight: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           {chosen.length} of {eligible.length} · taxable {money(subtotal)} + GST {money(gst)} − TDS {money(tds)} = <strong style={{ color: 'var(--text-primary)' }}>{money(total)}</strong>
         </span>
-        <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
-        <button type="submit" disabled={create.isPending || !chosen.length} className="btn btn-primary">{create.isPending ? 'Creating…' : 'Create draft invoice'}</button>
+        <button type="button" onClick={onClose} className="btn btn-secondary" title="Close without creating an invoice">Cancel</button>
+        <button type="submit" disabled={create.isPending || !chosen.length} className="btn btn-primary" title={chosen.length ? `Create a draft invoice for ${chosen.length} assignment${chosen.length === 1 ? '' : 's'} totalling ${money(total)}` : 'Tick at least one assignment first'}>{create.isPending ? 'Creating…' : 'Create draft invoice'}</button>
       </>
     }>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Completed assignments</label>
+        <label title="Only completed, off-hold assignments can be invoiced" style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Completed assignments</label>
         <span style={{ fontSize: 'var(--text-xs)' }}>
-          <button type="button" onClick={() => setSelected(new Set(eligible.map((l) => l.assignmentId)))} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 'var(--text-xs)' }}>All</button>
+          <button type="button" onClick={() => setSelected(new Set(eligible.map((l) => l.assignmentId)))} title="Tick every invoiceable assignment" style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 'var(--text-xs)' }}>All</button>
           {' · '}
-          <button type="button" onClick={() => setSelected(new Set())} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 'var(--text-xs)' }}>None</button>
+          <button type="button" onClick={() => setSelected(new Set())} title="Untick every assignment" style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 'var(--text-xs)' }}>None</button>
         </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto' }}>
         {client.lines.map((l) => (
-          <label key={l.entryId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', cursor: l.onHold ? 'not-allowed' : 'pointer', opacity: l.onHold ? 0.6 : 1 }}>
-            <input type="checkbox" disabled={l.onHold} checked={!l.onHold && selected.has(l.assignmentId)} onChange={() => toggle(l.assignmentId)} />
+          <label key={l.entryId} title={l.onHold ? `On hold — ${l.holdReason ?? 'resolve the hold to invoice this'}` : `${l.assignmentNumber ?? l.entryNumber} — ${money(l.totalAmount)} — tick to include`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', cursor: l.onHold ? 'not-allowed' : 'pointer', opacity: l.onHold ? 0.6 : 1 }}>
+            <input type="checkbox" disabled={l.onHold} checked={!l.onHold && selected.has(l.assignmentId)} onChange={() => toggle(l.assignmentId)} title={l.onHold ? 'On hold — cannot be invoiced yet' : `Include ${l.assignmentNumber ?? l.entryNumber} on this invoice`} />
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{l.assignmentNumber ?? l.entryNumber}</span>
               <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 8 }}>{[l.branchName, l.projectName, l.assayerName].filter(Boolean).join(' · ')}</span>
@@ -83,14 +83,14 @@ export const CreateInvoiceModal: React.FC<{ client: InvoiceableClient; onClose: 
         ))}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>Issue date
-          <StyledInput type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} style={{ width: '100%' }} />
+        <label title="The date printed on the invoice — defaults to today" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>Issue date
+          <StyledInput type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} title="The date printed on the invoice" style={{ width: '100%' }} />
         </label>
-        <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>Due date <span style={{ fontWeight: 400 }}>(blank = client's payment terms)</span>
-          <StyledInput type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: '100%' }} />
+        <label title="Leave blank to use the client's contracted payment terms" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>Due date <span style={{ fontWeight: 400 }}>(blank = client's payment terms)</span>
+          <StyledInput type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} title="Due date — blank uses the client's payment terms" style={{ width: '100%' }} />
         </label>
       </div>
-      <StyledInput placeholder="Notes for the invoice" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%' }} />
+      <StyledInput placeholder="Notes for the invoice" value={notes} onChange={(e) => setNotes(e.target.value)} title="Optional note printed on the invoice" style={{ width: '100%' }} />
     </Modal>
   );
 };

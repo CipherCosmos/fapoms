@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -70,7 +70,10 @@ const PERMITTED_WRITERS: Record<string, string> = {
 const sourceFiles = (): string[] => execSync(
   `git ls-files '*.ts' | grep -v '\\.spec\\.ts$' | grep -v '/migrations/'`,
   { cwd: BACKEND_SRC, encoding: 'utf8' },
-).trim().split('\n').filter(Boolean);
+).trim().split('\n').filter(Boolean)
+  // `git ls-files` also lists a tracked file deleted in the working tree but not yet committed; a
+  // file that is not there writes nothing (same rule as order-by-property-paths.spec.ts).
+  .filter((rel) => existsSync(join(BACKEND_SRC, rel)));
 
 /**
  * An assignment to the column, in any of the shapes it can take.

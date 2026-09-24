@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { isStaffRole, readCachedRoles } from './useCurrentRoles';
 
 export interface SearchResult {
   branches: { id: string; name: string; code: string; city: string; state: string }[];
@@ -35,6 +36,9 @@ export function useGlobalSearch() {
 
   const doSearch = useCallback(async (q: string) => {
     if (!q || q.length < 1) { setResults(null); return; }
+    // `GET /search` serves staff role names only (no fallback): a custom role typing here would
+    // only collect 403s, so it is not asked. See `isStaffRole`.
+    if (!isStaffRole(readCachedRoles())) { setResults(null); return; }
     setLoading(true);
     try {
       const data = await api.request<SearchResult>(`/search?q=${encodeURIComponent(q)}`);

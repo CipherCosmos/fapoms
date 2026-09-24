@@ -189,6 +189,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         onClick={handleApply}
         disabled={!targetStatus || !reason.trim() || busy}
         className="btn btn-primary"
+        title={!targetStatus ? 'Choose a lifecycle stage first' : !reason.trim() ? 'Type a reason — it is recorded in the audit trail' : 'Move the selected people to the chosen stage'}
         style={{ fontSize: 'var(--text-xs)', padding: '6px 14px' }}
       >
         {busy ? 'Moving…' : 'Apply'}
@@ -199,6 +200,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         onClick={() => void handleIssueAppAccess()}
         disabled={appAccessBusy}
         className="btn btn-secondary"
+        title="Issue mobile-app login access to the selected people"
         style={{
           fontSize: 'var(--text-xs)',
           padding: '6px 12px',
@@ -216,6 +218,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         onClick={() => setNotifyOpen(true)}
         disabled={notifyBusy}
         className="btn btn-secondary"
+        title="Send an SMS or notification to the selected people"
         style={{
           fontSize: 'var(--text-xs)',
           padding: '6px 12px',
@@ -232,6 +235,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         type="button"
         onClick={onClearSelection}
         className="btn btn-secondary"
+        title="Untick everyone and close this bulk bar"
         style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}
       >
         Clear selection

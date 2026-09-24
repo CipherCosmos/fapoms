@@ -1,23 +1,33 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, Loader2, Phone, ShieldCheck, Eye, ArrowLeft, CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck, MapPin, Landmark, GraduationCap, Users, Info, Camera, HelpCircle, Award,
+  Check, Loader2, Phone, ShieldCheck, ArrowLeft, CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck, MapPin, Landmark, Users, Info, HelpCircle, Award, UserPlus, MinusCircle, ChevronRight, PauseCircle,
 } from 'lucide-react';
 import {
   ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS,
-  uploadSizeProblem, isValidIfsc, normalisePhone, scanMimeType, storedScanFileName,
+  DOCUMENT_REJECTION_GUIDANCE, APPLICATION_REFERENCES_MAX, referenceSubmitProblem, referencePhoneForDisplay, referenceEmailProblem, bankAccountConfirmProblem, REGISTRATION_REQUIRED_DOCUMENTS,
+  uploadSizeProblem, isValidIfsc, normalisePhone, normaliseIdentifierOnBlur, scanMimeType, storedScanFileName,
+  SCAN_UPLOAD_IMAGE_ACCEPT,
   inferRegistrationStep, registrationStepProblems, resumableRegistrationStep, REGISTRATION_CONDITIONAL_DOCUMENTS,
+  type ApplicationInfoRequestItem, readApplicationInfoRequests, applicationFieldStep,
   type RegistrationFormField, type RegistrationFormValues, type RegistrationProblem,
+  normalizeSourceReferral, candidateMayEditSourceReferral, sourceReferralLine, type SourceReferral,
+  CANDIDATE_JOURNEY_WORDS, candidateJourney, readCandidateJourneyProgress, type CandidateJourneyProgress,
 } from '@fapoms/shared';
+import {
+  SourceReferralFields, EMPTY_REFERRAL, referralDraftFrom, referralPayload, type SourceReferralDraft,
+} from '../components/SourceReferralFields';
 import { Select } from '../components/ui/Select';
 import { ScanOrAttach } from '../components/scanner/ScanOrAttach';
 import { AlertBanner } from '../components/ui/AlertBanner';
-import { userMessage } from '../services/errors';
+import { useConfirm } from '../components/ui/ConfirmDialog';
+import { AppError, userMessage } from '../services/errors';
+import { fmtDate } from '../utils/dates';
 import { identityFormatHint, normaliseIdentityOnBlur } from '../config/identity-fields';
 import {
   STATE_OPTIONS, GENDER_OPTIONS, EXPERIENCE_OPTIONS,
   RELATION_OPTIONS, OTHER_SENTINEL, isOtherValue,
   resolvePincode, pincodeStateConflict, resolveIfsc,
-  mobileHint, mobileHelper, normaliseMobile, DOB_MIN, dobMaxToday,
+  mobileHint, normaliseMobile, DOB_MIN, dobMaxToday,
   isSixDigitPin, FIELD_LIMITS,
 } from '../config/registration-options';
 import {
@@ -26,6 +36,7 @@ import {
   acceptRegistrationConsent,
   withdrawRegistrationConsent,
   type RegistrationHydrateResult, uploadRegistrationDocument, submitRegistration, isOtpVerificationLost,
+  removeRegistrationDocumentFile, isUploadRejected,
   OTP_BEFORE_SEND_WORDS, otpSentWords,
   getRegistrationDocumentFileBlob,
   type RegistrationApplication, type RegistrationApplicationDocument, type UpdateRegistrationDraftInput,
@@ -36,6 +47,9 @@ import PrimaryButton from './registration/PrimaryButton';
 // The masthead and the stylesheet moved out when a second public page needed them.
 import { FORM_CSS, PublicMasthead } from './registration/PublicShell';
 import ConsentGate from './registration/ConsentGate';
+import { DocumentThumb } from './registration/DocumentThumb';
+import { CandidateAsks, CandidateJourneySteps } from './registration/CandidateJourney';
+import { blobBytes } from '../components/scanner/jpeg-pages-to-pdf';
 
 /**
  * Appraiser self-registration — public, reachable by the emailed invite link alone.
@@ -71,14 +85,6 @@ const SECTION_NOTE_STYLE: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-secondary)',
   lineHeight: 1.55,
-};
-
-const EYEBROW_STYLE: React.CSSProperties = {
-  fontSize: 'var(--text-2xs)',
-  fontWeight: 700,
-  letterSpacing: '0.1em',
-  textTransform: 'uppercase',
-  color: 'var(--accent)',
 };
 
 const LABEL_STYLE: React.CSSProperties = {
@@ -178,6 +184,146 @@ const FieldError: React.FC<{ message?: string | null; id?: string }> = ({ messag
   );
 };
 
+/**
+ * People who can vouch for the candidate — up to three, at least one with a number.
+ *
+ * Each row saves with the draft as it is added or removed, the same as every other answer on
+ * this form. Submit refuses without a ringable one (see `referenceSubmitProblem`), so the
+ * error here names the rule before the candidate reaches the last step.
+ *
+ * Exported for its spec: three rows, a cap, and the rule are the whole contract.
+ */
+export const ReferencesEditor: React.FC<{
+  references: CandidateReference[];
+  error: string | null;
+  onChange: (next: CandidateReference[]) => void;
+}> = ({ references, error, onChange }) => {
+  const [draft, setDraft] = useState({ fullName: '', phone: '', relationship: '', email: '' });
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const add = () => {
+    if (!draft.fullName.trim()) {
+      setLocalError('Give a name for this reference.');
+      return;
+    }
+    if (references.length >= APPLICATION_REFERENCES_MAX) {
+      setLocalError(`Only ${APPLICATION_REFERENCES_MAX} references are needed.`);
+      return;
+    }
+    if (draft.email.trim() && referenceEmailProblem(draft.email.trim().toLowerCase())) {
+      setLocalError('That email does not look right.');
+      return;
+    }
+    setLocalError(null);
+    onChange([...references, {
+      fullName: draft.fullName.trim(),
+      phone: draft.phone.replace(/\D/g, '').slice(0, 15),
+      relationship: draft.relationship.trim(),
+      email: draft.email.trim().toLowerCase(),
+    }]);
+    setDraft({ fullName: '', phone: '', relationship: '', email: '' });
+  };
+
+  const remove = (index: number) => onChange(references.filter((_, i) => i !== index));
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {references.length > 0 && (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {references.map((r, i) => (
+            <li
+              key={`${r.fullName}-${i}`}
+              style={{
+                display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap',
+                padding: '8px 12px', borderRadius: '8px',
+                background: 'var(--bg-surface)', border: '1px solid var(--border-hair)',
+                fontSize: 'var(--text-xs)',
+              }}
+            >
+              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{r.fullName}</span>
+              {r.relationship && <span style={{ color: 'var(--text-secondary)' }}>· {r.relationship}</span>}
+              {r.phone && <span style={{ color: 'var(--text-secondary)' }}>· {referencePhoneForDisplay(r.phone)}</span>}
+              {r.email && <span style={{ color: 'var(--text-secondary)' }}>· {r.email}</span>}
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                aria-label={`Remove reference ${r.fullName}`}
+                className="btn btn-secondary"
+                style={{ fontSize: 'var(--text-2xs)', padding: '3px 10px', marginLeft: 'auto' }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {references.length < APPLICATION_REFERENCES_MAX ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', alignItems: 'end' }}>
+          <div>
+            <label htmlFor="reg-ref-name-input" style={LABEL_STYLE}>Their name *</label>
+            <input
+              id="reg-ref-name-input"
+              value={draft.fullName}
+              onChange={(e) => setDraft({ ...draft, fullName: e.target.value })}
+              placeholder="Former employer or colleague"
+              autoComplete="off"
+              maxLength={200}
+              className="reg-input"
+              style={INPUT_STYLE}
+            />
+          </div>
+          <div>
+            <label htmlFor="reg-ref-phone-input" style={LABEL_STYLE}>Their phone number</label>
+            <PhoneInput
+              id="reg-ref-phone-input"
+              value={draft.phone}
+              onChange={(v) => setDraft({ ...draft, phone: v })}
+              onBlur={() => setDraft((d) => ({ ...d, phone: d.phone.replace(/\D/g, '').slice(0, 15) }))}
+              placeholder="10-digit mobile"
+              invalid={Boolean(draft.phone) && !normalisePhone(draft.phone)}
+            />
+          </div>
+          <div>
+            <label htmlFor="reg-ref-relation-input" style={LABEL_STYLE}>How they know you</label>
+            <input
+              id="reg-ref-relation-input"
+              value={draft.relationship}
+              onChange={(e) => setDraft({ ...draft, relationship: e.target.value })}
+              placeholder="e.g. Former manager"
+              autoComplete="off"
+              maxLength={100}
+              className="reg-input"
+              style={INPUT_STYLE}
+            />
+          </div>
+          <div>
+            <label htmlFor="reg-ref-email-input" style={LABEL_STYLE}>Their email (optional)</label>
+            <input
+              id="reg-ref-email-input"
+              type="email"
+              value={draft.email}
+              onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+              placeholder="name@example.com"
+              autoComplete="off"
+              maxLength={255}
+              className="reg-input"
+              style={INPUT_STYLE}
+            />
+          </div>
+          <div>
+            <PrimaryButton onClick={add} title="Add this person as a reference">
+              Add reference
+            </PrimaryButton>
+          </div>
+        </div>
+      ) : (
+        <div style={HINT_STYLE}>Three references is the most this form takes — remove one to change them.</div>
+      )}
+      <FieldError message={localError ?? error} />
+    </div>
+  );
+};
+
 /** Phone box with a fixed +91 prefix so candidates stop typing it (and re-typing it wrong). */
 const PhoneInput: React.FC<{
   id: string;
@@ -188,7 +334,8 @@ const PhoneInput: React.FC<{
   disabled?: boolean;
   invalid?: boolean;
   describedBy?: string;
-}> = ({ id, value, onChange, onBlur, placeholder, disabled, invalid, describedBy }) => (
+  title?: string;
+}> = ({ id, value, onChange, onBlur, placeholder, disabled, invalid, describedBy, title }) => (
   <div style={{ position: 'relative' }}>
     <span
       aria-hidden
@@ -202,6 +349,7 @@ const PhoneInput: React.FC<{
     <input
       id={id}
       value={value}
+      title={title}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
       inputMode="tel"
@@ -219,6 +367,31 @@ const PhoneInput: React.FC<{
 
 /** The same answers the phone app's registration holds — the rules over them live in shared. */
 type FormState = RegistrationFormValues;
+
+interface CandidateReference {
+  fullName: string;
+  phone: string;
+  relationship: string;
+  email: string;
+}
+
+/** Who referred them, as stored on the application — HR's entry or their own. */
+const readSourceReferral = (app: RegistrationApplication | null | undefined): SourceReferral | null =>
+  ((app?.extendedProfile as { sourceReferral?: SourceReferral } | null)?.sourceReferral) ?? null;
+
+const readCandidateReferences = (app: RegistrationApplication): CandidateReference[] => {
+  const raw = (app.extendedProfile as { references?: unknown } | null)?.references;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
+    .map((r) => ({
+      fullName: String(r.fullName ?? ''),
+      phone: String(r.phone ?? ''),
+      relationship: String(r.relationship ?? ''),
+      email: String(r.email ?? ''),
+    }))
+    .filter((r) => r.fullName.trim() !== '' || r.phone.trim() !== '' || r.email.trim() !== '');
+};
 
 export const RECORD_KEYS = [
   'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
@@ -243,9 +416,15 @@ const seedForm = (app: RegistrationApplication): FormState => ({
   ...Object.fromEntries(
     RECORD_KEYS.map((k) => [k, String(app.extendedProfile?.fields?.[k] ?? '')]),
   ) as Pick<FormState, typeof RECORD_KEYS[number]>,
+  // What is already saved counts as confirmed: it was typed twice when it was saved. Only a number
+  // typed NOW has to be typed again.
+  bankAccountNumberConfirm: String(app.extendedProfile?.fields?.bankAccountNumber ?? ''),
 });
 
 function fieldPatch(key: keyof FormState, value: string): UpdateRegistrationDraftInput {
+  // The second typing of the account number exists only on this screen, to be compared. Never sent:
+  // the API refuses properties it does not know, so leaking it would fail every whole-form save.
+  if (key === 'bankAccountNumberConfirm') return {};
   const trimmed = (value ?? '').trim();
 
   if (key === 'dateOfBirth') {
@@ -297,93 +476,84 @@ const CATEGORY_CARDS: Array<{
   },
 ];
 
-const STATUS_COPY: Partial<Record<ApplicationStatus, (app: RegistrationApplication) => string>> = {
-  [ApplicationStatus.PENDING_VALIDATION]: () =>
-    'Your application has been successfully submitted and is currently under review by our Operations & Compliance team.',
-  [ApplicationStatus.APPROVED]: () =>
-    'Congratulations! Your Sumeru Global Appraiser application has been officially approved.',
-  [ApplicationStatus.REJECTED]: (app) =>
-    `Your application was not approved.${app.reviewNotes ? ` Review note: ${app.reviewNotes}` : ''}`,
-  [ApplicationStatus.WITHDRAWN]: () =>
-    'You withdrew this application. What you had given us has been deleted, apart from the record '
-    + 'that an application was made and withdrawn. If you change your mind, ask the office that '
-    + 'invited you for a fresh link.',
+/**
+ * What a finished application says — one heading and at most one line (owner, 2026-09-24: "keep
+ * things simple"). The same four outcomes, in the same words where they carry weight, as the phone
+ * app's `RegistrationStatus`; withdrawn is neutral there too, not a green tick.
+ *
+ * Submitted and approved say no more than their heading here: the road ahead — the steps and the
+ * one sentence about what happens next — is `candidateJourney`'s, drawn under the heading.
+ */
+const STATUS_VIEW: Partial<Record<ApplicationStatus, (app: RegistrationApplication) => {
+  tone: 'success' | 'danger' | 'neutral';
+  title: string;
+  body: string | null;
+}>> = {
+  [ApplicationStatus.PENDING_VALIDATION]: () => ({
+    tone: 'success', title: 'Submitted. HR will call you.', body: null,
+  }),
+  [ApplicationStatus.APPROVED]: (app) => ({
+    tone: 'success',
+    title: `Approved${app.fullName ? ` — welcome, ${app.fullName}` : ''}.`,
+    body: null,
+  }),
+  [ApplicationStatus.REJECTED]: (app) => ({
+    tone: 'danger',
+    title: 'Not approved this time.',
+    body: app.reviewNotes ? `Note from HR: ${app.reviewNotes}` : null,
+  }),
+  [ApplicationStatus.WITHDRAWN]: () => ({
+    tone: 'neutral',
+    title: 'Application withdrawn',
+    body: 'You withdrew this application. What you gave us has been deleted, apart from the record '
+      + 'that an application was made and withdrawn. If you change your mind, ask the office that '
+      + 'invited you for a new link.',
+  }),
 };
 
+/** The reference a candidate quotes on the phone. */
+const applicationRef = (id: string | null | undefined): string => `APP-${(id || '').slice(0, 8).toUpperCase()}`;
 
 // PrimaryButton now lives in ./registration/PrimaryButton — the consent screen uses it too.
 
+/** The phone app's step names, word for word — one registration, two surfaces. */
 const WIZARD_STEPS = [
-  { id: 1, title: 'Personal & Contact', shortTitle: 'Personal', icon: User, desc: 'Identity & Mobile Verification' },
-  { id: 2, title: 'Experience & Address', shortTitle: 'Experience', icon: Briefcase, desc: 'Experience & Pincode Auto-Fill' },
-  { id: 3, title: 'Statutory & Bank', shortTitle: 'Bank & ID', icon: CreditCard, desc: 'PAN, Aadhaar & Bank IFSC' },
-  { id: 4, title: 'Documents & Submit', shortTitle: 'Documents', icon: FileCheck, desc: 'Scans, Photo & Declaration' },
+  { id: 1, title: 'Personal & contact', icon: User },
+  { id: 2, title: 'Experience & address', icon: Briefcase },
+  { id: 3, title: 'ID & bank', icon: CreditCard },
+  { id: 4, title: 'Documents & submit', icon: FileCheck },
 ] as const;
+
+/** When a conditional document is needed — the whole explanation, in the row's one badge. */
+const CONDITIONAL_BADGE: Record<string, string> = {
+  RENT_AGREEMENT: 'Only if your address differs from Aadhaar',
+  ELECTRICITY_BILL: 'Only if the shop is rented',
+};
+
+/** The one line a row says under its name, where it needs one at all. */
+const DOCUMENT_NOTE: Record<string, string> = {
+  PHOTOGRAPH: 'Clear face photo, for your ID card.',
+  BANK_PASSBOOK: 'The page with your name, account number and IFSC. A cancelled cheque is fine too.',
+};
+
+/**
+ * Pages in a PDF this page has just built or been handed, for the thumbnail. Counts page objects,
+ * which is exact for the scanner's own PDFs; a PDF that hides its pages in compressed object
+ * streams answers null, and the thumbnail then just says "PDF".
+ */
+async function pdfPageCount(file: File): Promise<number | null> {
+  try {
+    const text = new TextDecoder('latin1').decode(await blobBytes(file));
+    const count = (text.match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length;
+    return count > 0 ? count : null;
+  } catch {
+    return null;
+  }
+}
 
 const CONDITIONAL_DOCS = new Set(REGISTRATION_CONDITIONAL_DOCUMENTS);
 
 type StepErrors = Record<string, string>;
-
-const getStepStorageKey = (token: string) => `fapoms_reg_step_${token}`;
-const getMaxStepStorageKey = (token: string) => `fapoms_reg_max_${token}`;
-
-const getStoredStep = (token: string): number | null => {
-  try {
-    if (typeof window !== 'undefined' && window.location?.hash) {
-      const match = window.location.hash.match(/step-?([1-4])/i);
-      if (match) {
-        const s = parseInt(match[1], 10);
-        if (s >= 1 && s <= 4) return s;
-      }
-    }
-    if (typeof localStorage !== 'undefined' && token) {
-      const raw = localStorage.getItem(getStepStorageKey(token));
-      if (raw) {
-        const s = parseInt(raw, 10);
-        if (s >= 1 && s <= 4) return s;
-      }
-    }
-  } catch {
-    // Ignore storage/hash read errors
-  }
-  return null;
-};
-
-const getStoredMaxStep = (token: string, initial: number): number => {
-  try {
-    if (typeof localStorage !== 'undefined' && token) {
-      const raw = localStorage.getItem(getMaxStepStorageKey(token));
-      if (raw) {
-        const s = parseInt(raw, 10);
-        if (s >= 1 && s <= 4) return Math.max(s, initial);
-      }
-    }
-  } catch {
-    // Ignore storage errors
-  }
-  return initial;
-};
-
-const saveStepPosition = (token: string, step: number) => {
-  try {
-    if (typeof localStorage !== 'undefined' && token) {
-      localStorage.setItem(getStepStorageKey(token), String(step));
-      const currentMax = parseInt(localStorage.getItem(getMaxStepStorageKey(token)) || '1', 10);
-      localStorage.setItem(getMaxStepStorageKey(token), String(Math.max(currentMax, step)));
-    }
-  } catch {
-    // Ignore localStorage errors
-  }
-  try {
-    if (typeof window !== 'undefined' && window.history?.replaceState) {
-      const currentUrl = new URL(window.location.href);
-      currentUrl.hash = `step-${step}`;
-      window.history.replaceState(null, '', currentUrl.toString());
-    }
-  } catch {
-    // Ignore history errors
-  }
-};
 
 /**
  * The sentence for each problem the shared step rules report. The rules — what is required, what
@@ -414,13 +584,18 @@ const STEP_MESSAGES: Partial<Record<RegistrationFormField, Partial<Record<Regist
 
 function problemMessage(field: RegistrationFormField, problem: RegistrationProblem): string {
   if (problem.code === 'tooLong') return `Keep this under ${problem.max} characters (${problem.length} now).`;
-  if (problem.code === 'outOfRange') return `Enter ${problem.min} for fresher, up to ${problem.max} years.`;
-  if (problem.code === 'dateOfBirth') return problem.message;
+  if (problem.code === 'outOfRange') return `Choose between ${problem.min} and ${problem.max}.`;
+  if (problem.code === 'dateOfBirth' || problem.code === 'mismatch') return problem.message;
   return STEP_MESSAGES[field]?.[problem.code] ?? 'Check this answer.';
 }
 
+
+/** The step a box is on — for jumping to it from HR's "Fix" list. */
+const stepShowing = (field: string): number => applicationFieldStep(field);
+
 function validateRegistrationStep(step: number, f: FormState): StepErrors {
   const errs: StepErrors = {};
+  // The shared rules, the same ones the phone app runs — this page adds no rule of its own.
   for (const [field, problem] of Object.entries(registrationStepProblems(step, f))) {
     if (problem) errs[field] = problemMessage(field as RegistrationFormField, problem);
   }
@@ -434,10 +609,42 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [application, setApplication] = useState<RegistrationApplication | null>(null);
   const [documents, setDocuments] = useState<RegistrationApplicationDocument[]>([]);
   const [documentsRequested, setDocumentsRequested] = useState<string[]>([]);
+  /**
+   * People who can vouch for the candidate — up to three, at least one with a number.
+   * Saved with the draft like every other answer; submit refuses without a ringable one.
+   */
+  const [references, setReferences] = useState<CandidateReference[]>([]);
+  const [referencesError, setReferencesError] = useState<string | null>(null);
+  /** Who referred them — theirs to fill only while HR has not recorded it. */
+  const [referral, setReferral] = useState<SourceReferralDraft>(EMPTY_REFERRAL);
+  const [referralError, setReferralError] = useState<string | null>(null);
+  /**
+   * Exactly what HR asked for — the to-do list this link renders instead of one free-text
+   * banner. Entries clear themselves as the candidate fixes each item.
+   */
+  const [infoRequests, setInfoRequests] = useState<ApplicationInfoRequestItem[]>([]);
+  /** Where an approved candidate has got to since, and what HR has asked of them — from the server. */
+  const [journeyProgress, setJourneyProgress] = useState<CandidateJourneyProgress | null>(null);
+  /** The link has expired and only shows their progress — see `statusOnly` on the hydrate result. */
+  const [statusOnly, setStatusOnly] = useState(false);
+  /**
+   * Saved answers or scans are on file and were withheld: this tab has not proven the contact with
+   * a code yet. The form stays shut behind a code prompt until it has — see `sensitiveLocked` on
+   * the hydrate result. A leaked link on its own shows progress, never the PAN or the scans.
+   */
+  const [sensitiveLocked, setSensitiveLocked] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
 
-  const [activeStep, setActiveStep] = useState<number>(() => getStoredStep(token) ?? 1);
-  const [maxStepVisited, setMaxStepVisited] = useState<number>(() => getStoredMaxStep(token, getStoredStep(token) ?? 1));
+  /*
+    WHERE TO REOPEN IS DECIDED BY WHAT IS SAVED, NOT BY THIS BROWSER.
+
+    The page used to keep its own step in localStorage and in a `#step-N` hash, and preferred those
+    to what the server held — so the same link opened on a different step on the phone app than in
+    a browser, and a candidate switching devices was put somewhere else each time. Both surfaces
+    now ask the shared rules (`inferRegistrationStep` → `resumableRegistrationStep`) in `load`.
+  */
+  const [activeStep, setActiveStep] = useState<number>(1);
+  const [maxStepVisited, setMaxStepVisited] = useState<number>(1);
   const [stepErrors, setStepErrors] = useState<StepErrors>({});
   const [stepAttempted, setStepAttempted] = useState(false);
 
@@ -459,6 +666,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
 
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
   const [uploadErrors, setUploadErrors] = useState<Record<string, string | undefined>>({});
+  /** Rows whose last file the server refused — they offer "Take again" rather than "Take photo". */
+  const [uploadRefused, setUploadRefused] = useState<Record<string, boolean>>({});
+  const [removing, setRemoving] = useState<Record<string, boolean>>({});
+  /** Page counts of PDFs sent this session, by stored key — for the thumbnail. */
+  const [pdfPages, setPdfPages] = useState<Record<string, number>>({});
 
   const [consentBusy, setConsentBusy] = useState(false);
   /** The versioned notice the API serves; the form does not exist until it has been accepted. */
@@ -470,6 +682,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [relationOtherOpen, setRelationOtherOpen] = useState(false);
+  /** "Someone referred me" — opened by the candidate, or already open when there is an answer. */
+  const [referralOpen, setReferralOpen] = useState(false);
+  const { confirmWithReason, confirmDialog } = useConfirm();
 
   // Optional map pin — stored in the draft's record fields.
   const [pinLatitude, setPinLatitude] = useState<number | null>(
@@ -520,12 +735,24 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       setLoadState('loading');
       setLoadError(null);
       const result = await hydrateRegistration(token);
+      // An expired link sends its status, the steps and what HR asked for — and nothing to fill a
+      // form from, which is fine: the flag keeps the form from rendering (see below).
+      setStatusOnly(Boolean(result.statusOnly));
+      setSensitiveLocked(Boolean(result.sensitiveLocked));
       setApplication(result.application);
       setConsentNotice(result.consentNotice);
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
+      setInfoRequests(result.infoRequests ?? []);
+      // Not on the service's declared shape: read through the shared reader, which answers null
+      // for a server that sends none.
+      setJourneyProgress(readCandidateJourneyProgress((result as { journey?: unknown }).journey));
       const seeded = seedForm(result.application);
       setForm(seeded);
+      setReferences(readCandidateReferences(result.application));
+      setReferral(referralDraftFrom(readSourceReferral(result.application)));
+      if (referralPayload(referralDraftFrom(readSourceReferral(result.application)))) setReferralOpen(true);
+      setReferencesError(null);
       setPhone(result.application.mobile ?? '');
       if (result.otpVerified) {
         setOtpVerified(true);
@@ -539,14 +766,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
         setPinLongitude(Number(fields.longitude));
       }
 
-      // Check stored step and draft progress
-      const currentStored = getStoredStep(token);
-      const inferred = inferRegistrationStep(result.application, result.documents);
-      const target = currentStored !== null ? currentStored : inferred;
-      const finalStep = resumableRegistrationStep(target, seeded);
+      // The same rule the phone app reopens with: the furthest step started, pulled back to the
+      // first one that still has a problem.
+      const finalStep = resumableRegistrationStep(inferRegistrationStep(result.application, result.documents), seeded);
       setActiveStep(finalStep);
-      setMaxStepVisited((prev) => Math.max(prev, finalStep, inferred));
-      saveStepPosition(token, finalStep);
+      setMaxStepVisited((prev) => Math.max(prev, finalStep));
 
       setLoadState('loaded');
     } catch (err) {
@@ -563,6 +787,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       const result = await hydrateRegistration(token);
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
+      setInfoRequests(result.infoRequests ?? []);
       setApplication((prev) => (prev ? { ...prev, ...result.application } : result.application));
       if (result.otpVerified) {
         setOtpVerified(true);
@@ -656,7 +881,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     setOtpError(null);
     const entered = (submitted ?? code).trim();
     const trimmed = currentPhone();
-    if (!entered) {
+    if (!/^\d{6}$/.test(entered)) {
       setOtpError('Enter the 6-digit code you received.');
       return;
     }
@@ -681,6 +906,51 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     }
   };
 
+  /*
+    UNLOCKING SAVED ANSWERS. The code goes to the number already on the application — the link
+    holder cannot choose where it goes (the server refuses anything else while answers are on
+    file) — and a right code reloads the form, now with what they had saved.
+  */
+  const handleUnlockSend = async () => {
+    if (!application) return;
+    setOtpError(null);
+    setOtpInfo(null);
+    setOtpBusy(true);
+    try {
+      const delivery = await requestRegistrationOtp(token, application.mobile);
+      setCodeSent(true);
+      setOtpSentTo(application.mobile);
+      setOtpInfo(otpSentWords(delivery));
+      setOtpCooldown(delivery.cooldownSeconds ?? 60);
+    } catch (err) {
+      setOtpError(userMessage(err));
+    } finally {
+      setOtpBusy(false);
+    }
+  };
+
+  const handleUnlockVerify = async () => {
+    if (!application) return;
+    setOtpError(null);
+    const entered = code.trim();
+    if (!/^\d{6}$/.test(entered)) {
+      setOtpError('Enter the 6-digit code you received.');
+      return;
+    }
+    setOtpBusy(true);
+    try {
+      await verifyRegistrationOtp(token, application.mobile, entered);
+      setOtpVerified(true);
+      setOtpInfo(null);
+      setCode('');
+      await load();
+    } catch (err) {
+      setOtpError(userMessage(err));
+    } finally {
+      setOtpBusy(false);
+    }
+  };
+
   const saveDraft = useCallback(async (patch: UpdateRegistrationDraftInput) => {
     if (Object.keys(patch).length === 0) return;
     setSavingDraft(true);
@@ -689,6 +959,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     try {
       const saved = await updateRegistrationDraft(token, patch);
       setApplication(saved);
+      // The server drops an ask the moment its field actually changes; read the list back so the
+      // "HR has asked you to fix these" box shrinks as they fix things, the same way a re-uploaded scan does.
+      if ('infoRequests' in (saved as object)) {
+        setInfoRequests(readApplicationInfoRequests((saved as { infoRequests?: unknown }).infoRequests));
+      }
       setDraftSaved(true);
     } catch (err) {
       setDraftError(userMessage(err));
@@ -899,7 +1174,6 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     }
     setActiveStep(step);
     setMaxStepVisited((prev) => Math.max(prev, step));
-    saveStepPosition(token, step);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -912,25 +1186,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     setStepAttempted(false);
     setActiveStep(step);
     setMaxStepVisited((prev) => Math.max(prev, step));
-    saveStepPosition(token, step);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-
-  useEffect(() => {
-    const handleHash = () => {
-      const match = window.location.hash.match(/step-?([1-4])/i);
-      if (match) {
-        const target = parseInt(match[1], 10);
-        if (target >= 1 && target <= 4 && target !== activeStep) {
-          if (target <= maxStepVisited) {
-            goToStep(target);
-          }
-        }
-      }
-    };
-    window.addEventListener('hashchange', handleHash);
-    return () => window.removeEventListener('hashchange', handleHash);
-  }, [activeStep, maxStepVisited]);
 
   const handleEmploymentCategoryChange = async (value: string) => {
     if (!form) return;
@@ -967,26 +1224,61 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     }
   };
 
-  const handleUpload = async (requirement: string, file: File) => {
+  /**
+   * `replace` is "Retake": the new file takes the place of what the row holds, rather than joining
+   * it. A refusal from the server (`UPLOAD_REJECTED`) is shown in its own plain words, and the row
+   * offers to take it again.
+   */
+  const handleUpload = async (requirement: string, file: File, replace = false) => {
     const problem = uploadSizeProblem(file);
     if (problem) {
       setUploadErrors((prev) => ({ ...prev, [requirement]: problem }));
+      setUploadRefused((prev) => ({ ...prev, [requirement]: true }));
       return;
     }
     setUploadErrors((prev) => ({ ...prev, [requirement]: undefined }));
+    setUploadRefused((prev) => ({ ...prev, [requirement]: false }));
     setUploading((prev) => ({ ...prev, [requirement]: true }));
     try {
-      const row = await uploadRegistrationDocument(token, requirement, file);
+      const row = await uploadRegistrationDocument(token, requirement, file, { replace });
       setDocuments((prev) => [...prev.filter((d) => d.requirement !== requirement), row]);
+      if (file.type === 'application/pdf') {
+        const pages = await pdfPageCount(file);
+        const stored = row?.filePaths?.[row.filePaths.length - 1];
+        if (pages && stored) setPdfPages((prev) => ({ ...prev, [stored]: pages }));
+      }
+      // The fresh scan answers its own send-back: drop the ask so the to-do list shrinks now,
+      // not on the next reload. (The server clears its copy the same way.)
+      setInfoRequests((prev) => prev.filter((i) => !(i.kind === 'document' && i.key === requirement)));
     } catch (err) {
-      setUploadErrors((prev) => ({ ...prev, [requirement]: userMessage(err) }));
+      const refused = isUploadRejected(err);
+      setUploadErrors((prev) => ({
+        ...prev,
+        [requirement]: refused && err instanceof AppError ? err.userMessage : userMessage(err),
+      }));
+      setUploadRefused((prev) => ({ ...prev, [requirement]: refused }));
       onVerificationLost(err);
     } finally {
       setUploading((prev) => ({ ...prev, [requirement]: false }));
     }
   };
 
-  const openDocumentPreview = async (requirement: string, filePaths: string[]) => {
+  /** One file off a row — the × on its thumbnail. */
+  const handleRemoveFile = async (requirement: string, index: number) => {
+    setRemoving((prev) => ({ ...prev, [requirement]: true }));
+    setUploadErrors((prev) => ({ ...prev, [requirement]: undefined }));
+    try {
+      const row = await removeRegistrationDocumentFile(token, requirement, index);
+      setDocuments((prev) => [...prev.filter((d) => d.requirement !== requirement), ...(row ? [row] : [])]);
+    } catch (err) {
+      setUploadErrors((prev) => ({ ...prev, [requirement]: userMessage(err) }));
+      onVerificationLost(err);
+    } finally {
+      setRemoving((prev) => ({ ...prev, [requirement]: false }));
+    }
+  };
+
+  const openDocumentPreview = async (requirement: string, filePaths: string[], startAt = 0) => {
     if (previewLoading) return;
     revokePreviewUrls();
     setPreviewLoading(requirement);
@@ -1017,7 +1309,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
         });
       }
       setPreviewItems(items);
-      setPreviewIndex(0);
+      setPreviewIndex(Math.min(startAt, Math.max(0, items.length - 1)));
       setPreviewOpen(true);
     } catch (err) {
       setUploadErrors((prev) => ({ ...prev, [requirement]: `Could not open scan preview: ${userMessage(err)}` }));
@@ -1052,15 +1344,19 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   /**
    * Taking it back. Asks once in plain words, because it erases what they have given us and the
    * application cannot go ahead afterwards — but it asks ONCE: a right buried under three
-   * confirmations is a right in name only.
+   * confirmations is a right in name only. The reason is optional, and says so.
    */
   const handleWithdraw = async () => {
-    const reason = window.prompt(
-      'Withdrawing stops your application and deletes what you have given us. '
-      + 'You can say why if you want to — it is not required.',
-      '',
-    );
-    if (reason === null) return;
+    const { confirmed, reason } = await confirmWithReason({
+      title: 'Withdraw your application?',
+      message: 'This stops your application and deletes what you have given us.',
+      confirmLabel: 'Withdraw',
+      cancelLabel: 'Keep my application',
+      tone: 'danger',
+      reversible: false,
+      reasonPrompt: { label: 'Why? (optional)', optional: true },
+    });
+    if (!confirmed) return;
     setWithdrawing(true);
     try {
       const saved = await withdrawRegistrationConsent(token, reason.trim() || undefined);
@@ -1076,6 +1372,27 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     setSubmitBusy(true);
     setSubmitError(null);
     try {
+      // Checked here too, so the candidate is taken to the document rather than told by the server.
+      const missingDoc = REGISTRATION_REQUIRED_DOCUMENTS.find(
+        (req) => documentsRequested.includes(req)
+          && !documents.some((d) => d.requirement === req && d.filePaths.length > 0),
+      );
+      if (missingDoc) {
+        const label = ONBOARDING_DOCUMENT_LABELS[missingDoc as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? missingDoc;
+        setSubmitError(`Upload your ${label.toLowerCase()} before submitting — the page showing your name, account number and IFSC.`);
+        goToStep(4);
+        window.setTimeout(() => {
+          document.getElementById(`doc-req-${missingDoc}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 150);
+        return;
+      }
+      const problem = referenceSubmitProblem(references);
+      if (problem) {
+        setReferencesError(problem);
+        setSubmitError(`${problem} Add them in step 2 (Experience & address).`);
+        goToStep(2);
+        return;
+      }
       const saved = await submitRegistration(token);
       setApplication(saved);
     } catch (err) {
@@ -1094,6 +1411,33 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     () => Boolean(form?.fullName.trim()) && Boolean(form?.employmentCategory) && consentAccepted && otpVerified && hasPhotograph,
     [form, consentAccepted, otpVerified, hasPhotograph],
   );
+
+  const scrollToDocument = (requirement: string) => {
+    goToStep(4);
+    window.setTimeout(() => {
+      document.getElementById(`doc-req-${requirement}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+  };
+
+  /** What stands between them and Submit — only what is missing, each with the way to it. */
+  const stillNeeded: Array<{ key: string; label: string; go: () => void }> = [];
+  if (form) {
+    if (!otpVerified) stillNeeded.push({ key: 'otp', label: 'Verify your mobile number', go: () => goToStep(1) });
+    if (!form.fullName.trim()) stillNeeded.push({ key: 'name', label: 'Your full name', go: () => goToStep(1) });
+    if (!form.employmentCategory) stillNeeded.push({ key: 'category', label: 'Freelancer or proprietor', go: () => goToStep(3) });
+    if (documentsRequested.includes('PHOTOGRAPH' as never) && !hasPhotograph) {
+      stillNeeded.push({ key: 'photo', label: 'Your photo', go: () => scrollToDocument('PHOTOGRAPH') });
+    }
+    for (const req of REGISTRATION_REQUIRED_DOCUMENTS) {
+      if (documentsRequested.includes(req as never) && !documents.some((d) => d.requirement === req && d.filePaths.length > 0)) {
+        const docLabel = ONBOARDING_DOCUMENT_LABELS[req as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? req;
+        stillNeeded.push({ key: `doc-${req}`, label: docLabel, go: () => scrollToDocument(req) });
+      }
+    }
+    if (referenceSubmitProblem(references)) {
+      stillNeeded.push({ key: 'references', label: 'A reference with a phone number', go: () => goToStep(2) });
+    }
+  }
 
   const relationSelectValue = form
     ? (!form.emergencyContactRelation.trim()
@@ -1121,236 +1465,135 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
 
   const circleConflict = form ? pincodeStateConflict(form.pincode, form.state) : null;
 
-  // ── Loading Screen ────────────────────────────────────────────────────────
+  // ── Loading, a link that does not work, and a finished application ────────
+  //
+  // Each is one heading and at most one line (owner, 2026-09-24: "keep things simple and
+  // straightforward") — plus, for a submitted or approved application, the short list of steps
+  // still ahead. The phone app's `RegistrationStatus` says the same things.
+  const shortScreen = (body: React.ReactNode, tone?: 'success' | 'danger' | 'neutral') => (
+    <div className="pub-reg-root">
+      <style>{FORM_CSS}</style>
+      <PublicMasthead title="Registration" />
+      <div className="pub-reg-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+        <div
+          className="pub-reg-card"
+          style={{
+            maxWidth: '480px', width: '100%', textAlign: 'center', padding: '32px 24px', alignItems: 'center',
+            borderColor: tone === 'danger' ? 'var(--danger)' : tone === 'success' ? 'var(--success)' : undefined,
+          }}
+        >
+          {body}
+        </div>
+      </div>
+    </div>
+  );
+
   if (loadState === 'loading') {
-    return (
-      <div className="pub-reg-root">
-        <style>{FORM_CSS}</style>
-        <PublicMasthead />
-        <div className="pub-reg-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-          <div className="pub-reg-card" style={{ maxWidth: '440px', width: '100%', textAlign: 'center', padding: '40px 24px' }}>
-            <Loader2 size={32} className="spin" style={{ margin: '0 auto 16px', color: 'var(--accent)' }} />
-            <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
-              Opening Your Registration Portal
-            </div>
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-              Verifying your invitation session…
-            </div>
-          </div>
+    return shortScreen(
+      <>
+        <Loader2 size={32} className="spin" style={{ color: 'var(--accent)' }} />
+        <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>
+          Opening your form…
         </div>
-      </div>
+      </>,
     );
   }
 
-  // ── Error Screen (Invalid / Expired Token) ─────────────────────────────────
   if (loadState === 'error' || !application || !form) {
-    return (
-      <div className="pub-reg-root">
-        <style>{FORM_CSS}</style>
-        <PublicMasthead />
-        <div className="pub-reg-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-          <div className="pub-reg-card" style={{ maxWidth: '520px', width: '100%', borderColor: 'var(--danger)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--danger)' }}>
-              <AlertCircle size={24} style={{ flexShrink: 0 }} />
-              <div>
-                <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>
-                  This Registration Link is Not Valid
-                </div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  Invitation Token Verification Failed
-                </div>
-              </div>
-            </div>
-            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              {loadError || 'This link may have expired, already been completed, or was entered incorrectly.'}
-            </div>
-            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-secondary)' }}>
-                What should you do?
-              </div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                Please contact the HR team member or coordinator who invited you to request a new registration link.
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+    return shortScreen(
+      <>
+        <AlertCircle size={32} style={{ color: 'var(--danger)' }} />
+        <h1 style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          Link not working — ask HR for a new one.
+        </h1>
+        {loadError && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{loadError}</div>
+        )}
+      </>,
+      'danger',
     );
   }
 
-  // ── Terminal States (Submitted, Approved, Rejected) ───────────────────────
-  const statusMessage = STATUS_COPY[application.status]?.(application);
-  if (statusMessage) {
-    const isSubmitted = application.status === ApplicationStatus.PENDING_VALIDATION;
-    const isApproved = application.status === ApplicationStatus.APPROVED;
-    const isRejected = application.status === ApplicationStatus.REJECTED;
+  /*
+    THE ROAD AHEAD, UNDER THE HEADING.
 
-    return (
-      <div className="pub-reg-root">
-        <style>{FORM_CSS}</style>
-        <PublicMasthead />
-        <div className="pub-reg-container" style={{ maxWidth: '840px' }}>
-          <div className="pub-reg-card" style={{
-            borderColor: isRejected ? 'var(--danger)' : 'var(--success)',
-            padding: '32px 28px',
-          }}>
-            {/* Status Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-              <div style={{
-                width: '54px', height: '54px', borderRadius: '50%',
-                background: isRejected ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0,
-              }}>
-                {isRejected ? (
-                  <AlertCircle size={30} style={{ color: 'var(--danger)' }} />
-                ) : (
-                  <CheckCircle2 size={30} style={{ color: 'var(--success)' }} />
-                )}
-              </div>
-              <div>
-                <div style={{
-                  fontSize: 'var(--text-xs)',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.08em',
-                  color: isRejected ? 'var(--danger)' : 'var(--success)',
-                  marginBottom: '2px',
-                }}>
-                  {isSubmitted && 'Application Submitted & Under Active Verification'}
-                  {isApproved && 'Official Appraiser Empanelment Approved'}
-                  {isRejected && 'Application Review Concluded'}
-                </div>
-                <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-                  {isSubmitted && `Thank you, ${application.fullName || 'Candidate'}`}
-                  {isApproved && `Congratulations, ${application.fullName || 'Appraiser'}`}
-                  {isRejected && 'Application Decision Notice'}
-                </h1>
-              </div>
-            </div>
+    Submitted and approved applications also show the steps still to come and the one sentence
+    about what happens next (`candidateJourney`, shared with the phone app). Anything HR has asked
+    of an approved candidate goes first. A paused joiner is told only that, in the same words
+    whatever paused them — the link is not the place to learn how a check or an approval went.
+  */
+  /*
+    AN EXPIRED LINK TO A FORM HR SENT BACK (2026-09-24).
 
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, margin: '8px 0 0' }}>
-              {statusMessage}
-            </p>
-
-            {/* Candidate Metadata Snapshot */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-              gap: '12px',
-              padding: '14px 18px',
-              background: 'var(--bg-surface-2)',
-              borderRadius: '10px',
-              border: '1px solid var(--border-color)',
-              marginTop: '12px',
-            }}>
-              <div>
-                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                  Application Ref
-                </div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
-                  #APP-{(application.id || '').slice(0, 8).toUpperCase()}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                  Verified Mobile
-                </div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  +91 {application.mobile}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                  Employment Category
-                </div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  {application.employmentCategory || 'Assayer'}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                  Registered Email
-                </div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  {application.email || '—'}
-                </div>
-              </div>
-            </div>
-
-            {/* 3-Stage Lifecycle Timeline for Submitted status */}
-            {isSubmitted && (
-              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--border-hair)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                  Next Steps &amp; Review Process
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                    <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--success)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, flexShrink: 0, marginTop: '2px' }}>
-                      <Check size={14} strokeWidth={3} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                        Stage 1: Registration Profile Submitted
-                      </div>
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                        Your details, statutory IDs, bank information, and uploaded documents have been securely recorded.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                    <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(245,158,11,0.15)', border: '2px solid #f59e0b', color: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, flexShrink: 0, marginTop: '2px' }}>
-                      2
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                        Stage 2: HR Document Verification (In Progress)
-                      </div>
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                        The HR operations team reviews your submitted documents (Aadhaar, PAN, Bank details) for verification.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                    <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--bg-surface-2)', border: '1.5px solid var(--border-color)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, flexShrink: 0, marginTop: '2px' }}>
-                      3
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                        Stage 3: Approval &amp; Roster Activation
-                      </div>
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                        Once verified, your profile is approved and activated onto the appraiser roster.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {isApproved && (
-              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--border-hair)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)', fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: '8px' }}>
-                  <Award size={18} /> Appraiser Profile Approved &amp; Active
-                </div>
-                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>
-                  Your application has been approved by the HR team. Your assayer profile is now active on the system.
-                  Your operations coordinator will reach out directly regarding field assignments and next steps.
-                </p>
-              </div>
-            )}
-
-            {/* Support Desk Footer */}
-            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-                Need updates or assistance? Reach out to the Sumeru Global HR coordinator who issued your invitation.
-              </div>
-            </div>
-          </div>
+    The form cannot open behind an expired link, so what HR asked for is shown as a list, with the
+    one way forward: a new link, which HR can send. Everything else an expired link shows falls
+    through to the status screen below, with a line saying the link only shows progress now.
+  */
+  if (statusOnly && application.status === ApplicationStatus.AWAITING_INFO) {
+    return shortScreen(
+      <>
+        <AlertCircle size={36} style={{ color: 'var(--warning)' }} />
+        <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          {CANDIDATE_JOURNEY_WORDS.expiredFixTitle}
+        </h1>
+        {infoRequests.length > 0 && (
+          <ul data-testid="expired-info-requests" style={{ textAlign: 'left', margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {infoRequests.map((r) => (
+              <li key={`${r.kind}:${r.key}`} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                <strong style={{ color: 'var(--text-primary)' }}>{r.label}</strong> — {r.message}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
+          {CANDIDATE_JOURNEY_WORDS.expiredFixBody}
+        </p>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+          Reference <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>#{applicationRef(application.id)}</strong>
         </div>
-      </div>
+      </>,
+      'neutral',
+    );
+  }
+
+  const journey = candidateJourney(application.status, journeyProgress);
+  const baseStatusView = STATUS_VIEW[application.status]?.(application);
+  const statusView = baseStatusView && journey?.paused
+    ? { tone: 'neutral' as const, title: CANDIDATE_JOURNEY_WORDS.pausedTitle, body: CANDIDATE_JOURNEY_WORDS.pausedBody }
+    : baseStatusView;
+  if (statusView) {
+    const withdrawn = application.status === ApplicationStatus.WITHDRAWN;
+    const colour = statusView.tone === 'danger' ? 'var(--danger)' : statusView.tone === 'success' ? 'var(--success)' : 'var(--text-muted)';
+    const Icon = statusView.tone === 'danger' ? AlertCircle
+      : withdrawn ? MinusCircle
+        : journey?.paused ? PauseCircle
+          : application.status === ApplicationStatus.APPROVED ? Award : CheckCircle2;
+    return shortScreen(
+      <>
+        {journey && journey.asks.length > 0 && <CandidateAsks asks={journey.asks} />}
+        <Icon size={40} style={{ color: colour }} />
+        <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          {statusView.title}
+        </h1>
+        {statusView.body && (
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
+            {statusView.body}
+          </p>
+        )}
+        {journey && !journey.paused && <CandidateJourneySteps view={journey} />}
+        {statusOnly && (
+          <div data-testid="status-only-note" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            {CANDIDATE_JOURNEY_WORDS.progressOnly}
+          </div>
+        )}
+        {/* A withdrawn application has nothing left to quote: its details were deleted. */}
+        {!withdrawn && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+            Reference <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>#{applicationRef(application.id)}</strong>
+          </div>
+        )}
+      </>,
+      statusView.tone,
     );
   }
 
@@ -1364,7 +1607,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     return (
       <div className="pub-reg-root">
         <style>{FORM_CSS}</style>
-        <PublicMasthead />
+        <PublicMasthead title="Registration" />
         <div className="pub-reg-container" style={{ maxWidth: '760px' }}>
           <ConsentGate
             notice={consentNotice}
@@ -1378,12 +1621,70 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     );
   }
 
+  if (sensitiveLocked) {
+    const last4 = (application.mobile ?? '').replace(/\D/g, '').slice(-4);
+    return shortScreen(
+      <div data-testid="unlock-saved-answers" style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', alignItems: 'center' }}>
+        <ShieldCheck size={36} style={{ color: 'var(--accent)' }} />
+        <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          Confirm it is you to continue
+        </h1>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
+          Your saved details and documents are protected. We will send a 6-digit code to your mobile
+          number ending {last4 || '—'}. If that is no longer your number, ask HR to correct it.
+        </p>
+        {otpError && <AlertBanner type="error" message={otpError} />}
+        {otpInfo && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{otpInfo}</div>}
+        {!codeSent ? (
+          <PrimaryButton
+            onClick={() => void handleUnlockSend()}
+            busy={otpBusy}
+            disabled={otpCooldown > 0}
+            title="Send a 6-digit code to the mobile number on your application"
+          >
+            {otpCooldown > 0 ? `Send code (${otpCooldown}s)` : 'Send code'}
+          </PrimaryButton>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '260px' }}>
+            <label htmlFor="reg-unlock-code" style={LABEL_STYLE}>6-digit code</label>
+            <input
+              id="reg-unlock-code"
+              ref={codeRef}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleUnlockVerify(); }}
+              title="The 6-digit code you received"
+              className="reg-input"
+              style={{ textAlign: 'center', letterSpacing: '0.3em' }}
+            />
+            <PrimaryButton onClick={() => void handleUnlockVerify()} busy={otpBusy} title="Check the code and open your form">
+              Continue
+            </PrimaryButton>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={otpBusy || otpCooldown > 0}
+              onClick={() => void handleUnlockSend()}
+              title="Send a new code"
+            >
+              {otpCooldown > 0 ? `Resend code (${otpCooldown}s)` : 'Resend code'}
+            </button>
+          </div>
+        )}
+      </div>,
+      'neutral',
+    );
+  }
+
   const stepErrorCount = Object.keys(stepErrors).length;
 
   return (
     <div className="pub-reg-root">
       <style>{FORM_CSS}</style>
-      <PublicMasthead />
+      <PublicMasthead title="Registration" />
 
       <div className="pub-reg-container">
         <div className="pub-reg-grid">
@@ -1428,6 +1729,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         type="button"
                         onClick={() => isClickable && goToStep(s.id)}
                         disabled={!isClickable}
+                        title={`Go to step ${s.id}: ${s.title}`}
                         className={`pub-reg-roadmap-item ${isCurrent ? 'is-active' : ''} ${isCompleted ? 'is-completed' : ''}`}
                         aria-current={isCurrent ? 'step' : undefined}
                         style={{ cursor: isClickable ? 'pointer' : 'default' }}
@@ -1437,7 +1739,6 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div className={`pub-reg-rail-step-title ${isCurrent ? 'is-active' : ''}`}>{s.title}</div>
-                          <div className="pub-reg-rail-step-desc">{s.desc}</div>
                         </div>
                       </button>
                     );
@@ -1446,7 +1747,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
 
                 {/* The quiet facts: the reference to quote, and whether their typing is safe. */}
                 <div className="pub-reg-rail-foot">
-                  <span>Ref #APP-{(application.id || '').slice(0, 8).toUpperCase()}</span>
+                  <span>Ref #{applicationRef(application.id)}</span>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                     <span className={`pub-reg-pulse-dot ${savingDraft ? 'is-saving' : 'is-active'}`} />
                     {savingDraft ? 'Saving…' : draftSaved ? 'Saved' : 'Saves as you type'}
@@ -1490,9 +1791,59 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
             </div>
 
             {application.status === ApplicationStatus.AWAITING_INFO && (
-              <AlertBanner type="error">
-                <strong>HR requested clarification:</strong> {application.reviewNotes || 'Please review and update your application details.'}
-              </AlertBanner>
+              <div
+                role="alert"
+                style={{
+                  padding: '14px 16px', borderRadius: '10px',
+                  background: 'color-mix(in srgb, var(--warning) 12%, transparent)',
+                  border: '1px solid var(--warning)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: infoRequests.length > 0 ? '8px' : 0 }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: '22px', height: '22px', padding: '0 6px', borderRadius: '999px',
+                    background: 'var(--warning)', color: '#fff',
+                    fontSize: 'var(--text-xs)', fontWeight: 700,
+                  }}>
+                    {infoRequests.length > 0 ? infoRequests.length : '!'}
+                  </span>
+                  {/* HR's ask in HR's voice — the phone app's form says the same words. */}
+                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {infoRequests.length > 0 ? CANDIDATE_JOURNEY_WORDS.fixHeading : 'Action needed'}
+                  </span>
+                </div>
+                {infoRequests.length > 0 ? (
+                  <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {infoRequests.map((item) => (
+                      <li key={`${item.kind}:${item.key}`} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                        <strong>{item.label}</strong> — {item.message}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (item.kind === 'document') {
+                              goToStep(4);
+                              window.setTimeout(() => {
+                                document.getElementById(`doc-req-${item.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }, 150);
+                            } else {
+                              goToStep(stepShowing(item.key));
+                            }
+                          }}
+                          className="btn btn-secondary"
+                          style={{ fontSize: 'var(--text-2xs)', padding: '3px 10px', marginLeft: '8px' }}
+                        >
+                          Fix
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                    {application.reviewNotes || 'Please review your application and submit again.'}
+                  </div>
+                )}
+              </div>
             )}
 
             {draftError && (
@@ -1510,56 +1861,53 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                ══════════════════════════════════════════════════════════════════════ */}
             {activeStep === 1 && (
               <>
-                {/* Contact Verification Box */}
+                {/* The mobile number, and the code that proves it is theirs. */}
                 <div className="pub-reg-card">
                   <div style={SECTION_TITLE_STYLE}>
                     <Phone size={18} style={{ color: 'var(--accent)' }} />
-                    <span>Mobile phone verification</span>
-                    {otpVerified && (
-                      <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', color: 'var(--success)', fontWeight: 600 }}>
-                        <CheckCircle2 size={15} /> Verified
-                      </span>
-                    )}
+                    <span>Mobile number</span>
                   </div>
 
                   {!otpVerified ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                        {OTP_BEFORE_SEND_WORDS} Enter your 10-digit mobile number below — it will be recorded on
-                        your appraiser profile.
+                        {OTP_BEFORE_SEND_WORDS}
                       </div>
                       <div id="reg-phone">
                         <label htmlFor="reg-phone-input" style={LABEL_STYLE}>Your mobile number *</label>
                         <PhoneInput
                           id="reg-phone-input"
                           value={phone}
+                          title="Type your 10-digit mobile number for verification"
                           onChange={(v) => {
                             setPhone(v);
                             if (phoneConflict) setPhoneConflict(null);
                             if (otpError) setOtpError(null);
                           }}
                           onBlur={() => {
-                            const n = currentPhone();
-                            if (n !== phone) setPhone(n);
-                            if (n.trim()) {
-                              void (async () => {
-                                const norm = normalisePhone(n);
-                                if (norm && await checkPhoneConflictFn(norm)) return;
-                                void saveDraft({ mobile: n.trim() });
-                              })();
-                            }
+                            // The shared tidy-up (the one the phone app runs): "+91 98220-14455"
+                            // becomes "9822014455". Only a number that tidies into a real mobile is
+                            // saved — a half-typed one stays in the box, unsaved, for them to finish.
+                            const tidied = normaliseIdentifierOnBlur('phone', phone) ?? phone.trim();
+                            if (tidied !== phone) setPhone(tidied);
+                            const number = normalisePhone(tidied);
+                            if (!number) return;
+                            void (async () => {
+                              if (await checkPhoneConflictFn(number)) return;
+                              void saveDraft({ mobile: number });
+                            })();
                           }}
                           disabled={otpBusy}
                           invalid={Boolean(mobileHint(phone)) || Boolean(phoneConflict)}
                           describedBy="reg-phone-hint"
                         />
-                        <div id="reg-phone-hint" style={HINT_STYLE}>
+                        <div id="reg-phone-hint" style={HINT_STYLE} aria-live="polite">
                           {checkingPhone ? (
                             <span style={{ color: 'var(--primary)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                              <Loader2 size={12} className="animate-spin" /> Checking availability…
+                              <Loader2 size={12} className="animate-spin" /> Checking…
                             </span>
                           ) : (
-                            mobileHint(phone) ?? mobileHelper(phone)
+                            mobileHint(phone) && <span style={{ color: 'var(--danger)' }}>{mobileHint(phone)}</span>
                           )}
                         </div>
                         {phoneConflict && (
@@ -1574,15 +1922,15 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           onClick={() => void handleSendCode()}
                           busy={otpBusy || checkingPhone}
                           disabled={Boolean(phoneConflict) || Boolean(mobileHint(phone)) || otpCooldown > 0}
+                          title="Send a 6-digit verification code to this mobile number"
                         >
-                          {otpCooldown > 0 ? `Send verification code (${otpCooldown}s)` : 'Send verification code'}
+                          {otpCooldown > 0 ? `Send code (${otpCooldown}s)` : 'Send code'}
                         </PrimaryButton>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                          {otpSentTo && (
-                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-                              Code sent for <strong style={{ color: 'var(--text-primary)' }}>+91 {otpSentTo}</strong>
-                              {currentPhone() !== otpSentTo && ' — you edited the number since; resend for the new one.'}
+                          {otpSentTo && currentPhone() !== otpSentTo && (
+                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)' }}>
+                              The code was sent for +91 {otpSentTo}. You changed the number — resend the code for the new one.
                             </div>
                           )}
                           <div>
@@ -1613,56 +1961,55 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                               disabled={otpBusy}
                             />
                           </div>
-                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                            <div style={{ flex: '1 1 160px' }}>
-                              <PrimaryButton onClick={() => void handleVerifyCode()} busy={otpBusy}>
-                                Verify code
-                              </PrimaryButton>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => void handleSendCode()}
-                              disabled={otpBusy || checkingPhone || Boolean(phoneConflict) || otpCooldown > 0}
-                              className="btn btn-secondary"
-                              style={{
-                                flex: '1 1 140px',
-                                padding: '10px 16px',
-                                minHeight: '48px',
-                                fontSize: 'var(--text-sm)',
-                                cursor: otpCooldown > 0 || otpBusy ? 'not-allowed' : 'pointer',
-                                opacity: otpCooldown > 0 ? 0.6 : 1,
-                              }}
-                            >
-                              {otpCooldown > 0 ? `Resend code (${otpCooldown}s)` : 'Resend code'}
-                            </button>
-                          </div>
+                          <PrimaryButton
+                            onClick={() => void handleVerifyCode()}
+                            busy={otpBusy}
+                            // Fewer than six digits is not a code yet — nothing to send.
+                            disabled={code.length !== 6}
+                            title="Check the code and verify your mobile number"
+                          >
+                            Verify code
+                          </PrimaryButton>
+                          <button
+                            type="button"
+                            onClick={() => void handleSendCode()}
+                            disabled={otpBusy || checkingPhone || Boolean(phoneConflict) || otpCooldown > 0}
+                            title="Send the verification code again"
+                            style={{
+                              alignSelf: 'center', background: 'none', border: 'none', padding: '6px',
+                              fontSize: 'var(--text-xs)', fontWeight: 600,
+                              color: otpCooldown > 0 ? 'var(--text-muted)' : 'var(--accent)',
+                              textDecoration: otpCooldown > 0 ? 'none' : 'underline',
+                              cursor: otpCooldown > 0 || otpBusy ? 'default' : 'pointer',
+                            }}
+                          >
+                            {otpCooldown > 0 ? `Resend code in ${otpCooldown}s` : 'Resend code'}
+                          </button>
                         </div>
                       )}
                       {otpInfo && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>{otpInfo}</div>}
                       {otpError && <AlertBanner type="error" message={otpError} onClose={() => setOtpError(null)} />}
                     </div>
                   ) : (
-                    <div style={{
-                      padding: '14px 16px', borderRadius: '8px',
-                      background: 'color-mix(in srgb, var(--success) 10%, transparent)',
-                      border: '1px solid var(--success)',
-                      fontSize: 'var(--text-sm)', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '10px',
-                    }}>
-                      <CheckCircle2 size={18} style={{ flexShrink: 0 }} />
-                      <span><strong>+91 {phone}</strong> is confirmed and verified for this application.</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 'var(--text-md)', color: 'var(--text-primary)' }}>+91 {phone}</strong>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 10px', borderRadius: '999px',
+                        fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--success)',
+                        background: 'color-mix(in srgb, var(--success) 12%, transparent)',
+                      }}>
+                        <CheckCircle2 size={13} /> Verified
+                      </span>
                     </div>
                   )}
+
                 </div>
 
                 {/* Personal Profile Details */}
                 <div className="pub-reg-card">
-                  <div style={EYEBROW_STYLE}>Personal details</div>
                   <div style={SECTION_TITLE_STYLE}>
                     <User size={18} style={{ color: 'var(--accent)' }} />
-                    <span>Identity details</span>
-                  </div>
-                  <div style={SECTION_NOTE_STYLE}>
-                    Enter your name exactly as stated on your Aadhaar or PAN card — our verification team compares it letter-for-letter with your official documents.
+                    <span>About you</span>
                   </div>
 
                   <div style={FIELD_GRID_STYLE}>
@@ -1671,6 +2018,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-fullName-input"
                         value={form.fullName}
+                        title="Type your full name exactly as on your Aadhaar or PAN card"
                         onChange={(e) => updateField('fullName', e.target.value)}
                         onBlur={commitField('fullName')}
                         placeholder="e.g. Ramesh Kumar Sharma"
@@ -1684,11 +2032,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <FieldError id="reg-fullName-error" message={stepErrors.fullName} />
                     </div>
                     <div id="reg-dateOfBirth">
-                      <label htmlFor="reg-dateOfBirth-input" style={LABEL_STYLE}>Date of birth</label>
+                      <label htmlFor="reg-dateOfBirth-input" style={LABEL_STYLE}>Date of birth *</label>
                       <input
                         id="reg-dateOfBirth-input"
                         type="date"
                         value={form.dateOfBirth}
+                        title="Pick your date of birth as printed on your identity document"
                         min={DOB_MIN}
                         max={dobMaxToday()}
                         onChange={(e) => updateField('dateOfBirth', e.target.value)}
@@ -1706,6 +2055,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         id="reg-email-input"
                         value={form.email}
                         type="email"
+                        title="Type an email address where HR can reach you"
                         autoCapitalize="none"
                         autoComplete="email"
                         onChange={(e) => updateField('email', e.target.value)}
@@ -1744,10 +2094,10 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     borderTop: '1px solid var(--border-color)',
                   }}>
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }} aria-live="polite">
-                      {savingDraft ? 'Saving…' : draftSaved ? <span style={{ color: 'var(--success)' }}>✓ Saved automatically</span> : 'Progress saves automatically'}
+                      {savingDraft ? 'Saving…' : draftSaved ? <span style={{ color: 'var(--success)' }}>✓ Saved</span> : 'Saves as you type'}
                     </div>
-                    <PrimaryButton onClick={() => attemptGoToStep(2)}>
-                      Continue to Experience &amp; Address &rarr;
+                    <PrimaryButton onClick={() => attemptGoToStep(2)} title="Save this step and go to experience and address">
+                      Next
                     </PrimaryButton>
                   </div>
                 </div>
@@ -1785,6 +2135,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-currentEmployer-input"
                       value={form.currentEmployer}
+                      title="Type the name of the jeweller or firm you currently work with, if any"
                       onChange={(e) => updateField('currentEmployer', e.target.value)}
                       onBlur={commitField('currentEmployer')}
                       placeholder="Current jeweller or valuation firm"
@@ -1802,6 +2153,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-expertise-input"
                       value={form.expertise}
+                      title="Describe your core valuation skills, e.g. gold purity testing"
                       onChange={(e) => updateField('expertise', e.target.value)}
                       onBlur={commitField('expertise')}
                       placeholder="Gold purity testing, hallmarking, diamond grading…"
@@ -1816,6 +2168,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-availability-input"
                       value={form.availability}
+                      title="Type the days you are available for branch audits"
                       onChange={(e) => updateField('availability', e.target.value)}
                       onBlur={commitField('availability')}
                       placeholder="Weekdays, alternate Saturdays, full-time…"
@@ -1835,7 +2188,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <span>Residential address</span>
                   </div>
                   <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
-                    Type your 6-digit pincode first — our postal directory will automatically look up your district, city, and state.
+                    Type pincode — we fill the rest.
                   </div>
                 </div>
 
@@ -1847,6 +2200,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-pincode-input"
                       value={form.pincode}
+                      title="Type your 6-digit postal pincode to look up your address"
                       onChange={(e) => updateField('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))}
                       onBlur={handlePincodeBlur}
                       inputMode="numeric"
@@ -1872,6 +2226,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       {pincodeOffer && (
                         <button
                           type="button"
+                          title="Fill the state, district and town with the postal directory suggestion"
                           onClick={() => {
                             const place = pincodeOffer;
                             setForm((prev) => (prev ? {
@@ -1931,6 +2286,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-district-input"
                       value={form.district}
+                      title="Type your district name"
                       onChange={(e) => updateField('district', e.target.value)}
                       onBlur={commitField('district')}
                       placeholder="e.g. Thane"
@@ -1946,6 +2302,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-city-input"
                       value={form.city}
+                      title="Type your town or city name"
                       onChange={(e) => {
                         updateField('city', e.target.value);
                         if (stepErrors.city) {
@@ -1979,9 +2336,10 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <label htmlFor="reg-address-input" style={LABEL_STYLE}>
                     Full residential street address <span style={{ color: 'var(--danger)' }}>*</span>
                   </label>
-                  <textarea
+                    <textarea
                     id="reg-address-input"
                     value={form.address}
+                    title="Type your full street address with flat, building and street"
                     onChange={(e) => {
                       updateField('address', e.target.value);
                       if (stepErrors.address) {
@@ -2022,6 +2380,91 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   }}
                 />
 
+                <div style={{ borderTop: '1px solid var(--border-color)', margin: '6px 0' }} />
+
+                <div>
+                  <div style={SECTION_TITLE_STYLE}>
+                    <Users size={18} style={{ color: 'var(--accent)' }} />
+                    <span>References</span>
+                  </div>
+                  <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
+                    At least 1 person, with phone.
+                  </div>
+                </div>
+
+                <ReferencesEditor
+                  references={references}
+                  error={referencesError}
+                  onChange={(next) => {
+                    setReferences(next);
+                    setReferencesError(null);
+                    void saveDraft({ references: next });
+                  }}
+                />
+
+                {/*
+                  WHO REFERRED THEM — the source reference, not a fourth referee. HR usually records
+                  it at intake; then it is shown, not asked. Otherwise it is theirs to give, saved
+                  when they leave the group (not box by box, which would call a half-typed entry
+                  wrong while they are still typing it).
+                */}
+                {(() => {
+                  const stored = readSourceReferral(application);
+                  if (!candidateMayEditSourceReferral(stored)) {
+                    return (
+                      <div>
+                        <div style={SECTION_TITLE_STYLE}>
+                          <UserPlus size={18} style={{ color: 'var(--accent)' }} />
+                          <span>Who referred you</span>
+                        </div>
+                        <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
+                          {sourceReferralLine(stored)} — recorded by our HR team. Tell them if this is not right.
+                        </div>
+                      </div>
+                    );
+                  }
+                  /*
+                    Optional, so folded away behind one line until they say somebody referred them
+                    — and open already when they have said so before.
+                  */
+                  if (!referralOpen) {
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setReferralOpen(true)}
+                        aria-expanded={false}
+                        style={{
+                          alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: '6px',
+                          background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer',
+                          fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--accent)',
+                        }}
+                      >
+                        <UserPlus size={16} /> Someone referred me <ChevronRight size={16} />
+                      </button>
+                    );
+                  }
+                  const commit = () => {
+                    const payload = referralPayload(referral);
+                    const { error } = normalizeSourceReferral(payload, 'CANDIDATE');
+                    if (error) { setReferralError(error); return; }
+                    setReferralError(null);
+                    const same = JSON.stringify(referralPayload(referralDraftFrom(stored))) === JSON.stringify(payload);
+                    if (!same) void saveDraft({ sourceReferral: payload });
+                  };
+                  return (
+                    <div>
+                      <div style={{ ...SECTION_TITLE_STYLE, marginBottom: '10px' }}>
+                        <UserPlus size={18} style={{ color: 'var(--accent)' }} />
+                        <span>Who referred you</span>
+                      </div>
+                      <div onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) commit(); }}>
+                        <SourceReferralFields value={referral} onChange={(next) => { setReferral(next); setReferralError(null); }} idPrefix="reg-referral" voice="you" />
+                      </div>
+                      {referralError && <div role="alert" style={{ ...HINT_STYLE, color: 'var(--danger)' }}>{referralError}</div>}
+                    </div>
+                  );
+                })()}
+
                 <div style={{
                   display: 'flex',
                   justifyContent: 'space-between',
@@ -2035,13 +2478,14 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <button
                     type="button"
                     onClick={() => goToStep(1)}
+                    title="Go back to the personal details step"
                     className="btn btn-secondary"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
                   >
                     <ArrowLeft size={16} /> Back
                   </button>
-                  <PrimaryButton onClick={() => attemptGoToStep(3)}>
-                    Continue to Statutory &amp; Bank &rarr;
+                  <PrimaryButton onClick={() => attemptGoToStep(3)} title="Save this step and go to ID and bank">
+                    Next
                   </PrimaryButton>
                 </div>
               </div>
@@ -2054,10 +2498,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               <div className="pub-reg-card">
                 <div style={SECTION_TITLE_STYLE}>
                   <CreditCard size={18} style={{ color: 'var(--accent)' }} />
-                  <span>Statutory compliance &amp; payout details</span>
-                </div>
-                <div style={SECTION_NOTE_STYLE}>
-                  Required for direct audit payouts and account verification. Please verify details carefully.
+                  <span>ID &amp; bank</span>
                 </div>
 
                 {/* Employment Category */}
@@ -2078,6 +2519,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           key={c.value}
                           type="button"
                           aria-pressed={selected}
+                          title={`Choose ${c.title}: ${c.desc}`}
                           onClick={() => void handleEmploymentCategoryChange(c.value)}
                           className={`reg-cat-card${selected ? ' reg-cat-selected' : ''}`}
                           style={{
@@ -2135,7 +2577,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 {/* Statutory ID Numbers */}
                 <div>
                   <div style={{ ...SECTION_TITLE_STYLE, fontSize: 'var(--text-sm)' }}>
-                    <span>Statutory identity numbers</span>
+                    <span>ID numbers</span>
                   </div>
                   <div style={FIELD_GRID_STYLE}>
                     <div id="reg-panNumber">
@@ -2143,6 +2585,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-panNumber-input"
                         value={form.panNumber}
+                        title="Type your 10-character PAN, e.g. ABCDE1234F"
                         placeholder="ABCDE1234F"
                         onChange={(e) => updateField('panNumber', e.target.value.toUpperCase())}
                         onBlur={commitField('panNumber')}
@@ -2161,6 +2604,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-aadhaarNumber-input"
                         value={form.aadhaarNumber}
+                        title="Type the 12-digit number from your Aadhaar card"
                         inputMode="numeric"
                         placeholder="12 digits"
                         onChange={(e) => updateField('aadhaarNumber', e.target.value.replace(/\D/g, '').slice(0, 12))}
@@ -2181,33 +2625,15 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 <div>
                   <div style={{ ...SECTION_TITLE_STYLE, fontSize: 'var(--text-sm)' }}>
                     <Landmark size={16} style={{ color: 'var(--accent)' }} />
-                    <span>Bank account for payout settlements</span>
-                  </div>
-                  <div style={SECTION_NOTE_STYLE}>
-                    Enter your IFSC code first — our database will verify and auto-populate your bank name.
+                    <span>Bank account</span>
                   </div>
                   <div style={FIELD_GRID_STYLE}>
-                    <div id="reg-bankAccountNumber">
-                      <label htmlFor="reg-bankAccountNumber-input" style={LABEL_STYLE}>Bank account number</label>
-                      <input
-                        id="reg-bankAccountNumber-input"
-                        value={form.bankAccountNumber}
-                        inputMode="numeric"
-                        placeholder="9–18 digit account number"
-                        onChange={(e) => updateField('bankAccountNumber', e.target.value.replace(/\D/g, '').slice(0, 18))}
-                        onBlur={commitField('bankAccountNumber')}
-                        autoComplete="off"
-                        aria-invalid={Boolean(stepErrors.bankAccountNumber)}
-                        className="reg-input"
-                        style={{ ...(stepErrors.bankAccountNumber ? INPUT_ERROR_STYLE : INPUT_STYLE), fontFamily: 'monospace' }}
-                      />
-                      <FieldError message={stepErrors.bankAccountNumber} />
-                    </div>
                     <div id="reg-ifscCode">
                       <label htmlFor="reg-ifscCode-input" style={LABEL_STYLE}>Bank IFSC code</label>
                       <input
                         id="reg-ifscCode-input"
                         value={form.ifscCode}
+                        title="Type the IFSC code from your passbook, e.g. SBIN0001234"
                         placeholder="e.g. SBIN0001234"
                         onChange={(e) => {
                           updateField('ifscCode', e.target.value.toUpperCase());
@@ -2226,7 +2652,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       {!stepErrors.ifscCode && <FieldHint field="ifscCode" value={form.ifscCode} />}
                       <div id="reg-ifscCode-status" aria-live="polite">
                         {ifscState === 'looking' && (
-                          <div style={HINT_STYLE}><Loader2 size={11} className="spin" style={{ display: 'inline', verticalAlign: '-1px' }} /> Verifying IFSC with RBI directory…</div>
+                          <div style={HINT_STYLE}><Loader2 size={11} className="spin" style={{ display: 'inline', verticalAlign: '-1px' }} /> Checking IFSC…</div>
                         )}
                         {ifscState !== 'looking' && ifscNote && (
                           <div style={ifscState === 'notfound' ? { ...HINT_STYLE, color: 'var(--warning)' } : AUTO_NOTE_STYLE}>
@@ -2235,6 +2661,69 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           </div>
                         )}
                       </div>
+                    </div>
+                    <div id="reg-bankAccountNumber">
+                      <label htmlFor="reg-bankAccountNumber-input" style={LABEL_STYLE}>Bank account number</label>
+                      <input
+                        id="reg-bankAccountNumber-input"
+                        value={form.bankAccountNumber}
+                        title="Type your bank account number where payouts should go"
+                        inputMode="numeric"
+                        placeholder="9–18 digit account number"
+                        onChange={(e) => {
+                          updateField('bankAccountNumber', e.target.value.replace(/\D/g, '').slice(0, 18));
+                          // A changed number is a new number: it has to be typed a second time.
+                          updateField('bankAccountNumberConfirm', '');
+                        }}
+                        onBlur={() => {
+                          // Saved once confirmed (see the box below) — except emptying it, which needs no
+                          // second typing and must reach the server so a wrong number can be cleared.
+                          if (!form.bankAccountNumber.trim()) void saveDraft(fieldPatch('bankAccountNumber', ''));
+                        }}
+                        autoComplete="off"
+                        aria-invalid={Boolean(stepErrors.bankAccountNumber)}
+                        className="reg-input"
+                        style={{ ...(stepErrors.bankAccountNumber ? INPUT_ERROR_STYLE : INPUT_STYLE), fontFamily: 'monospace' }}
+                      />
+                      <FieldError message={stepErrors.bankAccountNumber} />
+                    </div>
+                    {/*
+                      Typed twice, because nothing else can catch a wrong digit: Indian account numbers
+                      carry no check digit, so a slip still "looks right" and the pay goes to a stranger
+                      or bounces. Pasting is refused here for that reason — a pasted copy repeats the
+                      mistake instead of catching it.
+                    */}
+                    <div id="reg-bankAccountNumberConfirm">
+                      <label htmlFor="reg-bankAccountNumberConfirm-input" style={LABEL_STYLE}>Re-enter account number</label>
+                      <input
+                        id="reg-bankAccountNumberConfirm-input"
+                        value={form.bankAccountNumberConfirm ?? ''}
+                        title="Type the account number again, from your passbook"
+                        inputMode="numeric"
+                        placeholder="Type it again to confirm"
+                        onChange={(e) => updateField('bankAccountNumberConfirm', e.target.value.replace(/\D/g, '').slice(0, 18))}
+                        onPaste={(e) => {
+                          e.preventDefault();
+                          setStepErrors((prev) => ({ ...prev, bankAccountNumberConfirm: 'Type it again rather than pasting — that is what catches a wrong digit.' }));
+                        }}
+                        onBlur={() => {
+                          const problem = bankAccountConfirmProblem(form.bankAccountNumber, form.bankAccountNumberConfirm ?? '');
+                          setStepErrors((prev) => {
+                            const next = { ...prev };
+                            if (problem && (form.bankAccountNumberConfirm ?? '').trim()) next.bankAccountNumberConfirm = problem;
+                            else delete next.bankAccountNumberConfirm;
+                            return next;
+                          });
+                          if (!problem && form.bankAccountNumber.trim()) {
+                            void saveDraft(fieldPatch('bankAccountNumber', form.bankAccountNumber));
+                          }
+                        }}
+                        autoComplete="off"
+                        aria-invalid={Boolean(stepErrors.bankAccountNumberConfirm)}
+                        className="reg-input"
+                        style={{ ...(stepErrors.bankAccountNumberConfirm ? INPUT_ERROR_STYLE : INPUT_STYLE), fontFamily: 'monospace' }}
+                      />
+                      <FieldError message={stepErrors.bankAccountNumberConfirm} />
                     </div>
                   </div>
 
@@ -2246,6 +2735,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           id="reg-bankName-input"
                           value={form.bankName}
                           readOnly
+                          title="Bank name verified from your IFSC code"
                           aria-readonly="true"
                           className="reg-input"
                           style={{ ...INPUT_STYLE, background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontWeight: 600 }}
@@ -2255,6 +2745,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           <button
                             type="button"
                             onClick={() => setBankLocked(false)}
+                            title="Unlock the bank name field and type it yourself"
                             style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontWeight: 600, fontSize: 'var(--text-xs)', textDecoration: 'underline' }}
                           >
                             Edit anyway
@@ -2265,6 +2756,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-bankName-input"
                         value={form.bankName}
+                        title="Type your bank name, or enter an IFSC code above to fill it in"
                         placeholder="Enter IFSC code above to auto-populate, or type manually"
                         onChange={(e) => updateField('bankName', e.target.value)}
                         onBlur={commitField('bankName')}
@@ -2279,15 +2771,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
 
                 {/* Qualification */}
                 <div>
-                  <div style={{ ...SECTION_TITLE_STYLE, fontSize: 'var(--text-sm)' }}>
-                    <GraduationCap size={16} style={{ color: 'var(--accent)' }} />
-                    <span>Educational qualification</span>
-                  </div>
                   <div style={{ maxWidth: '400px' }}>
-                    <label htmlFor="reg-qualification-input" style={LABEL_STYLE}>Highest academic / professional qualification</label>
+                    <label htmlFor="reg-qualification-input" style={LABEL_STYLE}>Highest education</label>
                     <input
                       id="reg-qualification-input"
                       value={form.qualification}
+                      title="Type your highest qualification as on your certificate"
                       placeholder="e.g. B.Com, Graduate, Diploma in Gemology"
                       onChange={(e) => updateField('qualification', e.target.value)}
                       onBlur={commitField('qualification')}
@@ -2296,7 +2785,6 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       className="reg-input"
                       style={INPUT_STYLE}
                     />
-                    <div style={HINT_STYLE}>As stated on your graduation or diploma certificate.</div>
                   </div>
                 </div>
 
@@ -2309,7 +2797,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <span>Emergency contact</span>
                   </div>
                   <div style={SECTION_NOTE_STYLE}>
-                    Required for field audit safety protocols. Please provide a family member or primary contact.
+                    Family member we can call.
                   </div>
                 </div>
 
@@ -2319,6 +2807,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-ec-name-input"
                       value={form.emergencyContactName}
+                      title="Type the name of the person to contact in an emergency"
                       placeholder="e.g. Sunita Sharma"
                       onChange={(e) => updateField('emergencyContactName', e.target.value)}
                       onBlur={commitField('emergencyContactName')}
@@ -2333,6 +2822,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <PhoneInput
                       id="reg-emergencyContactPhone-input"
                       value={form.emergencyContactPhone}
+                      title="Type a 10-digit mobile number for your emergency contact"
                       onChange={(v) => updateField('emergencyContactPhone', v)}
                       onBlur={commitField('emergencyContactPhone')}
                       invalid={Boolean(stepErrors.emergencyContactPhone)}
@@ -2369,6 +2859,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <PhoneInput
                       id="reg-alternatePhone-input"
                       value={form.alternatePhone}
+                      title="Type a second mobile number where you can be reached (optional)"
                       onChange={(v) => updateField('alternatePhone', v)}
                       onBlur={commitField('alternatePhone')}
                       placeholder="Optional second number"
@@ -2392,13 +2883,14 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <button
                     type="button"
                     onClick={() => goToStep(2)}
+                    title="Go back to the experience and address step"
                     className="btn btn-secondary"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
                   >
                     <ArrowLeft size={16} /> Back
                   </button>
-                  <PrimaryButton onClick={() => attemptGoToStep(4)}>
-                    Continue to Documents & Submit &rarr;
+                  <PrimaryButton onClick={() => attemptGoToStep(4)} title="Save this step and go to documents">
+                    Next
                   </PrimaryButton>
                 </div>
               </div>
@@ -2410,57 +2902,48 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
             {activeStep === 4 && (
               <>
                 <div className="pub-reg-card">
-                  <div style={EYEBROW_STYLE}>
-                    {form.employmentCategory === EmploymentCategory.PROPRIETOR ? 'Proprietor documents' : form.employmentCategory === EmploymentCategory.FREELANCER ? 'Freelancer documents' : 'Documents'}
-                  </div>
-                  <div style={SECTION_TITLE_STYLE}>
-                    <FileCheck size={18} style={{ color: 'var(--accent)' }} />
-                    <span>Required document attachments</span>
-                  </div>
-                  <div style={SECTION_NOTE_STYLE}>
-                    Photograph documents flat in good lighting with all four corners visible. Accepted formats: JPG, PNG or PDF (up to 10MB per file).
-                    Click "Check scan" after attaching to verify clarity.
-                  </div>
-
-                  {/* VIP ID Photo Banner */}
-                  <div className="pub-reg-photo-banner" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                    <div style={{
-                      width: '42px', height: '42px', borderRadius: '8px',
-                      background: 'linear-gradient(135deg, var(--accent) 0%, #d97706 100%)',
-                      color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      flexShrink: 0,
-                    }}>
-                      <Camera size={22} />
+                  <div>
+                    <div style={SECTION_TITLE_STYLE}>
+                      <FileCheck size={18} style={{ color: 'var(--accent)' }} />
+                      <span>Documents</span>
                     </div>
-                    <div>
-                      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        Photograph for Appraiser ID Card
-                      </div>
-                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.4 }}>
-                        Your uploaded photograph will be printed on your official Appraiser ID Card upon onboarding approval. Please ensure a clear, front-facing passport-style photo.
-                      </div>
+                    {/* Format and size are said only when a file breaks them — never up front. */}
+                    <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
+                      Lay flat, good light, all 4 corners.
                     </div>
                   </div>
 
-                  {/* Document upload items list */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {documentsRequested.map((requirement) => {
                       const doc = documents.find((d) => d.requirement === requirement);
-                      const uploaded = Boolean(doc && doc.filePaths.length > 0);
-                      const busy = Boolean(uploading[requirement]);
-                      const isInspecting = previewLoading === requirement;
+                      const files = doc?.filePaths ?? [];
+                      const uploaded = files.length > 0;
+                      const busy = Boolean(uploading[requirement]) || Boolean(removing[requirement]);
+                      const refused = Boolean(uploadRefused[requirement]);
                       const label = ONBOARDING_DOCUMENT_LABELS[requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? requirement;
                       const isPhoto = requirement === 'PHOTOGRAPH';
-                      const isConditional = CONDITIONAL_DOCS.has(requirement);
+                      const conditionalBadge = CONDITIONAL_DOCS.has(requirement)
+                        ? (CONDITIONAL_BADGE[requirement] ?? 'Only if it applies to you')
+                        : null;
+                      const note = DOCUMENT_NOTE[requirement];
+                      // Sent back by HR: flagged until a fresh scan lands, with HR's own words.
+                      const sentBack = doc?.reviewStatus === 'NEEDS_RESUBMIT';
+                      const sentBackMessage = infoRequests.find((i) => i.kind === 'document' && i.key === requirement)?.message
+                        ?? doc?.rejectionNote
+                        ?? (doc?.rejectionReason
+                          ? (DOCUMENT_REJECTION_GUIDANCE[doc.rejectionReason as keyof typeof DOCUMENT_REJECTION_GUIDANCE] ?? null)
+                          : null);
 
                       return (
                         <div
                           key={requirement}
                           id={`doc-req-${requirement}`}
                           style={{
-                            border: uploaded
-                              ? '1px solid color-mix(in srgb, var(--success) 45%, var(--border-color))'
-                              : isPhoto ? '1px solid var(--accent)' : '1px dashed var(--border-color)',
+                            border: sentBack || refused
+                              ? '1px solid var(--warning)'
+                              : uploaded
+                                ? '1px solid color-mix(in srgb, var(--success) 45%, var(--border-color))'
+                                : '1px dashed var(--border-color)',
                             borderRadius: 'var(--radius-sm, 10px)',
                             padding: '14px 16px',
                             display: 'flex',
@@ -2468,218 +2951,127 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                             justifyContent: 'space-between',
                             gap: '12px',
                             flexWrap: 'wrap',
-                            background: uploaded ? 'color-mix(in srgb, var(--success) 5%, transparent)' : 'transparent',
+                            background: sentBack || refused
+                              ? 'color-mix(in srgb, var(--warning) 8%, transparent)'
+                              : uploaded ? 'color-mix(in srgb, var(--success) 5%, transparent)' : 'transparent',
                           }}
                         >
-                          <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                          <div style={{ flex: '1 1 200px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                               <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
                                 {label}
                               </span>
-                              <span style={{
-                                fontSize: 'var(--text-3xs)',
-                                fontWeight: 700,
-                                padding: '2px 8px',
-                                borderRadius: '999px',
-                                background: isPhoto
-                                  ? 'var(--accent)'
-                                  : isConditional ? 'var(--bg-surface-2)' : 'color-mix(in srgb, var(--accent) 14%, transparent)',
-                                color: isPhoto ? '#fff' : isConditional ? 'var(--text-secondary)' : 'var(--accent)',
-                                border: isConditional ? '1px solid var(--border-color)' : 'none',
-                              }}>
-                                {isPhoto ? 'Mandatory for ID Card' : isConditional ? 'If applicable' : 'Required'}
-                              </span>
-                            </div>
-                            <div style={{ fontSize: 'var(--text-xs)', color: uploaded ? 'var(--success)' : 'var(--text-secondary)', marginTop: '4px' }}>
-                              {uploaded ? (
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                  <Check size={12} strokeWidth={3} /> Uploaded &amp; attached ({doc!.filePaths.length} file{doc!.filePaths.length === 1 ? '' : 's'})
+                              {/*
+                                Two states only. A required row needs no badge — nearly every row is
+                                required, so "Required" on each said nothing. A conditional row says
+                                exactly when it applies.
+                              */}
+                              {conditionalBadge && !uploaded && (
+                                <span style={{
+                                  fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '2px 8px', borderRadius: '999px',
+                                  background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+                                }}>
+                                  {conditionalBadge}
                                 </span>
-                              ) : isPhoto ? (
-                                'Required for your Appraiser ID Card — clear face portrait'
-                              ) : isConditional ? (
-                                requirement === 'RENT_AGREEMENT' ? 'Required only if residential address differs from Aadhaar' : 'Required if shop premises are rented'
-                              ) : (
-                                'Pending attachment'
+                              )}
+                              {uploaded && (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--success)' }}>
+                                  <Check size={13} strokeWidth={3} /> Added
+                                </span>
                               )}
                             </div>
+                            {note && !uploaded && (
+                              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{note}</div>
+                            )}
+                            {uploaded && (
+                              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', paddingTop: '8px' }}>
+                                {files.map((filePath, i) => {
+                                  const name = files.length > 1 ? `${label} file ${i + 1}` : label;
+                                  return (
+                                    <DocumentThumb
+                                      key={filePath}
+                                      filePath={filePath}
+                                      name={name}
+                                      pages={pdfPages[filePath] ?? null}
+                                      load={() => getRegistrationDocumentFileBlob(token, requirement, i)}
+                                      onOpen={() => void openDocumentPreview(requirement, files, i)}
+                                      onRemove={() => void handleRemoveFile(requirement, i)}
+                                      removing={Boolean(removing[requirement])}
+                                    />
+                                  );
+                                })}
+                                {previewLoading === requirement && (
+                                  <Loader2 size={16} className="spin" style={{ alignSelf: 'center', color: 'var(--accent)' }} />
+                                )}
+                              </div>
+                            )}
                             {uploadErrors[requirement] && (
-                              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '4px' }}>
+                              <div role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', fontWeight: 600, lineHeight: 1.5 }}>
                                 {uploadErrors[requirement]}
+                              </div>
+                            )}
+                            {sentBack && sentBackMessage && (
+                              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', fontWeight: 600, lineHeight: 1.5 }}>
+                                {sentBackMessage}
                               </div>
                             )}
                           </div>
 
-                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                            {uploaded && (
-                              <button
-                                type="button"
-                                onClick={() => void openDocumentPreview(requirement, doc!.filePaths)}
-                                disabled={isInspecting}
-                                className="btn btn-secondary"
-                                style={{
-                                  fontSize: 'var(--text-xs)',
-                                  padding: '9px 12px',
-                                  minHeight: '42px',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '6px',
-                                }}
-                                title="Open scan to inspect visual clarity"
-                              >
-                                <Eye size={14} />
-                                {isInspecting ? 'Loading…' : 'Check scan'}
-                              </button>
-                            )}
-
-                            {/*
-                              The camera, not just a file picker. A candidate filling this in on a
-                              phone is holding the card; the scanner squares it up and cleans it so
-                              the desk can read the number off it, instead of receiving a four-
-                              megabyte photograph of a card lying on a table at an angle. Choosing
-                              a file is still right here beside it, for anybody on a laptop with a
-                              scan already saved.
-                            */}
-                            <ScanOrAttach
-                              documentLabel={label}
-                              requirement={requirement}
-                              disabled={busy}
-                              attachLabel={busy ? 'Uploading…' : uploaded ? 'Replace file' : 'Choose file'}
-                              onFiles={(files) => { if (files[0]) void handleUpload(requirement, files[0]); }}
-                            />
-                          </div>
+                          {/*
+                            The camera first. Somebody filling this in on a phone is holding the
+                            card; the scanner squares it up and cleans it so the desk can read the
+                            number off it. Choosing a file is the small link under it, for anybody
+                            with a scan already saved. A multi-page scan arrives as one PDF.
+                          */}
+                          <ScanOrAttach
+                            variant="primary"
+                            combinePages
+                            documentLabel={label}
+                            requirement={requirement}
+                            disabled={busy}
+                            accept={isPhoto ? SCAN_UPLOAD_IMAGE_ACCEPT : undefined}
+                            scanLabel={uploading[requirement] ? 'Uploading…' : refused ? 'Take again' : uploaded ? 'Retake' : 'Take photo'}
+                            attachLabel={refused ? 'Choose another file' : 'Choose file'}
+                            onFiles={(chosen) => { if (chosen[0]) void handleUpload(requirement, chosen[0], uploaded); }}
+                          />
                         </div>
                       );
                     })}
                   </div>
                 </div>
 
-                {/*
-                  WHAT THEY ALREADY AGREED TO, AND HOW TO UNDO IT.
-
-                  This used to be the tick-box itself, sitting beside Submit after every answer had
-                  been collected. The agreement now happens before the form opens, so what belongs
-                  here is the record of it — and the way out, which is the half that never existed.
-                */}
                 <div className="pub-reg-card">
-                  <div style={SECTION_TITLE_STYLE}>
-                    <ShieldCheck size={18} style={{ color: 'var(--accent)' }} />
-                    <span>Your agreement</span>
-                  </div>
-                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                    You agreed to the notice
-                    {application.consentAcceptedAt ? ` on ${new Date(application.consentAcceptedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}
-                    {consentNotice ? ` (version ${consentNotice.version})` : ''}. A copy of exactly what you
-                    read is kept with your application.
-                  </div>
-                  {consentNotice && (
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-                      Questions about your details: {consentNotice.grievanceContact}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                      <ShieldCheck size={15} /> Agreed
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleWithdraw()}
-                      disabled={withdrawing}
-                      style={{
-                        background: 'none', border: 'none', padding: '2px',
-                        color: 'var(--danger)', textDecoration: 'underline',
-                        cursor: withdrawing ? 'default' : 'pointer',
-                        fontSize: 'var(--text-xs)', fontWeight: 600,
-                      }}
-                    >
-                      {withdrawing ? 'Withdrawing…' : 'Withdraw and delete what I have given'}
-                    </button>
-                  </div>
-                  {consentError && <AlertBanner type="error" message={consentError} onClose={() => setConsentError(null)} />}
-                </div>
+                  {/*
+                    WHAT IS STILL MISSING — AND NOTHING ELSE.
 
-                {/* Submission Requirements Summary Checklist */}
-                <div className="pub-reg-card">
-                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                    Final Submission Pre-Flight Checklist
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: 'var(--text-xs)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: otpVerified ? 'var(--success)' : 'var(--warning)' }}>
-                      {otpVerified ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
-                      <span>
-                        Mobile number verified (+91 {phone})
-                        {!otpVerified && (
-                          <button
-                            type="button"
-                            onClick={() => goToStep(1)}
-                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
-                          >
-                            Verify in Step 1 &rarr;
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: form.fullName.trim() ? 'var(--success)' : 'var(--warning)' }}>
-                      {form.fullName.trim() ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
-                      <span>
-                        Candidate legal name entered
-                        {!form.fullName.trim() && (
-                          <button
-                            type="button"
-                            onClick={() => goToStep(1)}
-                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
-                          >
-                            Enter in Step 1 &rarr;
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: form.employmentCategory ? 'var(--success)' : 'var(--warning)' }}>
-                      {form.employmentCategory ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
-                      <span>
-                        Practice category chosen ({form.employmentCategory || 'Freelancer / Proprietor'})
-                        {!form.employmentCategory && (
-                          <button
-                            type="button"
-                            onClick={() => goToStep(3)}
-                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
-                          >
-                            Select in Step 3 &rarr;
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: hasPhotograph ? 'var(--success)' : 'var(--warning)' }}>
-                      {hasPhotograph ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
-                      <span>
-                        ID Card photograph uploaded
-                        {!hasPhotograph && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const el = document.getElementById('doc-req-PHOTOGRAPH');
-                              if (el) {
-                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                              } else {
-                                window.scrollTo({ top: 120, behavior: 'smooth' });
-                              }
-                            }}
-                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
-                          >
-                            Upload photo above &uarr;
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: consentAccepted ? 'var(--success)' : 'var(--warning)' }}>
-                      {consentAccepted ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
-                      <span>Declaration &amp; consent acknowledged</span>
-                    </div>
-                  </div>
-
-                  {!canSubmit && (
-                    <div style={{ marginTop: '12px', padding: '12px 14px', background: 'var(--bg-surface-2)', borderRadius: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5, border: '1px solid var(--border-hair)' }}>
-                      The Submit button will activate once all items above show a green checkmark. You can review and edit previous steps before submitting.
+                    This was a five-row "pre-flight checklist" with a green tick for everything
+                    already done (the agreement row could never be anything but green: the form does
+                    not open until it is accepted) and a grey paragraph explaining the button. Only
+                    the unmet items are listed now, each with the way to it, and none at all once
+                    the application can go.
+                  */}
+                  {stillNeeded.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                        Still needed:
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {stillNeeded.map((item) => (
+                          <li key={item.key} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                            <button
+                              type="button"
+                              onClick={item.go}
+                              style={{
+                                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                                color: 'var(--accent)', textDecoration: 'underline', fontWeight: 600, fontSize: 'var(--text-xs)',
+                                textAlign: 'left',
+                              }}
+                            >
+                              {item.label}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   )}
 
@@ -2689,13 +3081,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     alignItems: 'center',
                     gap: '10px',
                     flexWrap: 'wrap',
-                    marginTop: '16px',
-                    paddingTop: '16px',
-                    borderTop: '1px solid var(--border-color)',
                   }}>
                     <button
                       type="button"
                       onClick={() => goToStep(3)}
+                      title="Go back to the ID and bank step"
                       className="btn btn-secondary"
                       style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
                     >
@@ -2705,19 +3095,65 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       onClick={() => void handleSubmit()}
                       disabled={!canSubmit}
                       busy={submitBusy}
-                      style={{ minWidth: '220px', flex: '1 1 220px', maxWidth: '340px' }}
+                      title="Send your application to HR"
+                      style={{ minWidth: '160px', flex: '1 1 160px', maxWidth: '340px' }}
                     >
-                      Submit application for HR review
+                      Submit
                     </PrimaryButton>
                   </div>
 
                   {submitError && <AlertBanner type="error" message={submitError} onClose={() => setSubmitError(null)} />}
+                </div>
+
+                {/*
+                  WHAT THEY ALREADY AGREED TO, AND HOW TO UNDO IT — below Submit, one line.
+
+                  The agreement happens before the form opens; what belongs here is the record of it
+                  and the way out. The grievance contact stays in sight (the law asks for it); the
+                  version and the note about the kept copy fold into a small toggle.
+                */}
+                <div className="pub-reg-card" style={{ gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                    <ShieldCheck size={14} style={{ color: 'var(--success)' }} />
+                    <span>You agreed{application.consentAcceptedAt ? ` on ${fmtDate(application.consentAcceptedAt)}` : ''}</span>
+                    <span aria-hidden>·</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleWithdraw()}
+                      disabled={withdrawing}
+                      title="Withdraw your application and delete what you have shared"
+                      style={{
+                        background: 'none', border: 'none', padding: '2px',
+                        color: 'var(--danger)', textDecoration: 'underline',
+                        cursor: withdrawing ? 'default' : 'pointer',
+                        fontSize: 'var(--text-xs)', fontWeight: 600,
+                      }}
+                    >
+                      {withdrawing ? 'Withdrawing…' : 'Withdraw'}
+                    </button>
+                  </div>
+                  {consentNotice && (
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                      Questions about your details: {consentNotice.grievanceContact}
+                    </div>
+                  )}
+                  <details style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+                    <summary style={{ cursor: 'pointer' }}>About your agreement</summary>
+                    <div style={{ marginTop: '4px', lineHeight: 1.5 }}>
+                      {/* The version they ACCEPTED — not whatever the notice reads today. */}
+                      {application.consentVersion ? `Version ${application.consentVersion}. ` : ''}
+                      A copy of exactly what you read is kept with your application.
+                    </div>
+                  </details>
+                  {consentError && <AlertBanner type="error" message={consentError} onClose={() => setConsentError(null)} />}
                 </div>
               </>
             )}
           </main>
         </div>
       </div>
+
+      {confirmDialog}
 
       {/* Full scan preview modal */}
       <DocumentPreviewModal

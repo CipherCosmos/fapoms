@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View } from 'react-native';
 import { AssayerInvoiceStatus, AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import type { AssayerInvoiceInvitation } from '@fapoms/shared';
@@ -6,6 +6,7 @@ import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } f
 
 import { calendarDayDiff } from '../utils/dates';
 import { displayedTds, deriveEarningsGateState } from './earnings-breakdown';
+import { pageOf } from './list-paging';
 import { CAT_LABEL_KEYS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
 import { useT, t as translate, type TranslationKey } from '../i18n';
@@ -70,7 +71,9 @@ const PAYABLE_STATE: Record<AssayerPayableStatus, { labelKey: TranslationKey; to
 const INVOICE_STATE: Record<AssayerInvoiceStatus, { labelKey: TranslationKey; tone: Tone }> = {
   [AssayerInvoiceStatus.INVITED]: { labelKey: 'earnings.invoiceStatus.invited', tone: 'info' },
   [AssayerInvoiceStatus.SUBMITTED]: { labelKey: 'earnings.invoiceStatus.submitted', tone: 'warning' },
-  [AssayerInvoiceStatus.APPROVED]: { labelKey: 'earnings.invoiceStatus.approved', tone: 'success' },
+  // Approved by the office, waiting for the final approval (2026-09-24) — not yet cleared for payment.
+  [AssayerInvoiceStatus.APPROVED]: { labelKey: 'earnings.invoiceStatus.approved', tone: 'info' },
+  [AssayerInvoiceStatus.HOD_APPROVED]: { labelKey: 'earnings.invoiceStatus.hodApproved', tone: 'success' },
   [AssayerInvoiceStatus.PAID]: { labelKey: 'earnings.invoiceStatus.paid', tone: 'success' },
   [AssayerInvoiceStatus.CANCELLED]: { labelKey: 'earnings.invoiceStatus.cancelled', tone: 'neutral' },
   [AssayerInvoiceStatus.SUPERSEDED]: { labelKey: 'earnings.invoiceStatus.superseded', tone: 'neutral' },
@@ -88,6 +91,10 @@ const CLAIM_LABEL: Record<string, TranslationKey> = {
   PENDING: 'earnings.claimStatus.pending',
   REJECTED: 'earnings.claimStatus.rejected',
 };
+
+/** How many rows each list shows at first, and adds per "Show more". The same lengths the lists
+ *  were always cut to, so the screen opens looking exactly as it did. */
+const PAGE_SIZE = { payables: 8, payments: 8, claims: 10, completed: 15 };
 
 /**
  * A past date the way a person recalls it: "Today", "Yesterday", "5 days ago", then a plain
@@ -160,6 +167,27 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   const payables = statement?.payables ?? [];
   const payments = statement?.payments ?? [];
   const hasAnyHistory = payables.length > 0 || payments.length > 0 || expenses.length > 0 || completed.length > 0;
+
+  /**
+   * How many rows of each list are on screen. Each starts at the length the list was always cut
+   * to; "Show more" reaches further into rows the server already returned (see `list-paging.ts`).
+   * Nothing here changes which rows — or which amounts — the server chose to send.
+   */
+  const [shown, setShown] = useState({ ...PAGE_SIZE });
+  const payablesPage = pageOf(payables, shown.payables, PAGE_SIZE.payables);
+  const paymentsPage = pageOf(payments, shown.payments, PAGE_SIZE.payments);
+  const claimsPage = pageOf(expenses, shown.claims, PAGE_SIZE.claims);
+  const completedPage = pageOf(completed, shown.completed, PAGE_SIZE.completed);
+  const showMore = (list: keyof typeof PAGE_SIZE, count: number) =>
+    count > 0 ? (
+      <Button
+        label={tr('common.showMore', { count })}
+        icon="chevron-down"
+        variant="ghost"
+        size="sm"
+        onPress={() => setShown((s) => ({ ...s, [list]: s[list] + PAGE_SIZE[list] }))}
+      />
+    ) : null;
 
   return (
     <View style={{ gap: t.space.xl }}>
@@ -310,8 +338,13 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
               body={tr('earnings.payoutsEmptyBody')}
             />
           ) : (
-            payables.slice(0, 8).map((p, i) => {
-              const known = PAYABLE_STATE[p.status as AssayerPayableStatus];
+            <>
+            {payablesPage.visible.map((p, i) => {
+              // Approved by the office AND given the final approval (2026-09-24) reads as approved
+              // for payment; approved by the office alone says it is still waiting.
+              const known = p.status === AssayerPayableStatus.APPROVED && p.hodApproved
+                ? { labelKey: 'earnings.payableStatus.approvedForPayment' as TranslationKey, tone: 'success' as Tone }
+                : PAYABLE_STATE[p.status as AssayerPayableStatus];
               // A status this build has never heard of keeps the server's own word rather than
               // being given copy that might describe somebody's money wrongly.
               const state = p.onHold
@@ -383,14 +416,16 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                   </Card>
                 </FadeIn>
               );
-            })
+            })}
+            {showMore('payables', payablesPage.nextStep)}
+            </>
           )}
         </CollapsibleSection>
       )}
 
       {payments.length > 0 && (
         <CollapsibleSection title={tr('earnings.paymentsTitle')} summary={tr('earnings.paymentsSummary')}>
-          {payments.slice(0, 8).map((pm, i) => (
+          {paymentsPage.visible.map((pm, i) => (
             <FadeIn key={pm.id} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -408,6 +443,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
               </Card>
             </FadeIn>
           ))}
+          {showMore('payments', paymentsPage.nextStep)}
         </CollapsibleSection>
       )}
 
@@ -420,7 +456,8 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
             action={<Button label={tr('expense.title')} icon="add-circle-outline" variant="neutral" size="sm" onPress={onOpenExpenseModal} />}
           />
         ) : (
-          expenses.slice(0, 10).map((exp, i) => (
+          <>
+          {claimsPage.visible.map((exp, i) => (
             <FadeIn key={exp.id ?? i} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -452,7 +489,9 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                 />
               </Card>
             </FadeIn>
-          ))
+          ))}
+          {showMore('claims', claimsPage.nextStep)}
+          </>
         )}
       </CollapsibleSection>
 
@@ -464,7 +503,8 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
             body={tr('earnings.completedEmptyBody')}
           />
         ) : (
-          completed.slice(0, 15).map((a, i) => (
+          <>
+          {completedPage.visible.map((a, i) => (
             <FadeIn key={a.id} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -482,7 +522,9 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                 <Badge label={tr('earnings.completedBadge')} tone="success" dot />
               </Card>
             </FadeIn>
-          ))
+          ))}
+          {showMore('completed', completedPage.nextStep)}
+          </>
         )}
       </CollapsibleSection>
     </View>

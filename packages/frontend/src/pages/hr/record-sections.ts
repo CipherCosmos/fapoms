@@ -34,10 +34,11 @@ export const RECORD_LINK_PARAMS = ['section', 'edit'] as const;
 
 /**
  * The record's tabs, by the keys AssayerRecord's TABS list uses. Keys are link vocabulary, not
- * labels: `vetting` is labelled "Background", `qualification` "Profile score", `commercial` "Pay".
+ * labels: `vetting` is labelled "Background", `qualification` "Profile score", `commercial` "Pay",
+ * `work` "Work & pay" (their assignments and what each one paid).
  */
 export const RECORD_TAB_KEYS = [
-  'summary', 'documents', 'vetting', 'commercial', 'skills', 'qualification', 'remarks', 'history',
+  'summary', 'work', 'documents', 'vetting', 'commercial', 'skills', 'qualification', 'remarks', 'history',
 ] as const;
 export type RecordTabKey = (typeof RECORD_TAB_KEYS)[number];
 
@@ -69,6 +70,9 @@ const ALIASES: Record<string, RecordSectionTarget> = {
   background: { tab: 'vetting' },
   score: { tab: 'qualification' },
   certificates: { tab: 'skills' },
+  'work-and-pay': { tab: 'work' },
+  assignments: { tab: 'work' },
+  earnings: { tab: 'work' },
   idcard: { tab: 'summary', idCard: true },
   'id-card': { tab: 'summary', idCard: true },
   card: { tab: 'summary', idCard: true },

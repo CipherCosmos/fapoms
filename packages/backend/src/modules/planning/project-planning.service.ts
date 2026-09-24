@@ -4,6 +4,7 @@ import { ProjectQueryService } from '../project/project-query.service';
 import { PlanningService, AssayerRecommendation } from './planning.service';
 // Type-only: the report counts branches, and stays ignorant of whether a queue is watching.
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
+import { businessTodayDateKey } from '@fapoms/shared';
 
 export interface ProjectBranchCandidates {
   projectBranchId: string;
@@ -60,6 +61,12 @@ export class ProjectPlanningService {
     projectId: string,
     scope?: Partial<GlobalScope>,
     onProgress?: ProgressCallback,
+    /**
+     * The day availability is judged on (F1, 2026-09-25) — the campaign's start. It used to be the
+     * moment the report ran, so a report prepared this week for next month's cycle excluded people
+     * on leave today and included people on leave then. Absent, today (IST).
+     */
+    startDate?: string | null,
   ): Promise<ProjectPlanningReport> {
     const project = await this.projectQueryService.findOne(projectId);
     if (!project) {
@@ -83,7 +90,9 @@ export class ProjectPlanningService {
     for (const pb of unassignedPBs) {
       let candidates: AssayerRecommendation[] = [];
       try {
-        candidates = await this.planningService.getRecommendedCandidates(pb.branchId);
+        candidates = await this.planningService.getRecommendedCandidates(
+          pb.branchId, {}, startDate ?? businessTodayDateKey(), { projectId: pb.projectId ?? projectId },
+        );
       } catch (err) {
         // Log error and default to empty candidates list for robustness
         console.error(`Failed to load candidates for branch ${pb.branchId}:`, err);

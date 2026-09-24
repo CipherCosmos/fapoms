@@ -6,7 +6,7 @@ import { SmsService } from '../notifications/sms.service';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { appPublicUrl } from '../../infrastructure/notifications/email-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { openApprovalRound } from './onboarding-approval.store'; import { normalizeSourceReferral, sourceReferralLine, type SourceReferral, type ReferralRecordedBy } from '@fapoms/shared'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { appPublicUrl } from '../../infrastructure/notifications/email-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, mayReopenBackgroundVerification, mayReopenFinalApproval, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, normaliseBankAccountNumber, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
   IDEMPOTENCY_ERROR_CODES, payoutBlockingGaps,
@@ -18,8 +18,16 @@ import { diffFields } from '../../core/audit/diff-fields';
 import {
   COMMITTED_ASSIGNMENT_STATUSES,
   DEFAULT_WEEKLY_CAPACITY,
-  IN_FLIGHT_ASSIGNMENT_STATUSES,
 } from '../assignment/assignment-workload';
+import {
+  announceCancelledAssignments,
+  CANCELLABLE_ASSIGNMENT_STATUSES,
+  CancelledForAnnouncement,
+  lockOnSiteAssignments,
+  onSiteRefusalMessage,
+} from '../assignment/closure-cancellation';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
+import { DayTravelService } from '../assignment/assignment-day-travel';
 import { DATA_INTEGRITY_SHEET } from './data-integrity.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import {
@@ -223,6 +231,7 @@ function applyAuthoredName(
 function normaliseIdentityFields(dto: {
   panNumber?: string | null;
   ifscCode?: string | null;
+  bankAccountNumber?: string | null;
   phone?: string | null;
   alternatePhone?: string | null;
   emergencyContactPhone?: string | null;
@@ -232,6 +241,12 @@ function normaliseIdentityFields(dto: {
   }
   if (typeof dto.ifscCode === 'string' && dto.ifscCode.trim()) {
     dto.ifscCode = dto.ifscCode.trim().toUpperCase();
+  }
+  // The digits, as the shape rule judged them — "1234 5678 9012" and "123456789012" are one account,
+  // and storing the spaced one would make the duplicate check and a later comparison miss it.
+  // A masked value is left exactly as sent, for `assertNoMaskedPii` to refuse by name.
+  if (typeof dto.bankAccountNumber === 'string' && dto.bankAccountNumber.trim() && !looksMasked(dto.bankAccountNumber)) {
+    dto.bankAccountNumber = normaliseBankAccountNumber(dto.bankAccountNumber);
   }
   for (const field of ['phone', 'alternatePhone', 'emergencyContactPhone'] as const) {
     const value = dto[field];
@@ -486,7 +501,6 @@ export interface CreateAssayerDto {
   performanceRating?: number;
   leaves?: { startDate: string; endDate: string }[];
   workingHours?: { start: string; end: string };
-  maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   /**
    * How offers reach this person — see the column comment on `AssayerEntity`.
@@ -600,7 +614,6 @@ export interface UpdateAssayerDto {
   performanceRating?: number;
   leaves?: { startDate: string; endDate: string }[];
   workingHours?: { start: string; end: string };
-  maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   /** See `CreateAssayerDto.preferredContactChannel` — why the column needed a way in. */
   preferredContactChannel?: 'AUTO' | 'APP' | 'PHONE';
@@ -663,6 +676,10 @@ interface CancelledAssignmentRow {
   new_version: number | null;
   scheduled_date: string | null;
   project_branch_id: string | null;
+  /** Who raised the job — the desk notice's owner. */
+  created_by?: string | null;
+  branch_name?: string | null;
+  assayer_id?: string | null;
 }
 
 @Injectable()
@@ -726,6 +743,13 @@ export class AssayerService implements OnModuleInit {
      * missing one refuses only the SMS leg: the email still carries the credential.
      */
     @Optional() private readonly smsService?: SmsService,
+    /**
+     * For the departure/deletion cascade's after-commit announcements (2026-09-24): the cancelled
+     * jobs vanish from the assayer's phone, and the day's travel is re-decided. Optional and last
+     * for the same positional-spec reason as the four above.
+     */
+    @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
+    @Optional() private readonly dayTravel?: DayTravelService,
   ) {}
 
   private emailQueue(): EmailService {
@@ -1742,7 +1766,16 @@ export class AssayerService implements OnModuleInit {
     });
   }
 
-  async update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity> {
+  async update(
+    id: string,
+    dto: UpdateAssayerDto,
+    userId: string,
+    /**
+     * `selfEdit`: the assayer is editing their own record (the app's profile/availability screens),
+     * as opposed to staff. Only rules that are the assayer's alone read it — today, the leave check.
+     */
+    opts: { selfEdit?: boolean } = {},
+  ): Promise<AssayerEntity> {
     // Before anything is merged onto the entity: see `assertNoMaskedPii`. This has to run ahead
     // of the copy loop below, which writes any key of the payload that matches a column.
     assertNoMaskedPii(dto as Record<string, any>);
@@ -1756,6 +1789,17 @@ export class AssayerService implements OnModuleInit {
     assertDatesAreSane(dto);
 
     const assayer = await this.findOne(id);
+    if (opts.selfEdit && dto.leaves !== undefined) {
+      await this.assertLeaveClearOfCommittedWork(id, assayer.leaves ?? [], dto.leaves ?? []);
+    }
+    /**
+     * Staff may record leave over accepted work (somebody phoning in sick), but they are TOLD which
+     * jobs it covers, so the work is reassigned rather than discovered on the day (B12, 2026-09-24).
+     * A warning on the response, not a refusal.
+     */
+    const leaveWarning = !opts.selfEdit && dto.leaves !== undefined
+      ? await this.leaveOverCommittedWorkWarning(id, assayer.leaves ?? [], dto.leaves ?? [])
+      : null;
     const orig = {
       address: assayer.address,
       city: assayer.city,
@@ -2008,6 +2052,7 @@ export class AssayerService implements OnModuleInit {
       payload: { id: saved.id, displayName: saved.displayName },
     });
     await this.hydrateWorkforceAttributes(saved);
+    if (leaveWarning) (saved as any).leaveWarning = leaveWarning;
     return saved;
   }
 
@@ -2184,6 +2229,101 @@ export class AssayerService implements OnModuleInit {
    * name, which is how a shared set stops being shared.
    */
   private static readonly HOLDS_ACTIVE_WORK: AssignmentStatus[] = [...COMMITTED_ASSIGNMENT_STATUSES];
+
+  /**
+   * A leave period may not cover a day on which the assayer holds accepted work.
+   *
+   * `leaves` is self-editable (the app's availability screen), and nothing compared it with the
+   * assayer's own diary: an assayer could accept a branch for Thursday and then mark Thursday as
+   * leave, leaving an assignment that says somebody is going and a record that says they are not.
+   * The planner already refuses to OFFER work on a leave day (`ConstraintEvaluator.checkLeaves`);
+   * this is the other direction — refusing the leave while the work stands.
+   *
+   * "Accepted work" is `COMMITTED_ASSIGNMENT_STATUSES` (ACCEPTED, CHECKED_IN, IN_PROGRESS) — the
+   * shared set for work somebody has taken on and owes. An unanswered offer (PENDING) is not
+   * held; a finished job is not owed.
+   *
+   * Days are Asia/Kolkata business dates on both sides (`businessDateKey`), inclusive at both ends
+   * as the planner reads them. The stored day is read back as text (`::text`), so the driver never
+   * turns a calendar date into a server-local midnight first. The assignment's day is its own `scheduled_date`, falling back to
+   * the branch's, the same fallback check-in uses.
+   *
+   * Only periods that are NEW in this request are judged: an unchanged period already on the
+   * record is not re-litigated, so an old overlap cannot block an unrelated edit of the list.
+   *
+   * The assayer's own edits only (owner decision 2026-09-24: "Only the assayer refused"). Staff may
+   * record leave that overlaps accepted work — somebody phoning in sick is the ordinary case — and
+   * it is then theirs to reassign the work.
+   */
+  private async assertLeaveClearOfCommittedWork(
+    assayerId: string,
+    before: Array<{ startDate: string; endDate: string }>,
+    after: Array<{ startDate: string; endDate: string }>,
+  ): Promise<void> {
+    const clashes = await this.leaveClashesWithCommittedWork(assayerId, before, after);
+    if (clashes.length === 0) return;
+    throw withCode(
+      new BadRequestException(
+        `This leave covers work you have already accepted: ${AssayerService.nameClashes(clashes)}. `
+        + 'Ask operations to reassign or reschedule it before marking those days as leave.',
+      ),
+      ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK,
+    );
+  }
+
+  /** The HR path's version of the same check: a warning listing the jobs, never a refusal (B12). */
+  private async leaveOverCommittedWorkWarning(
+    assayerId: string,
+    before: Array<{ startDate: string; endDate: string }>,
+    after: Array<{ startDate: string; endDate: string }>,
+  ): Promise<{ code: string; message: string; assignments: Array<{ assignmentNumber: string | null; day: string; branchName: string | null }> } | null> {
+    const clashes = await this.leaveClashesWithCommittedWork(assayerId, before, after);
+    if (clashes.length === 0) return null;
+    return {
+      code: ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK,
+      message: `Leave saved, but it covers work this assayer has already accepted: ${AssayerService.nameClashes(clashes)}. `
+        + 'Reassign or reschedule those jobs.',
+      assignments: clashes.map((c) => ({ assignmentNumber: c.assignment_number, day: c.day, branchName: c.branch_name })),
+    };
+  }
+
+  private static nameClashes(clashes: Array<{ assignment_number: string | null; day: string; branch_name: string | null }>): string {
+    return clashes
+      .map((c) => `${formatDateOnly(c.day)} at ${c.branch_name ?? 'a branch'}${c.assignment_number ? ` (${c.assignment_number})` : ''}`)
+      .join('; ');
+  }
+
+  /** Accepted jobs whose day falls inside a leave period that is NEW in this edit. */
+  private async leaveClashesWithCommittedWork(
+    assayerId: string,
+    before: Array<{ startDate: string; endDate: string }>,
+    after: Array<{ startDate: string; endDate: string }>,
+  ): Promise<Array<{ assignment_number: string | null; day: string; branch_name: string | null }>> {
+    const dayOf = (v: unknown) => (v == null || v === '' ? '' : businessDateKey(v as string));
+    const known = new Set(before.map((l) => `${dayOf(l?.startDate)}|${dayOf(l?.endDate)}`));
+    const fresh = after
+      .map((l) => ({ start: dayOf(l?.startDate), end: dayOf(l?.endDate) }))
+      .filter((l) => l.start && l.end && !known.has(`${l.start}|${l.end}`));
+    if (fresh.length === 0) return [];
+
+    const held: Array<{ assignment_number: string | null; scheduled_on: string | Date | null; branch_name: string | null }> =
+      await this.dataSource.query(
+        `SELECT a.assignment_number,
+                COALESCE(a.scheduled_date, pb.scheduled_date)::text AS scheduled_on,
+                b.name AS branch_name
+           FROM assignments a
+           LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+           LEFT JOIN branches b ON b.id = pb.branch_id
+          WHERE a.assayer_id = $1 AND a.is_active = true AND a.status::text = ANY($2)`,
+        [assayerId, COMMITTED_ASSIGNMENT_STATUSES.map(String)],
+      );
+
+    const clashes = held
+      .map((h) => ({ ...h, day: h.scheduled_on ? dayOf(h.scheduled_on) : '' }))
+      .filter((h) => h.day && fresh.some((l) => l.start <= h.day && h.day <= l.end))
+      .sort((x, y) => x.day.localeCompare(y.day));
+    return clashes;
+  }
 
   /** Does this assayer currently hold work they have accepted and not yet completed? */
   async hasActiveAssignment(assayerId: string): Promise<boolean> {
@@ -2375,7 +2515,12 @@ export class AssayerService implements OnModuleInit {
      * boundary and hide every statement after it from the check. A plain chain keeps the whole
      * cascade — every UPDATE, by name — inside the text the structural test actually reads.
      */
+    // What the cascade cancelled — announced once the deletion has COMMITTED.
+    let deletionCancelled: CancelledAssignmentRow[] = [];
     await this.uow.run((manager) => manager.getRepository(AssayerEntity).save(assayer)
+      // Nobody on site (owner decision 2026-09-24): the deletion is refused, listing the jobs, and
+      // the whole transaction rolls back. The office completes or cancels those first.
+      .then(() => this.refuseWhileOnSite(manager, id, 'Cannot delete this assayer'))
       // Deactivate assayer commercial profiles
       .then(() => manager.query(
         `UPDATE assayer_commercial_profiles SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
@@ -2485,11 +2630,14 @@ export class AssayerService implements OnModuleInit {
                 before.entity_version AS previous_version,
                 assignments.entity_version AS new_version,
                 assignments.scheduled_date,
-                assignments.project_branch_id`,
+                assignments.project_branch_id,
+                assignments.created_by,
+                (SELECT b.name FROM project_branches pb JOIN branches b ON b.id = pb.branch_id
+                  WHERE pb.id = assignments.project_branch_id) AS branch_name`,
         [AssignmentStatus.CANCELLED, userId, id, AssayerService.OPEN_ASSIGNMENT_STATUSES],
       ))
       .then((raw) => this.auditCancelledOnDeparture(
-        AssayerService.returnedRows(raw), id, AssayerLifecycleStatus.ARCHIVED, userId,
+        (deletionCancelled = AssayerService.returnedRows(raw)), id, AssayerLifecycleStatus.ARCHIVED, userId,
         'Assayer profile soft deleted; the work could not proceed as planned. Reassign it if it '
         + 'still needs doing.',
         manager, deletionEventId, 'ASSAYER_DELETED',
@@ -2548,6 +2696,10 @@ export class AssayerService implements OnModuleInit {
       organizationId: assayer.organizationId,
       payload: { id, displayName: assayer.displayName },
     });
+    await this.announceCascadeCancellations(
+      deletionCancelled, id, assayer.displayName, userId,
+      `${assayer.displayName ?? 'The assayer'}'s record was deleted`,
+    );
   }
 
   /**
@@ -2617,7 +2769,64 @@ export class AssayerService implements OnModuleInit {
    * always right about this — it filters on an explicit set of open standings, which is why it
    * was idempotent while this was not.
    */
-  private static readonly OPEN_ASSIGNMENT_STATUSES: string[] = [...IN_FLIGHT_ASSIGNMENT_STATUSES];
+  /**
+   * PENDING and ACCEPTED only, since 2026-09-24 (owner decision). Checked-in and in-progress work
+   * is no longer cancelled by a departure or a deletion at all: the cascade REFUSES while anyone is
+   * on site (`lockOnSiteAssignments`), and the office first completes or cancels those jobs with a
+   * reason. Before, a raw UPDATE cancelled a visit that was under way and told nobody.
+   */
+  private static readonly OPEN_ASSIGNMENT_STATUSES: string[] = [...CANCELLABLE_ASSIGNMENT_STATUSES];
+
+  /**
+   * Refuse a departure or deletion while this assayer has a job on site — read `FOR UPDATE`, so a
+   * check-in cannot slip in between the answer and the cascade. The message lists every such job.
+   */
+  private async refuseWhileOnSite(
+    runner: Pick<EntityManager, 'query'>,
+    assayerId: string,
+    what: string,
+  ): Promise<void> {
+    const onSite = await lockOnSiteAssignments(runner, { assayerId });
+    if (onSite.length > 0) throw new ConflictException(onSiteRefusalMessage(what, onSite));
+  }
+
+  /**
+   * After commit: the one announcer every bulk cancel shares (`announceCancelledAssignments`). The
+   * departed or deleted assayer is not sent a notice (they are the one who left); the desk is, their
+   * phone refreshes, sharing stops, the status change is published and the day's travel re-decided.
+   */
+  private async announceCascadeCancellations(
+    rows: CancelledAssignmentRow[],
+    assayerId: string,
+    assayerName: string | null | undefined,
+    userId: string,
+    reason: string,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const announced: CancelledForAnnouncement[] = rows.map((r) => ({
+      id: r.id,
+      assignmentNumber: r.assignment_number ?? r.id,
+      previousStatus: r.previous_status,
+      assayerId,
+      branchName: r.branch_name ?? null,
+      entityVersion: Number(r.new_version ?? 0),
+      scheduledDate: r.scheduled_date,
+      createdBy: r.created_by ?? null,
+      assayerName: assayerName ?? null,
+    }));
+    await announceCancelledAssignments(announced, {
+      notificationDispatch: this.notificationDispatch,
+      eventPublisher: this.eventPublisher,
+      refreshPush: this.refreshPush,
+      disableLiveTrackingWhenWorkEnds: (id, uid) => this.disableLiveTrackingWhenWorkEnds(id, uid),
+      dayTravel: this.dayTravel,
+    }, {
+      userId,
+      reason,
+      assayerNotice: 'none',
+      travelReason: reason,
+    });
+  }
 
   /**
    * Every lifecycle move goes through here, so the cached principal is dropped in one place.
@@ -2940,6 +3149,29 @@ export class AssayerService implements OnModuleInit {
       }
     }
 
+    /**
+     * The background-verification exit, asked the same way and for the same reason: a walk that
+     * crosses BACKGROUND_VERIFICATION → TRAINING is refused there (mandatory — no mode), so a batch
+     * `INVITED → ACTIVE` would otherwise commit two hops and strand people in background
+     * verification with a response calling them failed. Refused before it starts instead. A
+     * one-hop walk is left to the funnel, which cannot leave anything half-moved.
+     */
+    const crossesBgvExit = path.includes(AssayerLifecycleStatus.FINAL_APPROVAL)
+      && (from === AssayerLifecycleStatus.BACKGROUND_VERIFICATION || path.includes(AssayerLifecycleStatus.BACKGROUND_VERIFICATION));
+    if (path.length > 1 && crossesBgvExit && this.rosterRecords) {
+      const [verdict, reportOnFile, partsMissing] = await Promise.all([
+        this.rosterRecords.latestBackgroundVerdict(assayer.id),
+        this.rosterRecords.bgvReportOnFile(assayer.id),
+        this.rosterRecords.bgvPartsMissing(assayer.id),
+      ]);
+      const decision = assessBackgroundGate(verdict, 'leave-bgv', reportOnFile, partsMissing);
+      if (decision.refusal) {
+        return `${assayer.displayName} cannot be moved: ${decision.refusal} Reaching ${targetStatus} `
+          + `from ${from} passes through background verification${route}, so the whole move is `
+          + 'refused. Nothing was changed.';
+      }
+    }
+
     return null;
   }
 
@@ -2961,6 +3193,11 @@ export class AssayerService implements OnModuleInit {
   private static whyNoPath(from: string, targetStatus: string): string {
     const blocker = assayerLifecycleBlockedBy(from, targetStatus);
     if (!blocker) return '';
+    if (blocker === AssayerLifecycleStatus.FINAL_APPROVAL) {
+      return ` Every route from ${from} to ${targetStatus} passes through the approval before training, which`
+        + ' a senior decides one person at a time — a bulk action cannot approve anybody. Send them for'
+        + ' approval; the approver moves them on to training. Nothing was changed.';
+    }
     return ` Every route from ${from} to ${targetStatus} passes through ${blocker}, which is a`
       + ' decision somebody has to make and answer for, not a corridor — a bulk action will not'
       + ` take it on your behalf. Move them to ${blocker} as its own decision first. Nothing was`
@@ -3091,6 +3328,15 @@ export class AssayerService implements OnModuleInit {
     reason?: string,
     role = SystemRole.ADMIN,
     expectedVersion?: number,
+    /**
+     * Set only by `OnboardingApprovalService`: the approver's decision is the one thing that moves
+     * somebody out of FINAL_APPROVAL, and `inTransaction` writes the decision onto the round in the
+     * same transaction as the move, so neither can land without the other.
+     */
+    approval?: {
+      decision: 'APPROVED' | 'REJECTED';
+      inTransaction: (manager: EntityManager | undefined, saved: AssayerEntity) => Promise<void>;
+    },
   ): Promise<{ saved: AssayerEntity; event: any }> {
     const preRead = await this.findOne(id);
     const currentStatus = preRead.lifecycleStatus;
@@ -3118,8 +3364,10 @@ export class AssayerService implements OnModuleInit {
     }
 
     let event: any;
+    // What a departure's cascade cancelled — announced once the transition has COMMITTED.
+    let departureCancelled: CancelledAssignmentRow[] = [];
 
-    return this.workflowEngine.executeCommand(
+    const outcome = await this.workflowEngine.executeCommand(
       'assayer',
       preRead.id,
       `${targetStatus}_Command`,
@@ -3255,30 +3503,38 @@ export class AssayerService implements OnModuleInit {
          * discipline as the identity gate below: after the edge is validated, inside the
          * transaction, so a refusal leaves no evidence of a move that never happened.
          */
-        const runBackgroundGate = async (site: 'leave-bgv' | 'activate') => {
+        const runBackgroundGate = async (site: 'leave-bgv' | 'finish-onboarding' | 'activate') => {
           if (!this.rosterRecords) return;
-          const verdict = await this.rosterRecords.latestBackgroundVerdict(preRead.id);
-          const decision = assessBackgroundGate(verdict, site);
+          const [verdict, reportOnFile, partsMissing] = await Promise.all([
+            this.rosterRecords.latestBackgroundVerdict(preRead.id),
+            this.rosterRecords.bgvReportOnFile(preRead.id),
+            this.rosterRecords.bgvPartsMissing(preRead.id),
+          ]);
+          // Mandatory: no mode, no warn arm. See `assessBackgroundGate` for why it once had one.
+          const decision = assessBackgroundGate(verdict, site, reportOnFile, partsMissing);
           if (decision.refusal) {
             throw withCode(
               new BadRequestException(`${assayer.displayName} cannot be moved: ${decision.refusal}`),
               ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
             );
           }
-          if (!decision.gated) return;
-          const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
-          if (mode === 'off') return;
-          const sentence = `${assayer.displayName}: ${decision.gated}`;
-          if (mode === 'enforce') {
-            throw withCode(new BadRequestException(sentence), ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR);
-          }
-          this.logger.warn(`Background gate (warn only): ${sentence}`);
-          await this.recordActivity(
-            preRead.id, 'ASSAYER_UPDATED', null, null, userId,
-            `Moved out of background verification with no completed check on file. The identity `
-            + 'gate is set to warn; switch it to Enforce in Settings once the vetting queue is worked.',
-            manager,
-          ).catch(() => undefined);
+        };
+
+        /**
+         * Was this person parked INACTIVE while still onboarding?
+         *
+         * Read from the lifecycle's own trail: the latest move INTO inactive, and where it came from.
+         * If that was an onboarding stage, "reactivating" them is really finishing onboarding — which
+         * background verification is mandatory for. No such row (a record older than the trail) is
+         * treated as a working return, never a refusal nobody could explain.
+         */
+        const parkedMidOnboarding = async (): Promise<boolean> => {
+          const parked = await (manager?.getRepository(AssayerActivityEntity) ?? this.activityRepository).findOne({
+            where: { assayerId: preRead.id, newState: AssayerLifecycleStatus.INACTIVE },
+            order: { createdAt: 'DESC' },
+          });
+          return !!parked?.previousState
+            && (ONBOARDING_STAGES as readonly string[]).includes(parked.previousState);
         };
 
         const runIdentityGate = async () => {
@@ -3334,17 +3590,84 @@ export class AssayerService implements OnModuleInit {
         if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
           event = AssayerStateMachine.verifyDocuments(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
-          await runDocumentGate();
+          const reopening = fromStatus === AssayerLifecycleStatus.INACTIVE;
+          /*
+            Back from INACTIVE only for somebody parked because background verification was not
+            passed — re-verified by the agency, they carry on through it to training. Anybody else
+            parked inactive has no verification to re-open. The failed check, its report and the
+            parking stay on the record; the new check is recorded beside them.
+          */
+          if (reopening && !mayReopenBackgroundVerification(fromStatus, assayer.unavailableReason)) {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} cannot be taken back into background verification: that is `
+                + 'only for somebody parked because it was not passed.',
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
+          if (!reopening) await runDocumentGate();
           event = AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
+          // Back in verification, no longer parked for failing it — until a check says otherwise.
+          if (reopening) assayer.unavailableReason = null;
+        } else if (targetStatus === AssayerLifecycleStatus.FINAL_APPROVAL) {
+          const reopening = fromStatus === AssayerLifecycleStatus.INACTIVE;
+          // Back up for approval only for somebody rejected at it — see `reopenTargetFor`.
+          if (reopening && !mayReopenFinalApproval(fromStatus, assayer.unavailableReason)) {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} cannot be put up for approval again: that is only for somebody `
+                + 'who was not approved.',
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
+          // The onboarding exit the owner's drawing gates: PASSED goes forward, FAILED does not. It
+          // gates the way INTO approval now — nobody is sent up whose background check is not clear.
+          await runBackgroundGate('leave-bgv');
+          event = AssayerStateMachine.sendForApproval(assayer, userId);
+          if (reopening) assayer.unavailableReason = null;
         } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
-          // The onboarding exit the owner's drawing gates: PASSED goes forward, FAILED does not.
+          /*
+            Only the approval moves somebody into training. Not the stage buttons, not a bulk move,
+            not the API: the approver's decision is the control, and a second road around it would
+            make it optional.
+          */
+          if (fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL && approval?.decision !== 'APPROVED') {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} goes on to training when they are approved — open their approval to decide it.`,
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
+          // Checked again on the way out, so a report withdrawn during the approval still stops them.
           await runBackgroundGate('leave-bgv');
           event = AssayerStateMachine.startTraining(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
+          /*
+            Straight from approval to work (2026-09-24) is the approver's decision and nobody else's:
+            not a stage button, not a bulk move, not the API. Without this, the new edge would be a
+            road around the approval — the thing the approval exists to stop.
+          */
+          if (fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL && approval?.decision !== 'APPROVED') {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} is made Active by being approved — open their approval to decide it.`,
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
           AssayerStateMachine.assertCanActivate(assayer);
-          // Adverse-verdict arm only (see the decision table): this is what keeps a record parked
-          // as BGV_FAILED from re-entering the workforce until a newer check clears them.
-          await runBackgroundGate('activate');
+          // Adverse-verdict arm for a working return; the whole gate for somebody finishing
+          // onboarding — parked inactive mid-way, or approved straight to work, which skips the
+          // training stage but none of what joining requires. See `assessBackgroundGate`.
+          await runBackgroundGate(
+            fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL
+              || (fromStatus === AssayerLifecycleStatus.INACTIVE && await parkedMidOnboarding())
+              ? 'finish-onboarding'
+              : 'activate',
+          );
           await runIdentityGate();
 
           // ── Payout-readiness gate ────────────────────────────────────────────
@@ -3390,7 +3713,18 @@ export class AssayerService implements OnModuleInit {
         } else if (targetStatus === AssayerLifecycleStatus.SUSPENDED) {
           event = AssayerStateMachine.suspend(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
+          // Out of approval only by the approver's rejection — which is what puts the reason on file.
+          if (fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL && approval?.decision !== 'REJECTED') {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} is awaiting approval. The approver decides it — including `
+                + 'not approving them, with the reason — on their approval.',
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
           event = AssayerStateMachine.deactivate(assayer, userId);
+          if (approval?.decision === 'REJECTED') assayer.unavailableReason = AssayerUnavailableReason.APPROVAL_REJECTED;
           /**
            * Name the parking, so the roster can say WHY.
            *
@@ -3425,6 +3759,41 @@ export class AssayerService implements OnModuleInit {
 
         const saved = await assayerRepo.save(assayer);
 
+        /*
+          Into approval: open the round the approver decides, in this same transaction — a person
+          awaiting approval with nothing to approve is a stage nobody can leave.
+        */
+        if (targetStatus === AssayerLifecycleStatus.FINAL_APPROVAL) {
+          const approvalManager = manager ?? this.assayerRepository.manager;
+          const round = await openApprovalRound(approvalManager, saved.id, userId, reason ?? null);
+          /*
+            Tell the approvers — otherwise the only way anyone learns there is a decision waiting is
+            by opening the hiring list. Whoever sent it up is the actor, and is skipped. Keyed on the
+            round, so a re-save cannot announce the same request twice, and a re-opened rejection
+            (a new round) is announced afresh.
+          */
+          const [sender] = await approvalManager.query(
+            'SELECT display_name FROM users WHERE id = $1', [userId],
+          ).catch(() => []) as Array<{ display_name?: string }>;
+          const note = String(reason ?? '').trim();
+          this.notificationDispatch.emitSafe({
+            type: 'ASSAYER_SENT_FOR_APPROVAL',
+            entityType: 'ASSAYER',
+            entityId: saved.id,
+            actorUserId: userId,
+            assayerId: saved.id,
+            dedupeKey: `ASSAYER_SENT_FOR_APPROVAL:${round.id}`,
+            payload: {
+              assayerName: saved.displayName,
+              assayerId: saved.id,
+              sentBy: sender?.display_name?.trim() || 'HR',
+              noteLine: note && note !== 'Sent for approval before training' ? ` Their note: "${note.slice(0, 300)}".` : '',
+              round: round.round,
+            },
+          });
+        }
+        if (approval) await approval.inTransaction(manager, saved);
+
         // After the save, so a departure whose workflow command was refused does not close the
         // client standings of somebody still on the roster.
         const empanelmentsClosed = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
@@ -3443,11 +3812,12 @@ export class AssayerService implements OnModuleInit {
 
         // Same reasoning, same scope, same "after the save" ordering as the empanelment close
         // above — see `cancelOpenAssignmentsOnDeparture` for why this exists at all.
-        const assignmentsCancelled = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
+        departureCancelled = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
           ? await this.cancelOpenAssignmentsOnDeparture(
             saved.id, targetStatus, userId, manager, departureEventId ?? undefined,
           )
-          : 0;
+          : [];
+        const assignmentsCancelled = departureCancelled.length;
 
         /**
          * The bookkeeping goes on the record with the reason, not silently alongside it. A
@@ -3505,6 +3875,13 @@ export class AssayerService implements OnModuleInit {
         return { saved, event };
       }
     );
+
+    // Committed. Never about a departure that rolled back.
+    await this.announceCascadeCancellations(
+      departureCancelled, preRead.id, preRead.displayName, userId,
+      `${preRead.displayName ?? 'The assayer'} was recorded as ${targetStatus}`,
+    );
+    return outcome;
   }
 
   /**
@@ -3707,10 +4084,13 @@ export class AssayerService implements OnModuleInit {
      * `auditCancelledOnDeparture`.
      */
     departureEventId?: string,
-  ): Promise<number> {
+  ): Promise<CancelledAssignmentRow[]> {
     const runner = manager ?? this.dataSource;
     const reason = `Assayer workforce record moved to ${target} on ${calendarDay(new Date())}; ` +
       'the work could not proceed as planned. Reassign it if it still needs doing.';
+
+    // Nobody on site (owner decision 2026-09-24): refused, listing the jobs, before anything moves.
+    await this.refuseWhileOnSite(runner, assayerId, `Cannot record this assayer as ${target}`);
 
     /**
      * One statement, and it hands back what it changed.
@@ -3742,7 +4122,10 @@ export class AssayerService implements OnModuleInit {
               before.entity_version AS previous_version,
               a.entity_version      AS new_version,
               a.scheduled_date,
-              a.project_branch_id`,
+              a.project_branch_id,
+              a.created_by,
+              (SELECT b.name FROM project_branches pb JOIN branches b ON b.id = pb.branch_id
+                WHERE pb.id = a.project_branch_id) AS branch_name`,
       [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssayerService.OPEN_ASSIGNMENT_STATUSES],
     );
 
@@ -3773,7 +4156,7 @@ export class AssayerService implements OnModuleInit {
       [userId, assayerId, AssignmentStatus.CANCELLED],
     );
 
-    return cancelled.length;
+    return cancelled;
   }
 
   /**
@@ -5132,6 +5515,176 @@ export class AssayerService implements OnModuleInit {
   }
 
   /**
+   * Hand an already-issued credential to the person over their own channels.
+   *
+   * The delivery half of `bulkIssueAppAccess`, lifted out so that approving a registration reaches
+   * the same code instead of growing a second copy of it. Both callers queue rather than send: an
+   * SMTP conversation per person was most of what made a 540-person run take half an hour, and an
+   * approval must not sit waiting on a mail server either.
+   *
+   * A channel that is absent, unwired, or refuses is NOT an error here. It comes back as a missing
+   * entry in `channels`, which is how the caller learns this person still needs a handover by
+   * hand. The credential is live and audited by the time this runs, so reporting the whole act as
+   * failed would be false — and would leave somebody whose previous password had just stopped
+   * working recorded as untouched.
+   *
+   * The temporary password travels as template data and nowhere else: never into the return value,
+   * a log line, or the audit metadata `issueAppAccessCore` writes. Both queues encrypt the rendered
+   * message at rest and erase it once sent.
+   */
+  private async deliverAppAccess(
+    assayer: Pick<AssayerEntity, 'id' | 'displayName' | 'phone' | 'email'>,
+    issued: { username: string; temporaryPassword: string },
+    actorId: string,
+    emails: EmailService | null,
+    texts: SmsService | null,
+  ): Promise<{ channels: ('EMAIL' | 'SMS')[]; emailId?: string; smsId?: string }> {
+    const channels: ('EMAIL' | 'SMS')[] = [];
+    let emailId: string | undefined;
+    let smsId: string | undefined;
+
+    if (assayer.email && emails) {
+      const receipt = await emails.queue({
+        kind: 'APP_ACCESS_CREDENTIALS',
+        to: assayer.email,
+        recipientName: assayer.displayName,
+        content: {
+          template: 'app-credentials',
+          data: {
+            displayName: assayer.displayName || 'Appraiser',
+            username: issued.username,
+            temporaryPassword: issued.temporaryPassword,
+            validDays: '7',
+            loginUrl: appPublicUrl(),
+            logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+            companyName: 'Sumeru Global',
+          },
+        },
+        entityType: 'ASSAYER',
+        entityId: assayer.id,
+        requestedBy: actorId,
+      }).catch((err: unknown) => {
+        // Never the address and never the password — just which person, so the run and the
+        // approval both carry on and HR sees `channels: []` against this id.
+        this.logger.warn(`Could not queue the app-access email for ${assayer.id}: ${(err as Error)?.message ?? err}`);
+        return null;
+      });
+      if (receipt && receipt.status === 'QUEUED' && receipt.id) {
+        channels.push('EMAIL');
+        emailId = receipt.id;
+      }
+    }
+
+    if (assayer.phone && texts) {
+      // Queued for the same reason as the email, and as the registered DLT template: the wording
+      // lives in `sms-template-registry.ts`, not here.
+      const receipt = await texts.queue({
+        kind: 'APP_ACCESS_CREDENTIALS',
+        to: assayer.phone,
+        recipientName: assayer.displayName,
+        content: {
+          template: 'app-credentials',
+          data: {
+            username: issued.username,
+            temporaryPassword: issued.temporaryPassword,
+            validDays: '7',
+          },
+        },
+        entityType: 'ASSAYER',
+        entityId: assayer.id,
+        requestedBy: actorId,
+      }).catch((err: unknown) => {
+        this.logger.warn(`Could not queue the app-access text for ${assayer.id}: ${(err as Error)?.message ?? err}`);
+        return null;
+      });
+      if (receipt && receipt.status === 'QUEUED' && receipt.id) {
+        channels.push('SMS');
+        smsId = receipt.id;
+      }
+    }
+
+    return { channels, ...(emailId ? { emailId } : {}), ...(smsId ? { smsId } : {}) };
+  }
+
+  /**
+   * The approver's decision on somebody awaiting approval — the only way out of FINAL_APPROVAL.
+   * `OnboardingApprovalService` checks who may decide and writes the round in `inTransaction`.
+   */
+  async decideFinalApproval(
+    id: string,
+    decision: 'APPROVED' | 'REJECTED',
+    userId: string,
+    reason: string,
+    inTransaction: (manager: EntityManager | undefined, saved: AssayerEntity) => Promise<void>,
+    /** Where approving sends them — training (the default, and the only way before 2026-09-24) or straight to work. */
+    destination: 'TRAINING' | 'ACTIVE' = 'TRAINING',
+  ): Promise<AssayerEntity> {
+    const target = decision === 'REJECTED'
+      ? AssayerLifecycleStatus.INACTIVE
+      : destination === 'ACTIVE' ? AssayerLifecycleStatus.ACTIVE : AssayerLifecycleStatus.TRAINING;
+    const { saved, event } = await this.doTransitionLifecycle(
+      id, target, userId, reason, SystemRole.ADMIN, undefined, { decision, inTransaction },
+    );
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    await this.cache.del(rbacPrincipalCacheKey(id));
+    return saved;
+  }
+
+  /**
+   * Who referred this person — the source reference, one per person.
+   *
+   * Its own write rather than a field on `update`: it is a small object in a shared shape
+   * (`normalizeSourceReferral`), and the one rule that goes with it — who recorded it — is kept,
+   * so promotion can carry the candidate's own entry across unchanged. `null` clears it.
+   */
+  async setSourceReferral(
+    assayerId: string,
+    raw: unknown,
+    actorId: string,
+    recordedBy: ReferralRecordedBy = 'HR',
+  ): Promise<SourceReferral | null> {
+    const { referral, error } = normalizeSourceReferral(raw, recordedBy);
+    if (error) throw new BadRequestException(error);
+    const assayer = await this.findOne(assayerId);
+    const previous = (assayer as AssayerEntity).sourceReferral ?? null;
+    await this.assayerRepository.update({ id: assayerId }, { sourceReferral: referral as never, updatedBy: actorId });
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_SOURCE_REFERRAL_SET',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actorId,
+      remarks: referral
+        ? `Referred by ${sourceReferralLine(referral)}${previous ? ` (was ${sourceReferralLine(previous)})` : ''}.`
+        : `Source referral cleared${previous ? ` (was ${sourceReferralLine(previous)})` : ''}.`,
+      metadata: { previousValue: previous, newValue: referral },
+    });
+    return referral;
+  }
+
+  /**
+   * Issue a credential to ONE person and send it to them, without an officer reading it aloud.
+   *
+   * For the moment somebody is hired by their registration being approved. Approval used to mint
+   * nobody anything: the `application-approved` letter said "Sign in to FAPOMS" over a link, and
+   * the account behind that link had `passwordHash = NULL`, so following the button returned the
+   * same bare `Invalid credentials` a mistyped password returns. The candidate could not tell the
+   * two apart and would reasonably keep trying; nothing anywhere told HR they were waiting.
+   *
+   * Unlike `bulkIssueAppAccess` this does NOT refuse when the email queue is unwired. A bulk run
+   * exists only to deliver, so delivering to nobody is a pointless run worth stopping; an approval
+   * is a hiring decision that happens to send a letter, and must not be refused because a mail
+   * server is down. The empty `channels` is the signal, and the caller records it.
+   */
+  async issueAndDeliverAppAccess(
+    assayer: Pick<AssayerEntity, 'id' | 'assayerCode' | 'displayName' | 'phone' | 'email' | 'lifecycleStatus'>,
+    actorId: string,
+  ): Promise<{ channels: ('EMAIL' | 'SMS')[]; emailId?: string; smsId?: string }> {
+    const issued = await this.issueAppAccessCore(assayer, actorId);
+    return this.deliverAppAccess(assayer, issued, actorId, this.emailService ?? null, this.smsService ?? null);
+  }
+
+  /**
    * Issue app access to a batch of assayers in one operation, delivered by email and SMS
    * instead of read off a screen one person at a time. Both are queued on the outbound ledger.
    *
@@ -5197,68 +5750,14 @@ export class AssayerService implements OnModuleInit {
         }
 
         const issued = await this.issueAppAccessCore(assayer, actorId);
-        const channels: ('EMAIL' | 'SMS')[] = [];
-        let emailId: string | undefined;
-        let smsId: string | undefined;
-
-        if (assayer.email) {
-          // Queued, not sent in this loop: an SMTP conversation per person was most of what made a
-          // 540-person run take half an hour. The message is encrypted at rest and erased once sent.
-          const receipt = await emails.queue({
-            kind: 'APP_ACCESS_CREDENTIALS',
-            to: assayer.email,
-            recipientName: assayer.displayName,
-            content: {
-              template: 'app-credentials',
-              data: {
-                displayName: assayer.displayName || 'Appraiser',
-                username: issued.username,
-                temporaryPassword: issued.temporaryPassword,
-                validDays: '7',
-                loginUrl: appPublicUrl(),
-                logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
-                companyName: 'Sumeru Global',
-              },
-            },
-            entityType: 'ASSAYER',
-            entityId: assayer.id,
-            requestedBy: actorId,
-          });
-          if (receipt.status === 'QUEUED' && receipt.id) {
-            channels.push('EMAIL');
-            emailId = receipt.id;
-          }
-        }
-        if (assayer.phone && texts) {
-          // Queued for the same reason as the email, and as the registered DLT template: the
-          // wording lives in `sms-template-registry.ts`, not here.
-          const receipt = await texts.queue({
-            kind: 'APP_ACCESS_CREDENTIALS',
-            to: assayer.phone,
-            recipientName: assayer.displayName,
-            content: {
-              template: 'app-credentials',
-              data: {
-                username: issued.username,
-                temporaryPassword: issued.temporaryPassword,
-                validDays: '7',
-              },
-            },
-            entityType: 'ASSAYER',
-            entityId: assayer.id,
-            requestedBy: actorId,
-          });
-          if (receipt.status === 'QUEUED' && receipt.id) {
-            channels.push('SMS');
-            smsId = receipt.id;
-          }
-        }
-
+        // One delivery implementation, shared with the approval path — see `deliverAppAccess`.
         // A person with neither channel queued is not moved to `failed`: the credential is live
         // either way (issueAppAccessCore already committed it, and already wrote its own audit
         // row), and `channels: []` is how HR sees that nothing is on its way to this person and a
         // manual follow-up is needed.
-        succeeded.push({ id, channels, ...(emailId ? { emailId } : {}), ...(smsId ? { smsId } : {}) });
+        const delivery = await this.deliverAppAccess(assayer, issued, actorId, emails, texts);
+
+        succeeded.push({ id, ...delivery });
       } catch (e) {
         failed.push({ id, reason: (e as Error).message });
       }

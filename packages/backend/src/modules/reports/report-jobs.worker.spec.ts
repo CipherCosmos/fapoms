@@ -6,6 +6,8 @@ import { ReportsService } from './reports.service';
 import { ReportFileStore, ReportTooLargeError } from './report-file.store';
 import { REPORT_JOB, REPORT_QUEUE, MAX_EXPORT_BYTES } from './report-jobs.contract';
 import { EXCEL_MIME } from './excel-export';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
+import { progressReporter } from '../../infrastructure/queue/queued-job';
 
 /** @nestjs/bull's own metadata keys — see node_modules/@nestjs/bull/dist/bull.constants.js. */
 const BULL_MODULE_QUEUE = 'bull:module_queue';
@@ -23,8 +25,14 @@ describe('ReportJobsWorker', () => {
     billing: jest.fn(),
     commandCenter: jest.fn(),
     assayerRoster: jest.fn(),
+    assayerRosterPdf: jest.fn(),
   };
   const files = { put: jest.fn(), get: jest.fn(), secondsRemaining: jest.fn() };
+  /** An untracked run, as the real tracker does for a job with no row: Bull progress only. */
+  const tracker = {
+    run: jest.fn((job: any, work: any, _options: any) =>
+      work({ backgroundJobId: null, progress: progressReporter(job), stage: jest.fn(), attachReport: jest.fn() })),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -32,6 +40,7 @@ describe('ReportJobsWorker', () => {
         ReportJobsWorker,
         { provide: ReportsService, useValue: reportsService },
         { provide: ReportFileStore, useValue: files },
+        { provide: BackgroundJobTracker, useValue: tracker },
       ],
     }).compile();
 
@@ -47,21 +56,29 @@ describe('ReportJobsWorker', () => {
       expect(Reflect.getMetadata(BULL_MODULE_QUEUE, ReportJobsWorker)).toMatchObject({ name: REPORT_QUEUE });
     });
 
+    it('has exactly ONE loop for the whole queue, at concurrency 1', () => {
+      // Five named handlers used to be five SHARED loops (Bull's loops belong to the queue and take
+      // any job name): up to five synchronous \`xlsx.write\` builds at once, each freezing the process.
+      const handlers = Object.getOwnPropertyNames(ReportJobsWorker.prototype)
+        .map((m) => Reflect.getMetadata(BULL_MODULE_QUEUE_PROCESS, (ReportJobsWorker.prototype as any)[m]))
+        .filter(Boolean);
+      expect(handlers).toEqual([expect.objectContaining({ name: '*', concurrency: 1 })]);
+    });
+
     it.each([
       ['assignments', REPORT_JOB.ASSIGNMENTS],
       ['billing', REPORT_JOB.BILLING],
       ['commandCenter', REPORT_JOB.COMMAND_CENTER],
       ['assayerRoster', REPORT_JOB.ASSAYER_ROSTER],
       ['assayerRosterPdf', REPORT_JOB.ASSAYER_ROSTER_PDF],
-    ])('registers %s under the exact name the enqueue side uses', (method, expectedName) => {
-      const meta = Reflect.getMetadata(BULL_MODULE_QUEUE_PROCESS, (ReportJobsWorker.prototype as any)[method]);
+    ])('dispatches %s from the one loop by the exact name the enqueue side uses', async (method, name) => {
+      const spy = jest.spyOn(worker as any, method).mockResolvedValue({ filename: 'x', mimeType: 'y', sizeBytes: 1 });
+      await worker.run({ id: 1, name, data: {} } as any);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
 
-      expect(meta).toBeDefined();
-      expect(meta.name).toBe(expectedName);
-      // `xlsx.write` is synchronous CPU with no yield point: while it runs the process serves
-      // nothing at all, health checks included. Two in parallel double that blackout rather than
-      // halving the wait, so 1 is the only correct setting here.
-      expect(meta.concurrency).toBe(1);
+    it('refuses a job name it does not know rather than completing it silently', async () => {
+      await expect(worker.run({ id: 1, name: 'nope', data: {} } as any)).rejects.toThrow('Unknown report job');
     });
   });
 
@@ -106,6 +123,18 @@ describe('ReportJobsWorker', () => {
     it('turns a null scope into undefined rather than an empty scope object', async () => {
       await worker.commandCenter(jobStub(REPORT_JOB.COMMAND_CENTER, { scope: null }));
       expect(reportsService.commandCenter).toHaveBeenCalledWith({}, expect.any(Function));
+    });
+
+    it('runs every export through the tracker, whose summary links to the download route', async () => {
+      await worker.assayerRosterPdf(jobStub(REPORT_JOB.ASSAYER_ROSTER_PDF, { principal: { id: 'u', roles: [] }, scope: null }));
+
+      expect(tracker.run).toHaveBeenCalledTimes(1);
+      const { describe } = tracker.run.mock.calls[0][2];
+      const summary = describe({ filename: 'assayer_roster_11.pdf', mimeType: 'application/pdf', sizeBytes: 2048 });
+      expect(summary).toMatchObject({
+        summary: 'Assayer roster (PDF) ready (2 KB)',
+        download: { path: '/reports/jobs/11/download', fileName: 'assayer_roster_11.pdf', expiresAt: expect.any(String) },
+      });
     });
 
     it('relays phase progress from the service onto the job', async () => {

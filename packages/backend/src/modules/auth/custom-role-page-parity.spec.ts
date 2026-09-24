@@ -86,12 +86,11 @@ const PAGES: Row[] = [
      */
     page: '/planning', route: 'GET /projects (the project picker this page is keyed on)',
     file: 'modules/project/project.controller.ts', handler: 'findAll',
-    honoursFallback: false,
+    honoursFallback: true,
     because:
-      'modules/project/** belongs to another workstream. GET /planning/* does honour the fallback '
-      + '(see the note on PlanningController); the project list it needs does not, so the page is '
-      + 'not offered. @RolesFallbackPermissions(\'project:view:organization\') on '
-      + 'ProjectController.findAll flips this row.',
+      'GET /planning/* honours the fallback, and the project list the page is keyed on now does too '
+      + '(@RolesFallbackPermissions(\'project:view:organization\') on ProjectController.findAll), so '
+      + 'the page asks for both grants.',
   },
   {
     page: '/scheduling', route: 'GET /schedules',
@@ -137,11 +136,11 @@ const PAGES: Row[] = [
   {
     page: '/hr', route: 'GET /hr/workforce',
     file: 'modules/assayer/hr.controller.ts', handler: 'workforce',
-    honoursFallback: false,
+    honoursFallback: true,
     because:
-      'modules/assayer/** belongs to another workstream and this handler cannot be edited here. '
-      + 'It declares assayer:view:organization and refuses every custom role, so the web app stops '
-      + 'offering the page. One @AllowPermissionFallback() here flips this row to true.',
+      'assayer:view:organization is the gate, and the overview is a read. A custom HR or approver '
+      + 'role holding it opens the console, and through it /hr/approvals and the person\'s file '
+      + '(GET /assayers/:id and the dossier honour the same fallback, like the onboarding approval routes).',
   },
   {
     page: '/data-entry', route: 'GET /validation/attention',
@@ -205,6 +204,14 @@ function frontendNamesAPermission(page: string): boolean {
 
 const OPT_IN = /@AllowPermissionFallback\(\)|@RolesFallbackPermissions\(/;
 
+/**
+ * The block with comments removed. A comment that MENTIONS the decorator ("only with
+ * `@AllowPermissionFallback()` beside it") satisfied the pattern with the decorator itself deleted —
+ * found by mutation on HrController.workforce.
+ */
+const codeOnly = (block: string): string =>
+  block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
 describe('the pages a role built in Admin → Roles is offered', () => {
   /**
    * A broken search must not read as a clean result — the same guard `route-permission-parity.spec`
@@ -220,7 +227,7 @@ describe('the pages a role built in Admin → Roles is offered', () => {
   describe.each([...PAGES, ...SECONDARY])('$page ← $route', (row) => {
     it(`${row.honoursFallback ? 'lets a custom role in' : 'refuses every custom role'}`, () => {
       const block = decoratorBlockOf(row.file, row.handler);
-      expect(OPT_IN.test(block)).toBe(row.honoursFallback);
+      expect(OPT_IN.test(codeOnly(block))).toBe(row.honoursFallback);
     });
   });
 

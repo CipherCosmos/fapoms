@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X, AlertTriangle, Loader } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination, SkeletonRows, Refreshing, PageHeader } from '../components/ui';
 import { listPhase } from '../components/ui/list-phase';
-import { useImportJob } from '../components/import/useImportJob';
-import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
+import { useBranchImport } from '../hooks/useBranchImport';
+import { BranchImportPanel } from '../components/branch/BranchImportPanel';
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { Autocomplete } from '../components/ui/Autocomplete';
@@ -21,6 +22,9 @@ import { userMessage } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { getZones } from '../services/planning';
 import { Page } from '../components/ui/Page';
+import { useQueryClient } from '@tanstack/react-query';
+import { useClientOptions } from '../hooks/useClients';
+import { queryKeys } from '../hooks/queryKeys';
 
 interface ClientOption {
   id: string;
@@ -273,7 +277,11 @@ export const Branches: React.FC = () => {
   // rather than silently showing a partial list as if it were everything.
   const [branchesTotal, setBranchesTotal] = useState(0);
   const [clients, setClients] = useState<ClientOption[]>([]);
-  const [selectedClientId, setSelectedClientId] = useState<string>('');
+  // `?client=` deep-links a client — the Jobs tray leads back to an import this way.
+  const [searchParams] = useSearchParams();
+  const clientParam = searchParams.get('client');
+  const [selectedClientId, setSelectedClientId] = useState<string>(() => clientParam ?? '');
+  useEffect(() => { if (clientParam) setSelectedClientId(clientParam); }, [clientParam]);
   const [searchTerm, setSearchTerm] = useState('');
   // State and region used to be filtered here. They moved to the header's global scope so the
   // choice follows the operator across every page, and so the server can apply them to the
@@ -304,15 +312,6 @@ export const Branches: React.FC = () => {
    * for a desk outside the region, not an exceptional one.
    */
   const [branchesError, setBranchesError] = useState<unknown>(null);
-  /**
-   * The import's whole lifetime, not a boolean.
-   *
-   * `isUploading` could only describe a request that returns, so this page awaited an import that
-   * ran every row inline — thousands of sequential lookups on the real client file, a frozen page,
-   * and then a timeout the operator reasonably read as failure and responded to by uploading the
-   * same file again. The server now queues anything large and names a job; this follows it.
-   */
-  const branchImport = useImportJob();
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   // Audit and finance can open this page but hold no branch write permission —
   // showing them Add/Edit/Delete only produces a 403 when they click.
@@ -347,13 +346,13 @@ export const Branches: React.FC = () => {
       void loadClients();
       if (selectedClientIdRef.current) void loadBranches(selectedClientIdRef.current);
     };
-    socket?.on('ProjectPlanningStarted', refresh);
-    socket?.on('ProjectBranchAssignmentConfirmed', refresh);
+    socket?.on('ProjectPlanningStartedEvent', refresh);
+    socket?.on('ProjectBranchAssignmentConfirmedEvent', refresh);
     socket?.on('branch:created', refresh);
     socket?.on('branch:updated', refresh);
     return () => {
-      socket?.off('ProjectPlanningStarted', refresh);
-      socket?.off('ProjectBranchAssignmentConfirmed', refresh);
+      socket?.off('ProjectPlanningStartedEvent', refresh);
+      socket?.off('ProjectBranchAssignmentConfirmedEvent', refresh);
       socket?.off('branch:created', refresh);
       socket?.off('branch:updated', refresh);
     };
@@ -390,18 +389,32 @@ export const Branches: React.FC = () => {
     }
   }, [branchIdParam, branches]);
 
+  /**
+   * The client picker, from the one shared client list (`useClientOptions`, `?limit=200`).
+   *
+   * This page fetched `GET /clients` itself with no limit, so the picker stopped at the server's
+   * default page of 20 — a 21st client could not be chosen here at all.
+   */
+  const queryClient = useQueryClient();
+  const clientOptions = useClientOptions();
+  useEffect(() => {
+    const list = clientOptions.data;
+    if (!list) return;
+    setClients(list.map((c) => ({ id: c.id, name: c.name, clientCode: c.clientCode ?? c.code ?? '' })));
+    if (list.length > 0 && !selectedClientIdRef.current) setSelectedClientId(list[0].id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientOptions.data]);
+  useEffect(() => {
+    if (!clientOptions.error) return;
+    // The client picker decides which estate the table below describes, so an empty picker is
+    // not a cosmetic loss: it silently narrows the page to whatever `selectedClientId` already
+    // was, or to nothing. Surfaced in the page's own message channel rather than a console
+    // line — the branch banner covers the rows, this covers the control that chooses them.
+    setMessage({ type: 'error', text: `The client list could not be loaded, so the picker above may be empty or out of date. ${userMessage(clientOptions.error)}` });
+  }, [clientOptions.error]);
+  // Live events refresh the shared list; the effect above then repaints the picker.
   const loadClients = async () => {
-    try {
-      const response = await api.request<ClientOption[]>('/clients');
-      setClients(response);
-      if (response.length > 0 && !selectedClientId) setSelectedClientId(response[0].id);
-    } catch (e) {
-      // The client picker decides which estate the table below describes, so an empty picker is
-      // not a cosmetic loss: it silently narrows the page to whatever `selectedClientId` already
-      // was, or to nothing. Surfaced in the page's own message channel rather than a console
-      // line — the branch banner covers the rows, this covers the control that chooses them.
-      setMessage({ type: 'error', text: `The client list could not be loaded, so the picker above may be empty or out of date. ${userMessage(e)}` });
-    }
+    await queryClient.invalidateQueries({ queryKey: queryKeys.clients.options });
   };
 
   /** One screenful. The server caps anything larger at 200, so this is the real ceiling too. */
@@ -485,27 +498,32 @@ export const Branches: React.FC = () => {
     } catch (err) { toast({ type: 'error', title: 'Could not delete branch', message: userMessage(err) }); }
   };
 
+  /**
+   * A branch list is a background job: the upload is answered as soon as the file is stored, the
+   * server checks every row (nothing is saved yet), and the review opens when it is ready — or is
+   * waiting on this page after a refresh. Saving the reviewed rows is a second job; the list reloads
+   * when it finishes. See `useBranchImport`.
+   */
+  const branchImport = useBranchImport(
+    selectedClientId ? { type: 'CLIENT', id: selectedClientId } : null,
+    {
+      onCommitted: (job) => {
+        if (job.result?.summary) setMessage({ type: 'success', text: job.result.summary });
+        if (selectedClientIdRef.current) void loadBranches(selectedClientIdRef.current);
+      },
+    },
+  );
+  const importBusy = branchImport.jobs.upload.phase === 'uploading'
+    || branchImport.jobs.active.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    // Cleared immediately so choosing the same file twice still fires `onChange` — otherwise a
-    // failed import cannot be retried without picking a different file first.
+    // Cleared immediately so choosing the same file twice still fires `onChange`.
     e.target.value = '';
     if (!file || !selectedClientId) return;
     setMessage(null);
-    await branchImport.start(`/branches/import/${selectedClientId}`, file);
+    await branchImport.start(file);
   };
-
-  /**
-   * Refresh the list once an import finishes, whichever way it finished.
-   *
-   * A queued import completes long after the upload request returned, so reloading at the end of
-   * the handler — as this page used to — showed the operator the list as it was *before* their
-   * file was applied.
-   */
-  useEffect(() => {
-    if (branchImport.state.phase === 'done' && selectedClientId) void loadBranches(selectedClientId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branchImport.state.phase, selectedClientId]);
 
   // The server already applied the search and the risk filter, so these rows are the answer.
   const filteredBranches = branches;
@@ -536,18 +554,14 @@ export const Branches: React.FC = () => {
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
         {[
-          // Each tile now says what its number is and what it is for. "Standard Complexity 71"
-          // was a puzzle: nothing on the page defined complexity, so a clerk could not tell
-          // whether 71 was good, bad, or something they were supposed to act on. The numbers
-          // themselves are unchanged.
-          { label: 'Total Branches', value: totalCount, icon: Building2, color: 'var(--accent-primary)', note: 'On this client\u2019s list, within your current scope' },
-          { label: 'Regions Covered', value: regionCount, icon: Globe, color: 'var(--status-active)', note: 'Distinct planning regions these branches fall in' },
-          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: 'var(--danger)', note: 'Need an experienced assayer \u2014 plan these first' },
-          { label: 'Standard Complexity', value: standardCount, icon: Activity, color: 'var(--accent-secondary)', note: 'A normal one-day visit (about 8 hours each)' },
+          { label: 'Total Branches', value: totalCount, icon: Building2, color: 'var(--accent-primary)', note: 'In current scope', tooltip: 'Total branches imported for this client within active scope' },
+          { label: 'Regions Covered', value: regionCount, icon: Globe, color: 'var(--status-active)', note: 'Planning zones', tooltip: 'Unique administrative and geographic planning regions' },
+          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: 'var(--danger)', note: 'Priority focus', tooltip: 'Branches classified with high or critical risk ratings requiring priority auditing' },
+          { label: 'Standard Complexity', value: standardCount, icon: Activity, color: 'var(--accent-secondary)', note: 'Standard audits', tooltip: 'Branches with standard operational scope and estimated audit duration' },
         ].map(card => {
           const Icon = card.icon;
           return (
-            <div key={card.label} className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div key={card.label} className="glass-card" title={`${card.label}: ${card.value} — ${card.tooltip}`} style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px' }}>
               <div style={{ width: '44px', height: '44px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color }}>
                 <Icon size={22} />
               </div>
@@ -565,7 +579,12 @@ export const Branches: React.FC = () => {
       {branchesError != null && (
         <LoadFailure loads={[{ label: 'the branch list', query: caughtLoad(branchesError, () => void loadBranches(selectedClientId)) }]} />
       )}
-      <ImportProgressPanel state={branchImport.state} onDismiss={branchImport.reset} />
+      {selectedClientId && (
+        <BranchImportPanel
+          handle={branchImport}
+          reviewTitle={`Reconcile Branches: ${clients.find((c) => c.id === selectedClientId)?.name || 'Client'}`}
+        />
+      )}
 
 
       <div className="responsive-grid-split" style={{ alignItems: 'start', gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 400px)' }}>
@@ -581,17 +600,17 @@ export const Branches: React.FC = () => {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
               <label style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Excel Import</label>
-              <label className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: branchImport.busy ? 'not-allowed' : 'pointer', fontSize: 'var(--text-sm)', opacity: branchImport.busy ? 0.7 : 1 }}>
-                <Upload size={14} /> {branchImport.busy ? 'Importing…' : 'Import Excel'}
-                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={branchImport.busy} style={{ display: 'none' }} />
+              <label className="btn btn-primary" title="Upload an Excel spreadsheet or CSV containing client branch records" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: importBusy ? 'not-allowed' : 'pointer', fontSize: 'var(--text-sm)', opacity: importBusy ? 0.7 : 1 }}>
+                <Upload size={14} /> {branchImport.jobs.upload.phase === 'uploading' ? 'Uploading…' : importBusy ? 'Importing…' : 'Import Excel'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={importBusy || !!branchImport.reviewJob} style={{ display: 'none' }} />
               </label>
             </div>
             <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name or SOL ID..." compact style={{ minWidth: '180px' }} />
-            <button onClick={() => setShowFilters(!showFilters)} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button onClick={() => setShowFilters(!showFilters)} title={showFilters ? 'Hide advanced branch filters' : 'Show advanced branch filters'} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Filter size={13} /> Filters <ChevronDown size={12} style={{ transform: showFilters ? 'rotate(180deg)' : '' }} />
             </button>
             {canManage && (
-              <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={() => setShowCreateModal(true)} title="Manually create a new bank branch entry with location and SOL ID" className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Plus size={14} /> Add Branch
               </button>
             )}
@@ -632,8 +651,8 @@ export const Branches: React.FC = () => {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>SOL ID</th>
-                    <th>Branch Name</th><th>City / State</th><th>Region</th><th>Risk</th><th>Type</th><th>Actions</th>
+                    <th title="Branch service code from the client register">SOL ID</th>
+                    <th title="Branch name">Branch Name</th><th title="City and state where this branch sits">City / State</th><th title="Planning region derived from the state">Region</th><th title="Risk level, higher means priority auditing">Risk</th><th title="Branch size and complexity type">Type</th><th title="Edit or delete this branch">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -658,7 +677,7 @@ export const Branches: React.FC = () => {
                       <td style={{ fontSize: 'var(--text-sm)' }}>{b.city}, {b.state}</td>
                       <td style={{ fontSize: 'var(--text-sm)' }}>{regionLabel(b.region)}</td>
                       <td>
-                        <StatusBadge label={riskCategoryLabel(b.riskCategory)} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
+                        <StatusBadge label={riskCategoryLabel(b.riskCategory)} title={`${riskCategoryLabel(b.riskCategory)} risk — ${b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'needs priority auditing' : 'routine auditing'}`} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
                       </td>
                       <td style={{ fontSize: 'var(--text-xs)' }}>{branchTypeLabel(b.branchType)}</td>
                       <td onClick={(e) => e.stopPropagation()}>
@@ -696,8 +715,8 @@ export const Branches: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   {canManage && <>
-                    <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: 'var(--text-2xs)' }}><Edit2 size={11} /></button>
-                    <button onClick={() => setShowContactModal(true)} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} title="Edit branch parameters, risk, and contact information" className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: 'var(--text-2xs)' }}><Edit2 size={11} /></button>
+                    <button onClick={() => setShowContactModal(true)} title="Add key branch contact person or escalation contact" className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Plus size={11} /> Contact
                     </button>
                   </>}
@@ -729,8 +748,8 @@ export const Branches: React.FC = () => {
                           badge is what stops six decimal places reading as six decimal places
                           of confidence. */}
                       <GeoPrecisionBadge source={branchDetail.geoSource} matchedName={branchDetail.geoMatchedName} />
-                      <a href={`https://www.openstreetmap.org/?mlat=${branchDetail.latitude}&mlon=${branchDetail.longitude}#map=17/${branchDetail.latitude}/${branchDetail.longitude}`}
-                        target="_blank" rel="noopener noreferrer"
+                      <a href={`https://www.google.com/maps/search/?api=1&query=${branchDetail.latitude},${branchDetail.longitude}`}
+                        target="_blank" rel="noopener noreferrer" title="Open this branch location on Google Maps in a new tab"
                         style={{ fontSize: 'var(--text-2xs)', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
                         <Map size={14} /> Check on the map
                       </a>
@@ -863,6 +882,23 @@ export const Branches: React.FC = () => {
   );
 };
 
+const BANK_PATTERNS: { name: string; regex: RegExp; code: string }[] = [
+  { name: 'State Bank of India', regex: /\b(sbi|sbin|state bank|st\.?\s*bank)\b/i, code: 'SBIN' },
+  { name: 'HDFC Bank', regex: /\b(hdfc|hdfcbank)\b/i, code: 'HDFC' },
+  { name: 'ICICI Bank', regex: /\b(icici|icic)\b/i, code: 'ICIC' },
+  { name: 'Axis Bank', regex: /\b(axis|utib)\b/i, code: 'UTIB' },
+  { name: 'Punjab National Bank', regex: /\b(pnb|punb|punjab national)\b/i, code: 'PUNB' },
+  { name: 'Bank of Baroda', regex: /\b(bob|barb|bank of baroda)\b/i, code: 'BARB' },
+  { name: 'Canara Bank', regex: /\b(canara|cnrb)\b/i, code: 'CNRB' },
+  { name: 'Kotak Mahindra Bank', regex: /\b(kotak|kkbk)\b/i, code: 'KKBK' },
+  { name: 'Union Bank of India', regex: /\b(union bank|ubin)\b/i, code: 'UBIN' },
+  { name: 'Bank of India', regex: /\b(bank of india|bkid)\b/i, code: 'BKID' },
+  { name: 'IndusInd Bank', regex: /\b(indusind|indb)\b/i, code: 'INDB' },
+  { name: 'Yes Bank', regex: /\b(yes bank|yesb)\b/i, code: 'YESB' },
+  { name: 'IDFC First Bank', regex: /\b(idfc|idfb)\b/i, code: 'IDFB' },
+  { name: 'RBL Bank', regex: /\b(rbl|ratn)\b/i, code: 'RATN' },
+];
+
 /** Exported for the same reason as `BranchFormData` above — a focused test harness. */
 export const BranchFormModal: React.FC<{
   title: string;
@@ -883,6 +919,26 @@ export const BranchFormModal: React.FC<{
    */
   const [addrNote, setAddrNote] = useState<{ message: string; blocking: boolean } | null>(null);
   const [addrLookup, setAddrLookup] = useState(false);
+
+  /** Client mismatch advisory for manual entry */
+  const clientMismatchNote = React.useMemo(() => {
+    if (!form.clientId) return null;
+    const currentClient = clientOptions.find((c) => c.id === form.clientId);
+    if (!currentClient) return null;
+    const clientText = `${currentClient.name} ${currentClient.clientCode || ''}`;
+    const targetBank = BANK_PATTERNS.find((b) => b.regex.test(clientText));
+
+    const textToCheck = `${form.name || ''} ${form.solId || ''}`;
+    for (const bp of BANK_PATTERNS) {
+      if (bp.regex.test(textToCheck)) {
+        if (targetBank && bp.code !== targetBank.code) {
+          return `Branch name or SOL ID references "${bp.name}", but the selected client is "${currentClient.name}". Please verify if this branch belongs to this client.`;
+        }
+      }
+    }
+    return null;
+  }, [form.clientId, form.name, form.solId, clientOptions]);
+
   // The zone was previously a free-text box labelled "Zone ID", which asked the operator to type a
   // raw UUID. Zone ids are not shown anywhere in the application, so there was no way to know one;
   // and anything that was not a UUID came back as a 500. Zones are few, so offer them by name.
@@ -998,6 +1054,7 @@ export const BranchFormModal: React.FC<{
         <Select value={form[key]} onChange={opts.onChange ?? set(key)}
           placeholder={opts?.placeholder || 'Select...'}
           options={opts.options}
+          title={`Choose the ${label.toLowerCase()} for this branch`}
           style={{ width: '100%' }}
         />
       ) : opts?.geo ? (
@@ -1012,7 +1069,7 @@ export const BranchFormModal: React.FC<{
           filterType={(r) => (opts.geo === 'pincode' ? !!r.pincode : true)}
         />
       ) : (
-        <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => (opts?.onChange ?? set(key))(e.target.value)} required={opts?.required} placeholder={opts?.placeholder}
+        <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => (opts?.onChange ?? set(key))(e.target.value)} required={opts?.required} placeholder={opts?.placeholder} title={`Type the ${label.toLowerCase()} for this branch`}
           style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)' }} />
       )}
       {opts?.hint && <span style={{ display: 'block', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>{opts.hint}</span>}
@@ -1071,8 +1128,8 @@ export const BranchFormModal: React.FC<{
   return (
     <Modal open onClose={onClose} title={<><Building2 size={18} /> {title}</>} width="640px" maxHeight="90vh" asForm onSubmit={handleSubmit} bodyStyle={{ overflowY: 'auto' }} footer={
       <>
-        <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-        <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save'}</button>
+        <button type="button" onClick={onClose} title="Close without saving changes" className="btn btn-secondary" disabled={submitting}>Cancel</button>
+        <button type="submit" disabled={submitting} title={branchId ? 'Save changes to this branch' : 'Create this new branch'} className="btn btn-primary">{submitting ? 'Saving...' : 'Save'}</button>
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -1082,6 +1139,17 @@ export const BranchFormModal: React.FC<{
         {/* SOL ID is the single branch identifier. It comes off the client's own SOL register and
             is mandatory — there is no auto-allocation. */}
         {field('SOL ID', 'solId', { required: true, placeholder: 'e.g. 12345', full: true })}
+        {clientMismatchNote && (
+          <div style={{
+            gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)',
+            padding: '6px 8px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--status-pending-bg)',
+            color: 'var(--warning)',
+            border: '1px solid var(--border-color)',
+          }}>
+            <AlertTriangle size={13} aria-hidden /> {clientMismatchNote}
+          </div>
+        )}
 
         <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
         {/* Pincode first, and deliberately so: it is the one thing on a branch letterhead that
@@ -1124,6 +1192,7 @@ export const BranchFormModal: React.FC<{
         <button
           type="button"
           onClick={() => setShowAdvanced(v => !v)}
+          title={showAdvanced ? 'Hide extra branch fields' : 'Show zone, dates and other extra fields'}
           style={{ gridColumn: '1 / -1', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: 'var(--text-xs)', fontWeight: 600 }}
         >
           <ChevronDown size={13} style={{ transform: showAdvanced ? 'rotate(180deg)' : '' }} />
@@ -1232,8 +1301,8 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
   return (
     <Modal open onClose={onClose} title={<><User size={16} /> Add Branch Contact</>} width="480px" asForm onSubmit={handleSubmit} footer={
       <>
-        <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-        <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save Contact'}</button>
+        <button type="button" onClick={onClose} title="Close without adding this contact" className="btn btn-secondary" disabled={submitting}>Cancel</button>
+        <button type="submit" disabled={submitting} title="Save this contact on the branch" className="btn btn-primary">{submitting ? 'Saving...' : 'Save Contact'}</button>
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -1255,7 +1324,7 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
             </label>
             <div style={{ position: 'relative' }}>
               {f.tel && <span aria-hidden style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', pointerEvents: 'none' }}>+91</span>}
-              <input id={`branch-contact-${f.label}`} placeholder={f.placeholder} type={f.tel ? 'tel' : f.type || 'text'} inputMode={f.tel ? 'numeric' : undefined}
+              <input id={`branch-contact-${f.label}`} placeholder={f.placeholder} type={f.tel ? 'tel' : f.type || 'text'} inputMode={f.tel ? 'numeric' : undefined} title={`Type the contact's ${f.label.toLowerCase()}`}
                 value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
                 style={{ width: '100%', boxSizing: 'border-box', padding: '8px', paddingLeft: f.tel ? '38px' : '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)' }} />
             </div>
@@ -1263,7 +1332,7 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
         ))}
         <div style={{ gridColumn: '1 / -1' }}>
           <label htmlFor="branch-contact-notes" style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Notes</label>
-          <textarea id="branch-contact-notes" placeholder="Anything worth remembering about this contact" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+          <textarea id="branch-contact-notes" placeholder="Anything worth remembering about this contact" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} title="Type anything worth remembering about this contact"
             style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)', resize: 'vertical' }} />
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>

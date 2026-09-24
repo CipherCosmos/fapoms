@@ -1,22 +1,24 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import type { Job, Queue } from 'bull';
+import type { Queue } from 'bull';
+import type { BackgroundJobKind, FinalApprovalRef } from '@fapoms/shared';
 import {
   ApprovePayoutsJobData,
   BILLING_BULK_JOB,
   BILLING_BULK_JOB_OPTIONS,
   BILLING_BULK_QUEUE,
+  FinalApproveJobData,
   InviteAllAssayerInvoicesJobData,
   PayPayoutsJobData,
 } from './billing-bulk-jobs.contract';
 import {
-  IN_FLIGHT_SCAN_LIMIT,
   QueuedJobEnvelope,
   QueuedJobStatus,
   assertJobVisibleTo,
   dedupeKeyFor,
   describeJob,
 } from '../../infrastructure/queue/queued-job';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
 import type { JobActor } from '../../infrastructure/queue/job-actor';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 
@@ -24,7 +26,24 @@ export interface EnqueuedBillingBulkJob {
   jobId: string;
   /** True when an identical run by the same person was already queued or running. */
   deduplicated: boolean;
+  /**
+   * The `background_jobs` row that tracks the run, so the Jobs tray (and a refreshed Payouts tab)
+   * find it again. Null for a run joined that was queued before tracking, or when the row could
+   * not be written — the run itself is queued either way.
+   */
+  backgroundJobId: string | null;
 }
+
+/** How the run is shown in the Jobs tray. Never a bank account, never the payload. */
+interface TrackedAs {
+  kind: BackgroundJobKind;
+  title: string;
+  params: Record<string, unknown>;
+  total: number | null;
+  regions: string[] | null;
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
  * Accepts billing bulk writes for the worker and answers where each run has got to.
@@ -35,15 +54,21 @@ export interface EnqueuedBillingBulkJob {
  */
 @Injectable()
 export class BillingBulkJobsService {
-  private readonly logger = new Logger(BillingBulkJobsService.name);
-
-  constructor(@InjectQueue(BILLING_BULK_QUEUE) private readonly queue: Queue) {}
+  constructor(
+    @InjectQueue(BILLING_BULK_QUEUE) private readonly queue: Queue,
+    private readonly jobs: BackgroundJobsService,
+  ) {}
 
   /**
    * The ids are de-duplicated and sorted into the fingerprint, so a double click — or a page that
    * retries a POST — joins the run already going instead of queueing the same approvals twice.
    */
-  async enqueueApprovePayouts(payableIds: string[], actor: JobActor, reason?: string): Promise<EnqueuedBillingBulkJob> {
+  async enqueueApprovePayouts(
+    payableIds: string[],
+    actor: JobActor,
+    reason?: string,
+    regions: string[] | null = null,
+  ): Promise<EnqueuedBillingBulkJob> {
     const sorted = [...new Set(payableIds)].sort();
     const data: ApprovePayoutsJobData = {
       requestedBy: actor.userId,
@@ -55,7 +80,13 @@ export class BillingBulkJobsService {
       // whole point of the key.
       dedupeKey: dedupeKeyFor(BILLING_BULK_JOB.APPROVE_PAYOUTS, actor.userId, { payableIds: sorted }),
     };
-    return this.add(BILLING_BULK_JOB.APPROVE_PAYOUTS, data);
+    return this.add(BILLING_BULK_JOB.APPROVE_PAYOUTS, data, {
+      kind: 'BILLING_APPROVE_PAYOUTS',
+      title: `Approve ${plural(sorted.length, 'payout')}`,
+      params: { payouts: sorted.length, withoutBill: !!reason },
+      total: sorted.length,
+      regions,
+    });
   }
 
   /**
@@ -66,6 +97,7 @@ export class BillingBulkJobsService {
     payableIds: string[],
     payment: PayPayoutsJobData['payment'],
     actor: JobActor,
+    regions: string[] | null = null,
   ): Promise<EnqueuedBillingBulkJob> {
     const sorted = [...new Set(payableIds)].sort();
     const normalised = {
@@ -81,13 +113,47 @@ export class BillingBulkJobsService {
       actor,
       dedupeKey: dedupeKeyFor(BILLING_BULK_JOB.PAY_PAYOUTS, actor.userId, { payableIds: sorted, ...normalised }),
     };
-    return this.add(BILLING_BULK_JOB.PAY_PAYOUTS, data);
+    return this.add(BILLING_BULK_JOB.PAY_PAYOUTS, data, {
+      kind: 'BILLING_PAY_PAYOUTS',
+      // The bank reference (UTR) is what the desk searches its statement for — never an account number.
+      title: `Pay ${plural(sorted.length, 'payout')} (ref ${normalised.paymentReference})`,
+      params: { payouts: sorted.length, method: normalised.method, paidDate: normalised.paidDate ?? null },
+      total: sorted.length,
+      regions,
+    });
+  }
+
+  /**
+   * The HOD's bulk final approval. The items are de-duplicated and sorted into the fingerprint, so a
+   * double click joins the run already going instead of approving the same items twice.
+   */
+  async enqueueFinalApprove(
+    items: FinalApprovalRef[],
+    actor: JobActor,
+    regions: string[] | null = null,
+  ): Promise<EnqueuedBillingBulkJob> {
+    const keyed = new Map(items.map((i) => [`${i.kind}:${i.id}`, { kind: i.kind, id: i.id }]));
+    const sorted = [...keyed.keys()].sort().map((k) => keyed.get(k)!);
+    const data: FinalApproveJobData = {
+      requestedBy: actor.userId,
+      items: sorted,
+      actor,
+      dedupeKey: dedupeKeyFor(BILLING_BULK_JOB.FINAL_APPROVE, actor.userId, { items: sorted.map((i) => `${i.kind}:${i.id}`) }),
+    };
+    return this.add(BILLING_BULK_JOB.FINAL_APPROVE, data, {
+      kind: 'BILLING_FINAL_APPROVAL',
+      title: `Final approval of ${plural(sorted.length, 'item')}`,
+      params: { items: sorted.length },
+      total: sorted.length,
+      regions,
+    });
   }
 
   /** Keyed on the requester and their region ceiling — the round has no other input. */
   async enqueueInviteAllAssayerInvoices(
     scope: Partial<GlobalScope> | undefined,
     actor: JobActor,
+    regions: string[] | null = null,
   ): Promise<EnqueuedBillingBulkJob> {
     const snapshot = scope ?? null;
     const data: InviteAllAssayerInvoicesJobData = {
@@ -96,7 +162,14 @@ export class BillingBulkJobsService {
       actor,
       dedupeKey: dedupeKeyFor(BILLING_BULK_JOB.INVITE_ALL_ASSAYER_INVOICES, actor.userId, { scope: snapshot }),
     };
-    return this.add(BILLING_BULK_JOB.INVITE_ALL_ASSAYER_INVOICES, data);
+    return this.add(BILLING_BULK_JOB.INVITE_ALL_ASSAYER_INVOICES, data, {
+      kind: 'BILLING_INVITE_ALL_INVOICES',
+      title: 'Invite every assayer with unbilled work to submit a bill',
+      params: {},
+      // Who is invited is decided when the round RUNS, so the count is not known yet.
+      total: null,
+      regions,
+    });
   }
 
   async status(jobId: string, userId: string | undefined): Promise<QueuedJobStatus> {
@@ -105,31 +178,23 @@ export class BillingBulkJobsService {
     return describeJob(job, { includeResult: true });
   }
 
-  private async add(name: string, data: QueuedJobEnvelope): Promise<EnqueuedBillingBulkJob> {
-    const inFlight = await this.findInFlight(name, data.dedupeKey);
-    if (inFlight) {
-      this.logger.log(`Joining in-flight billing ${name} run ${inFlight.id} rather than starting a duplicate.`);
-      return { jobId: String(inFlight.id), deduplicated: true };
-    }
-    const job = await this.queue.add(name, data, BILLING_BULK_JOB_OPTIONS);
-    this.logger.log(`Queued billing ${name} run ${job.id}.`);
-    return { jobId: String(job.id), deduplicated: false };
-  }
-
   /**
-   * Unfinished runs only — joining a completed one would hand a later press the earlier run's
-   * answer. A failed scan never blocks the enqueue: its worst outcome is one redundant run, whose
-   * per-row writes are no-ops the second time.
+   * The duplicate rule is `enqueueTracked`'s, which is this queue's old one exactly: same job name
+   * and `dedupeKey`, among waiting/active/delayed runs only — joining a completed run would hand a
+   * later press the earlier run's answer. A failed scan never blocks the enqueue.
    */
-  private async findInFlight(name: string, dedupeKey: string): Promise<Job | null> {
-    try {
-      const jobs = await this.queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
-      return jobs.find(
-        (j) => j?.name === name && (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
-      ) ?? null;
-    } catch (err) {
-      this.logger.warn(`Could not scan for an in-flight billing ${name} run (${(err as Error).message}); queuing anyway.`);
-      return null;
-    }
+  private async add(name: string, data: QueuedJobEnvelope & { actor: JobActor }, as: TrackedAs): Promise<EnqueuedBillingBulkJob> {
+    return this.jobs.enqueueTracked({
+      kind: as.kind,
+      actor: data.actor,
+      regions: as.regions,
+      title: as.title,
+      params: as.params,
+      total: as.total,
+      queue: this.queue,
+      jobName: name,
+      data,
+      options: BILLING_BULK_JOB_OPTIONS,
+    });
   }
 }

@@ -24,7 +24,7 @@ export const RecommendationPanel: React.FC<{
   maxRadius: number;
   onMaxRadiusChange: (v: number) => void;
   /**
-   * The audit date candidates are evaluated FOR (YYYY-MM-DD). Availability, double-booking
+   * The audit date candidates are evaluated FOR (YYYY-MM-DD). Availability (leave, holidays)
    * and fee quotes all describe this date — changing it re-fetches the ranking. Without it
    * the engine assumed "today", which is rarely the day being planned.
    */
@@ -154,6 +154,7 @@ export const RecommendationPanel: React.FC<{
             </div>
             <button
               onClick={() => onViewHistory(selectedPb.id)}
+              title={`Show past visits and assignments for ${selectedPb.branch.name}`}
               style={{
                 marginTop: '10px', padding: '8px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
                 background: 'var(--bg-page)', border: '1px solid var(--border-color)',
@@ -197,12 +198,14 @@ export const RecommendationPanel: React.FC<{
                 )}
                 {/* Plain words for what this actually does. "Ignore date availability" read as a
                     switch that discards a rule; it in fact widens the list to people who are
-                    booked or on leave that day, and each clash is still printed on the row. */}
+                    on leave that day, and each clash is still printed on the row. (Being booked
+                    elsewhere that day no longer hides anyone — one assayer may take several
+                    branches on one day, owner decision 2026-09-24.) */}
                 {onToggleIgnoreDateAvailability && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: ignoreDateAvailability ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
-                    title="Ranks everyone nearby even if they are booked or on leave that day. Each clash is still shown on the person's card.">
-                    <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} />
-                    Also show people who are busy that day
+                    title="Ranks everyone nearby even if they are on leave that day. Each clash is still shown on the person's card.">
+                    <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} title="Tick to also list people who are on leave that day" />
+                    Also show people on leave that day
                   </label>
                 )}
 
@@ -217,7 +220,7 @@ export const RecommendationPanel: React.FC<{
                 {onToggleIgnoreClientPolicy && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: ignoreClientPolicy ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
                     title="Ranks people who are not on this client's panel. Their standing is still shown on their card, and assigning one still needs a recorded reason.">
-                    <input type="checkbox" checked={ignoreClientPolicy} onChange={(e) => onToggleIgnoreClientPolicy(e.target.checked)} />
+                    <input type="checkbox" checked={ignoreClientPolicy} onChange={(e) => onToggleIgnoreClientPolicy(e.target.checked)} title="Tick to also list people not on this client's panel" />
                     Also show people not on this client&rsquo;s panel
                   </label>
                 )}
@@ -232,7 +235,7 @@ export const RecommendationPanel: React.FC<{
                 {onToggleIgnoreDistancePolicy && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: ignoreDistancePolicy ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
                     title="Searches the whole workforce instead of a radius around the branch. The client's conflict-of-interest minimum still applies — that one is not an operator's to waive.">
-                    <input type="checkbox" checked={ignoreDistancePolicy} onChange={(e) => onToggleIgnoreDistancePolicy(e.target.checked)} />
+                    <input type="checkbox" checked={ignoreDistancePolicy} onChange={(e) => onToggleIgnoreDistancePolicy(e.target.checked)} title="Tick to search the whole workforce, not just nearby" />
                     Search every distance
                   </label>
                 )}
@@ -316,12 +319,13 @@ export const RecommendationPanel: React.FC<{
                         ? <>Someone you expected may be missing because of the <b>independence rule</b>: a person living within <b>{slaRadius} km</b> of a branch may not audit it. That distance comes from the client's contract, not from a setting here.</>
                         : <>The independence rule — which hides people living too close to the branch to audit it independently — is currently switched off, so everyone nearby is listed.</>}
                       <div style={{ marginTop: '6px' }}>
-                        People can also be missing because they are booked or on leave on the audit date (tick “Also show people who are busy that day”), because they are further away than the “Nearby only” limit, or because they lack a skill or certification the project requires — the latter is listed under the candidates.
+                        People can also be missing because they are on leave on the audit date (tick “Also show people on leave that day”), because they are further away than the “Nearby only” limit, or because they lack a skill or certification the project requires — the latter is listed under the candidates.
                       </div>
                       <div style={{ marginTop: '8px' }}>
                         <button
                           type="button"
                           onClick={() => setOverrideOpen(true)}
+                          title="Open controls to change the minimum distance rule"
                           style={{
                             background: 'transparent', border: '1px solid var(--border-color)',
                             borderRadius: '4px', color: 'var(--accent)', cursor: 'pointer',

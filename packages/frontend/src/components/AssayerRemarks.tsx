@@ -242,6 +242,7 @@ export const AssayerRemarks: React.FC<{
               onChange={(v) => setCategory(v as Category)}
               options={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))}
               compact={compact}
+              title="Choose what kind of remark this is"
               style={{ marginLeft: 'auto', background: 'var(--bg-page)' }}
             />
           </div>
@@ -254,8 +255,9 @@ export const AssayerRemarks: React.FC<{
             <input value={text} onChange={(e) => setText(e.target.value)} maxLength={1000}
               onKeyDown={(e) => { if (e.key === 'Enter' && submittable) create.mutate(); }}
               placeholder={rating === null ? 'Pick a rating, then say what you saw…' : 'What did you see? Be specific — this is read before the next offer.'}
+              title="Write what you saw — be specific, this is read before the next offer"
               style={{ ...inputStyle, flex: 1 }} />
-            <button type="button" onClick={() => create.mutate()} disabled={!submittable} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: compact ? '6px 10px' : '8px 12px' }}>
+            <button type="button" onClick={() => create.mutate()} disabled={!submittable} title="Save this remark" className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: compact ? '6px 10px' : '8px 12px' }}>
               <Send size={12} />
             </button>
           </div>

@@ -91,8 +91,16 @@ const REQUIRED_CONSTRAINTS = [
   ['assayer_document_versions', 'chk_assayer_document_versions_verified_keeps_evidence'],
 ];
 const REQUIRED_INDEXES = [
-  ['assignments', 'idx_assignments_single_active_assayer_day'],
   ['assignments', 'idx_assignments_single_active_branch'],
+];
+/**
+ * Indexes a fresh provision must NOT come up with — rules the owner has retired, whose database
+ * half would otherwise refuse legitimate work. `idx_assignments_single_active_assayer_day` was the
+ * one-job-per-assayer-per-day rule; since 2026-09-24 an assayer may hold several branches on one
+ * day, and migration 1800800000000 drops it.
+ */
+const FORBIDDEN_INDEXES = [
+  ['assignments', 'idx_assignments_single_active_assayer_day'],
 ];
 
 /**
@@ -225,6 +233,10 @@ async function main() {
     for (const [table, name] of REQUIRED_INDEXES) {
       const { n } = await one(c, `SELECT count(*)::int AS n FROM pg_indexes WHERE tablename='${table}' AND indexname='${name}'`);
       if (Number(n) !== 1) fail(`${name} is missing on a freshly migrated database`);
+    }
+    for (const [table, name] of FORBIDDEN_INDEXES) {
+      const { n } = await one(c, `SELECT count(*)::int AS n FROM pg_indexes WHERE tablename='${table}' AND indexname='${name}'`);
+      if (Number(n) !== 0) fail(`${name} should have been dropped but exists on a freshly migrated database`);
     }
   });
 

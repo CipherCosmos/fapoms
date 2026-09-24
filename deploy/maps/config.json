@@ -1,0 +1,13 @@
+{
+  "options": {
+    "paths": { "root": "/data", "fonts": "fonts", "sprites": "sprites", "styles": "styles", "pmtiles": "" },
+    "serveAllFonts": true,
+    "maxScaleFactor": 2,
+    "allowedHosts": ["india-tiles", "india-tiles:8080", "localhost", "localhost:8080", "127.0.0.1", "127.0.0.1:8080"]
+  },
+  "styles": { "india": { "style": "india.json", "serve_data": false } },
+  "data": {
+    "india-low": { "pmtiles": "india-low.pmtiles" },
+    "india-detail": { "pmtiles": "india-detail.pmtiles" }
+  }
+}

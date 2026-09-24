@@ -29,10 +29,9 @@ import { FEEDBACK_STATUS_LABELS } from '@fapoms/shared';
 import { Page } from '../../components/ui/Page';
 const PAGE_SIZE = 25;
 // Mirrors FEEDBACK_TEAM_ROLES on the backend: the support desk is the people who answer the
-// tickets — DEVELOPER and PRODUCT_SUPPORT since the developer split (2026-09-05); ADMIN runs the
-// business, not this queue, and lost the page. The route admits the same pair
-// (route-permissions.ts), so in practice every visitor is team; the reporter view is kept for
-// the day the desk is widened again.
+// tickets — DEVELOPER and PRODUCT_SUPPORT since the developer split (2026-09-05). Everyone else
+// who opens this page (it is open to every signed-in person since 2026-09-25) gets the reporting
+// side: send a request and follow their own. The backend enforces the same split.
 const TEAM_ROLES = [SystemRole.DEVELOPER, SystemRole.PRODUCT_SUPPORT];
 
 const STATUS_TABS: { key: FeedbackStatus | 'ALL'; label: string }[] = [

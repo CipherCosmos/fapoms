@@ -22,6 +22,7 @@ import { BillingEngineModule } from '../billing-engine/billing-engine.module';
 
 import { OperationalIntegrityService } from './operational-integrity.service';
 import { AssignmentTargetEligibilityService } from './assignment-target-eligibility.policy';
+import { DayTravelModule } from './day-travel.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { AssignmentTargetEligibilityService } from './assignment-target-eligibil
     ValidationModule,
     PricingModule,
     BillingEngineModule,
+    DayTravelModule,
     forwardRef(() => DocumentModule),
     forwardRef(() => PlanningModule),
   ],

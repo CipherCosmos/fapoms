@@ -3,13 +3,16 @@ import { AppState, AppStateStatus } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { flushQueue } from '../services/location-queue';
-import { enqueueAndRun, processActionQueue } from '../services/action-queue';
+import { dismissAction, enqueueAndRun, getRefusedActions, processActionQueue, subscribeActionQueue, toSubmitOutcome, type SubmitOutcome, type QueuedAction } from '../services/action-queue';
+import { QUIET_RELOAD_EVENTS, notificationMovesJobs } from '../services/assignment-live-events';
+import { refusalNotice } from '../i18n/refusal-notice';
+import type { AssignmentStatusPayload, RejectPayload } from '../services/action-dispatchers';
 import { actionDispatchers } from '../services/action-dispatchers';
 import { connectMobileSocket } from '../services/socket';
 import { scheduleLocalNotification } from '../services/notification.service';
 import { useAuth } from './AuthContext';
 import { readCache, writeCache } from '../services/token-store';
-import { t } from '../i18n/i18n';
+import { isStampCurrent, stampSession } from '../services/session-epoch';
 
 interface AssignmentContextType {
   assignments: AssayerAssignment[];
@@ -20,16 +23,29 @@ interface AssignmentContextType {
   /** The list on screen came from cache because the last refresh failed. */
   stale: boolean;
   lastSyncedAt: string | null;
+  /**
+   * `success: true, queued: true` means "saved on the phone, will send when online" — the screen
+   * treats it as done (closes the form) and says so, rather than inviting a second press.
+   */
   updateAssignmentStatus: (
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
-  ) => Promise<{ success: boolean; error?: string; code?: string }>;
-  rejectAssignment: (assignmentId: string, reason: string) => Promise<{ success: boolean; error?: string; code?: string }>;
+  ) => Promise<SubmitOutcome>;
+  /** `requestKey`: one key per decline form, so a second press on it cannot file a second decline. */
+  rejectAssignment: (assignmentId: string, reason: string, requestKey?: string) => Promise<SubmitOutcome>;
+  /** `requestKey`: one key per claim form, sent as the server's `clientRequestId`. */
   submitExpense: (
     assignmentId: string,
-    expense: { category: 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'; amount: number; description?: string }
-  ) => Promise<{ success: boolean; error?: string; code?: string }>;
+    expense: { category: 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'; amount: number; description?: string },
+    requestKey?: string,
+  ) => Promise<SubmitOutcome>;
+  /**
+   * Actions saved on the phone that the server later refused (a check-in on the wrong day, a
+   * claim over the limit). Shown with the server's reason until the assayer dismisses them.
+   */
+  refusedActions: QueuedAction[];
+  dismissRefusedAction: (id: string) => Promise<void>;
 }
 
 const CACHE_KEY = 'assignments';
@@ -66,13 +82,26 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return;
     }
     setLoading(true);
+    /**
+     * Taken before the request, checked after it. A refresh still in flight when the assayer signs
+     * out used to land anyway — back into the cache sign-out had just wiped, and onto the screen of
+     * whoever signed in next. The answer now lands only in the session that asked for it, and the
+     * cache write re-checks at the moment it runs (see `writeCache`'s `stillValid`).
+     */
+    const stamp = stampSession();
     try {
       const items = onlyActive(await MobileApiService.getAssayerAssignments(user?.id));
+      if (!isStampCurrent(stamp)) return;
       setAssignments(items);
       setStale(false);
       setLastSyncedAt(new Date().toISOString());
-      void writeCache(CACHE_KEY, { items, at: new Date().toISOString() });
+      void writeCache(
+        CACHE_KEY,
+        { items, at: new Date().toISOString(), ownerId: stamp.owner },
+        () => isStampCurrent(stamp),
+      );
     } catch (e) {
+      if (!isStampCurrent(stamp)) return;
       /**
        * A failed refresh keeps whatever is already on screen and says so.
        *
@@ -94,15 +123,27 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
    * is seconds of empty screen; and with no signal it never arrived at all.
    */
   useEffect(() => {
+    // Signed out, or a different person signed in: nothing of the last person's schedule stays on
+    // screen. (This list used to survive sign-out in memory and be shown to the next person until
+    // their own refresh replaced it — or indefinitely, if that refresh failed.)
+    setAssignments([]);
+    setActiveAssignment(null);
+    setLastSyncedAt(null);
+    setStale(false);
     if (!isAuthenticated) return;
     let cancelled = false;
-    readCache<{ items: AssayerAssignment[]; at: string }>(CACHE_KEY).then((cached) => {
+    const ownerId = user?.id;
+    readCache<{ items: AssayerAssignment[]; at: string; ownerId?: string | null }>(CACHE_KEY).then((cached) => {
       if (cancelled || !cached?.items?.length) return;
+      // Painted only if it was saved for this person. A copy with no owner (written by an older
+      // build) is not shown: the network refresh replaces it within seconds anyway, and showing
+      // somebody else's schedule even briefly is the thing this guards against.
+      if (!ownerId || cached.ownerId !== ownerId) return;
       setAssignments((current) => (current.length > 0 ? current : onlyActive(cached.items)));
       setLastSyncedAt(cached.at);
     });
     return () => { cancelled = true; };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.id]);
 
   /**
    * Every server-side change that alters this list, delivered live.
@@ -154,27 +195,19 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     /**
      * Quiet reloads. These change what the screen should show but do not warrant interrupting
      * someone mid-audit with a banner — the desk's own notification covers anything that
-     * genuinely needs attention.
-     *
-     * Deliberately NOT here any more: `assignment:counter-offered` (fee negotiation was removed
-     * from the app — the event no longer exists), `assignment:fee-updated` (the gateway stopped
-     * emitting it to assayer sockets when the app went money-blind; a fee edit at the desk is
-     * ops-internal now), and `billing:created` (never emitted by the gateway at all — the real
-     * billing events, `billing:payout-changed` and `billing:assayer-invoice-changed`, move the
-     * statement and the invoice invitation, which App.tsx owns and reloads, not this list).
+     * genuinely needs attention. The list, and why each name is (or is not) on it, lives in
+     * `assignment-live-events.ts`, where the node tests can hold it to what the server emits.
      */
-    const QUIET_EVENTS = [
-      'query:raised',
-      'query:responded',
-      'query:resolved',
-      'document:dispatched',
-      'document:received',
-      'document:uploaded',
-      'document:status-changed',
-    ];
+    const QUIET_EVENTS = QUIET_RELOAD_EVENTS;
+
+    /** A job taken away (or cancelled, reopened) arrives as a notification: reload for it too. */
+    const handleNotification = (payload: unknown) => {
+      if (notificationMovesJobs(payload)) reloadSoon();
+    };
 
     socket.on('assignment:status-changed', handleStatusChange);
     socket.on('assignment:created', handleNewAssignment);
+    socket.on('notification:new', handleNotification);
     QUIET_EVENTS.forEach((e) => socket.on(e, reloadSoon));
 
     /**
@@ -197,6 +230,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (timer) clearTimeout(timer);
       socket.off('assignment:status-changed', handleStatusChange);
       socket.off('assignment:created', handleNewAssignment);
+      socket.off('notification:new', handleNotification);
       QUIET_EVENTS.forEach((e) => socket.off(e, reloadSoon));
       socket.off('connect', reloadSoon);
       socket.off('connect', flushLocationQueueOnReconnect);
@@ -213,37 +247,50 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
    * (wired below), while a validation 4xx is surfaced once and dropped — retrying a refused
    * request would only fail the same way again.
    */
+  /**
+   * A queued result (no signal; the action is on disk and will send itself) is reported as a
+   * success with `queued: true`. It used to come back as `success: false` with a "will retry"
+   * message, so the form stayed open looking failed, and pressing again filed a second copy.
+   *
+   * Duplicates are also refused at the queue: an accept or decline for an offer that already has
+   * one waiting reuses that entry (`sameAs`), and a claim carries the key its form was opened
+   * with, which the server also honours as `clientRequestId`.
+   */
   const updateAssignmentStatus = async (
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
-  ) => {
-    const payload = { op: 'transition' as const, assignmentId, status, notes };
-    const result = await enqueueAndRun('ASSIGNMENT_STATUS', payload, actionDispatchers.ASSIGNMENT_STATUS);
+  ): Promise<SubmitOutcome> => {
+    const payload: AssignmentStatusPayload = { op: 'transition', assignmentId, status, notes };
+    const result = await enqueueAndRun('ASSIGNMENT_STATUS', payload as AssignmentStatusPayload | RejectPayload, actionDispatchers.ASSIGNMENT_STATUS, {
+      sameAs: (a: QueuedAction<AssignmentStatusPayload | RejectPayload>) =>
+        a.payload.op === 'transition' && a.payload.assignmentId === assignmentId && a.payload.status === status,
+    });
     if (result.success) await loadAssignments();
-    if (result.queued) return { success: false, error: t('common.willRetry') };
-    return { success: result.success, error: result.error, code: result.code };
+    return toSubmitOutcome(result);
   };
 
-  const rejectAssignment = async (assignmentId: string, reason: string) => {
-    const result = await enqueueAndRun(
-      'ASSIGNMENT_STATUS',
-      { op: 'reject' as const, assignmentId, reason },
-      actionDispatchers.ASSIGNMENT_STATUS,
-    );
+  const rejectAssignment = async (assignmentId: string, reason: string, requestKey?: string): Promise<SubmitOutcome> => {
+    const payload: RejectPayload = { op: 'reject', assignmentId, reason };
+    const result = await enqueueAndRun('ASSIGNMENT_STATUS', payload as AssignmentStatusPayload | RejectPayload, actionDispatchers.ASSIGNMENT_STATUS, {
+      clientRequestId: requestKey,
+      sameAs: (a: QueuedAction<AssignmentStatusPayload | RejectPayload>) =>
+        a.payload.op === 'reject' && a.payload.assignmentId === assignmentId,
+    });
     if (result.success) await loadAssignments();
-    if (result.queued) return { success: false, error: t('common.willRetry') };
-    return { success: result.success, error: result.error || 'Failed to reject assignment', code: result.code };
+    return toSubmitOutcome(result, 'Failed to reject assignment');
   };
 
   const submitExpense = async (
     assignmentId: string,
-    expense: { category: 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'; amount: number; description?: string }
-  ) => {
-    const result = await enqueueAndRun('EXPENSE_CLAIM', { assignmentId, expense }, actionDispatchers.EXPENSE_CLAIM);
+    expense: { category: 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'; amount: number; description?: string },
+    requestKey?: string,
+  ): Promise<SubmitOutcome> => {
+    const result = await enqueueAndRun('EXPENSE_CLAIM', { assignmentId, expense }, actionDispatchers.EXPENSE_CLAIM, {
+      clientRequestId: requestKey,
+    });
     if (result.success) await loadAssignments();
-    if (result.queued) return { success: false, error: t('common.willRetry') };
-    return { success: result.success, error: result.error || 'Failed to submit expense', code: result.code };
+    return toSubmitOutcome(result, 'Failed to submit expense');
   };
 
   /**
@@ -254,8 +301,45 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
    * rather than here) because the queue itself is one shared, module-level store.
    */
   const drainActionQueue = useCallback(() => {
-    void processActionQueue(actionDispatchers).then(() => loadAssignments().catch(() => {}));
+    void processActionQueue(actionDispatchers)
+      .then((report) => {
+        // Each refusal is said once, out loud: the assayer was told this was saved and would
+        // send by itself, so a silent refusal would leave them believing it went through. The
+        // entry itself stays on the queue (the banner reads it) until they dismiss it.
+        for (const entry of report.refused) {
+          const notice = refusalNotice(entry);
+          void scheduleLocalNotification(notice.title, notice.reason, { type: 'ACTION_REFUSED', kind: entry.kind }, 'HIGH')
+            .catch(() => undefined);
+        }
+      })
+      .catch(() => undefined)
+      // Reloaded after every drain — and so after any refusal — so the screen shows what the
+      // server now holds (a refused check-in's job still waiting, a job that moved away).
+      .then(() => loadAssignments().catch(() => {}));
   }, [loadAssignments]);
+
+  /** The refused actions, kept current as the queue changes (a drain, a dismissal, sign-out). */
+  const [refusedActions, setRefusedActions] = useState<QueuedAction[]>([]);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setRefusedActions([]);
+      return;
+    }
+    let live = true;
+    const read = () => {
+      void getRefusedActions().then((list) => { if (live) setRefusedActions(list); }).catch(() => undefined);
+    };
+    read();
+    const unsubscribe = subscribeActionQueue(read);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, [isAuthenticated, user?.id]);
+
+  const dismissRefusedAction = useCallback(async (id: string) => {
+    await dismissAction(id);
+  }, []);
 
   /**
    * Drain on mount (an app start finds whatever survived the last kill), on the app returning to
@@ -290,6 +374,8 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         updateAssignmentStatus,
         rejectAssignment,
         submitExpense,
+        refusedActions,
+        dismissRefusedAction,
       }}
     >
       {children}

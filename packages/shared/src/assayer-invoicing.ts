@@ -9,6 +9,27 @@ import { AssayerInvoiceStatus } from './enums';
  * agree on the payloads without any of them re-deriving a rupee.
  */
 
+/**
+ * The bill states in which the ASSAYER HAS SENT the bill — owner decision 2026-09-24: amounts
+ * appear in the assayer's Money as soon as they send the bill, not only once the desk approves it.
+ *
+ * INVITED is the desk's invitation the assayer has not sent yet (its amounts are shown only inside
+ * the invitation they are reviewing); SUBMITTED is the moment of sending; APPROVED and PAID follow
+ * it. CANCELLED and SUPERSEDED carry no lines — cancelling releases them and a revision moves them
+ * to the new revision (which starts INVITED again) — so a payable never rides one.
+ *
+ * The earnings statement's gate (`BillingEngineService.assayerRevealingInvoiceIds`) reveals a bill
+ * in one of these states, and ALSO a revision (INVITED again) of a bill the assayer had already
+ * submitted — owner decision 2026-09-24 — for the rows and for the totals alike.
+ */
+export const ASSAYER_SENT_INVOICE_STATUSES: readonly AssayerInvoiceStatus[] = [
+  AssayerInvoiceStatus.SUBMITTED,
+  AssayerInvoiceStatus.APPROVED,
+  // The HOD's final approval (2026-09-24) sits between the office's approval and payment.
+  AssayerInvoiceStatus.HOD_APPROVED,
+  AssayerInvoiceStatus.PAID,
+];
+
 /** One invoice line — a payable, labelled for a human reviewer. */
 export interface AssayerInvoiceLine {
   payableId: string;
@@ -43,6 +64,13 @@ export interface AssayerInvoiceSummary {
   submittedAt: string | null;
   approvedAt: string | null;
   approvedBy: string | null;
+  /** The HOD's final approval (2026-09-24) — set when the bill is cleared for payment. */
+  hodApprovedAt?: string | null;
+  hodApprovedBy?: string | null;
+  /** The last HOD rejection, kept so the office sees why the bill came back to them. */
+  hodRejectedAt?: string | null;
+  hodRejectedBy?: string | null;
+  hodRejectReason?: string | null;
   paidAt?: string | null;
   paidBy?: string | null;
   cancelledAt: string | null;
@@ -62,6 +90,11 @@ export interface AssayerInvoiceSummary {
   // Labels attached by list endpoints.
   assayerName?: string | null;
   assayerCode?: string | null;
+  /**
+   * Returned by the office's approval only: what the approver must know that did not refuse it —
+   * a line paid to a bank account no passbook or identity document backs (2026-09-24 audit F3).
+   */
+  warnings?: string[];
 }
 
 /**
@@ -146,6 +179,11 @@ export interface AssayerStatementPayable {
    * Present only on the gated (assayer-audience) statement's rows.
    */
   preInvoicingEra?: boolean;
+  /**
+   * The HOD's final approval (2026-09-24). An APPROVED payable without it is approved by the
+   * office and waiting for the final approval — not payable yet. Absent on older servers.
+   */
+  hodApproved?: boolean;
 }
 
 export interface AssayerStatementPayment {

@@ -21,6 +21,7 @@ import { StorageEngine } from '../../infrastructure/storage/storage-engine.inter
 import { DocumentAccessTokenService } from '../document/document-access-token.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { acceptChatAttachments, chatUploader, issueChatUploadToken, CHAT_ATTACHMENT_URL_PREFIX } from './chat-attachment-policy';
 
 /**
  * Multer memory-storage configuration for chat attachments.
@@ -53,6 +54,8 @@ class QueryAttachmentDto {
   @IsOptional() @IsNumber() size?: number;
   @IsOptional() @IsString() uploadedBy?: string;
   @IsOptional() @IsString() timestamp?: string;
+  /** The upload route's grant binding the key to its uploader — see `attachment-grant.ts`. */
+  @IsOptional() @IsString() uploadToken?: string;
 }
 
 class QueryRegionDto {
@@ -148,13 +151,15 @@ export class ValidationQueryController {
         );
         return {
           // Return the key as the URL — the download endpoint resolves it via S3.
-          url: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}`,
+          url: `${CHAT_ATTACHMENT_URL_PREFIX}${encodeURIComponent(key)}`,
           s3Key: key,
           fileName: file.originalname,
           fileType: file.mimetype,
           size: file.size,
           uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'DESK_OPERATOR',
           timestamp: new Date().toISOString(),
+          // Proof that this caller uploaded this key; a message naming a key without it is refused.
+          uploadToken: issueChatUploadToken(chatUploader(req), key),
         };
       }),
     );
@@ -185,13 +190,14 @@ export class ValidationQueryController {
     );
 
     return {
-      url: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}`,
+      url: `${CHAT_ATTACHMENT_URL_PREFIX}${encodeURIComponent(key)}`,
       s3Key: key,
       fileName: file.originalname,
       fileType: file.mimetype,
       size: file.size,
       uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'DESK_OPERATOR',
       timestamp: new Date().toISOString(),
+      uploadToken: issueChatUploadToken(chatUploader(req), key),
     };
   }
 
@@ -393,6 +399,8 @@ export class ValidationQueryController {
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Raise a new validation query to an assayer (Data Entry / Admin)' })
   async createQuery(@Body() dto: CreateValidationQueryDto, @Req() req: any) {
+    // Only files this caller uploaded may ride on the opening question — see chat-attachment-policy.ts.
+    dto.attachments = acceptChatAttachments(dto.attachments, chatUploader(req)).attachments ?? undefined;
     const query = await this.validationQueryService.createQuery(dto, req.user.id);
     return query;
   }
@@ -416,7 +424,9 @@ export class ValidationQueryController {
       const region = await this.validationQueryService.resolveRegion(id);
       await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:respondToQuery');
     }
-    const query = await this.validationQueryService.respondToQuery(id, dto.response || '', req.user.id, dto.attachments);
+    // Refused before the reply is recorded, not after: a rejected file must not half-answer the query.
+    const { attachments } = acceptChatAttachments(dto.attachments, chatUploader(req));
+    const query = await this.validationQueryService.respondToQuery(id, dto.response || '', req.user.id, attachments ?? undefined);
     return query;
   }
 
@@ -563,12 +573,27 @@ export class ValidationQueryController {
   ) {
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
     const isAssayer = roles.includes(SystemRole.ASSAYER) && roles.length === 1;
+    /**
+     * Every storage key a message can name — its attachments, a legacy `snapshotPath`, a voice
+     * note — must be one this poster was issued by the upload routes above. The download token
+     * route serves any key a readable message references, so an unchecked key here was a way to
+     * read any object in the bucket.
+     */
+    const accepted = acceptChatAttachments(dto.attachments, chatUploader(req), {
+      snapshotPath: dto.snapshotPath,
+      voiceNote: dto.voiceNote,
+    });
     const message = await this.threadService.postMessage(
       id,
       isAssayer ? QueryMessageAuthor.ASSAYER : QueryMessageAuthor.STAFF,
       req.user.id,
       req.user.displayName ?? req.user.username ?? null,
-      dto,
+      {
+        ...dto,
+        attachments: accepted.attachments ?? undefined,
+        snapshotPath: accepted.snapshotPath ?? undefined,
+        voiceNote: accepted.voiceNote ?? undefined,
+      },
     );
     return message;
   }

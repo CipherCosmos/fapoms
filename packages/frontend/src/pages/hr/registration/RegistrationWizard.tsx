@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  APPLICATION_REFERENCES_MAX, bankAccountConfirmProblem, referenceEmailProblem, referencePhoneForDisplay,
+  isRegistrationSecretField, looksMasked,
+} from '@fapoms/shared';
+import {
   User, MapPin, CreditCard, FileText, Users, Building2, ClipboardCheck,
   Check, ChevronLeft, ChevronRight, AlertTriangle, Plus, Phone,
 } from 'lucide-react';
@@ -21,6 +25,9 @@ import { useDuplicateCheck, type DuplicateCheckKey } from './useDuplicateCheck';
 import { ApplicationDocumentsStep } from './ApplicationDocumentsStep';
 import { ClientsStep, type DraftStanding } from './ClientsStep';
 import { relationshipOptions } from '../reference-vocabulary';
+import {
+  EMPTY_REFERRAL, SourceReferralFields, referralDraftFrom, referralPayload, type SourceReferralDraft,
+} from '../../../components/SourceReferralFields';
 import { Page } from '../../../components/ui/Page';
 
 /**
@@ -222,13 +229,14 @@ export interface DraftReference {
   fullName: string;
   relationship?: string;
   phone?: string;
+  email?: string;
 }
 
 const ReferencesBlock: React.FC<{
   references: DraftReference[];
   onChange: (next: DraftReference[]) => void;
 }> = ({ references, onChange }) => {
-  const [draft, setDraft] = useState({ fullName: '', relationship: '', phone: '' });
+  const [draft, setDraft] = useState({ fullName: '', relationship: '', phone: '', email: '' });
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const saving = false;
@@ -238,14 +246,25 @@ const ReferencesBlock: React.FC<{
       setError('A reference needs at least a name.');
       return;
     }
+    // Same ceiling the candidate's own form and the server enforce — a fourth name has
+    // nowhere to go, so it is refused here rather than dropped on save.
+    if (references.length >= APPLICATION_REFERENCES_MAX) {
+      setError(`Only ${APPLICATION_REFERENCES_MAX} references are needed.`);
+      return;
+    }
+    if (draft.email.trim() && referenceEmailProblem(draft.email.trim().toLowerCase())) {
+      setError('That email does not look right.');
+      return;
+    }
     setError(null);
     onChange([...references, {
       fullName: draft.fullName.trim(),
       relationship: draft.relationship || undefined,
       phone: draft.phone.trim() || undefined,
+      email: draft.email.trim().toLowerCase() || undefined,
     }]);
     toast({ type: 'success', title: 'Reference added', message: `${draft.fullName.trim()} is on file. Nobody has rung them yet.` });
-    setDraft({ fullName: '', relationship: '', phone: '' });
+    setDraft({ fullName: '', relationship: '', phone: '', email: '' });
   };
 
   const inputStyle: React.CSSProperties = {
@@ -264,20 +283,37 @@ const ReferencesBlock: React.FC<{
         separately, on their record, by whoever makes the call.
       </div>
       {references.length > 0 && (
-        <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {references.map((r, i) => (
-            <li key={`${r.fullName}-${i}`} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <Phone size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} aria-hidden />
-              <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{r.fullName}</span>
-              {r.relationship && <span>· {r.relationship}</span>}
-              {r.phone && <span>· {r.phone}</span>}
-              {/* Nobody can have been rung yet: this person does not exist to be a reference FOR
-                  until the application is approved. */}
-              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>· not rung yet</span>
-            </li>
-          ))}
-        </ul>
-      )}
+          <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {references.map((r, i) => (
+              <li key={`${r.fullName}-${i}`} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <Phone size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} aria-hidden />
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{r.fullName}</span>
+                {r.relationship && <span>· {r.relationship}</span>}
+                {r.phone && <span>· {referencePhoneForDisplay(r.phone)}</span>}
+                {r.email && <span>· {r.email}</span>}
+                {/* Nobody can have been rung yet: this person does not exist to be a reference FOR
+                    until the application is approved. */}
+                <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>· not rung yet</span>
+                {/* Without this a mistyped name could only be lived with — and with a ceiling of
+                    three, one typo left the clerk unable to add the reference they meant. */}
+                <button
+                  type="button"
+                  onClick={() => onChange(references.filter((_, j) => j !== i))}
+                  aria-label={`Remove reference ${r.fullName}`}
+                  className="btn btn-secondary"
+                  style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', padding: '3px 10px' }}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      {references.length >= APPLICATION_REFERENCES_MAX ? (
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          Three references is the most an application takes — remove one to change them.
+        </div>
+      ) : (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px', alignItems: 'end' }}>
         <input
           value={draft.fullName}
@@ -307,6 +343,14 @@ const ReferencesBlock: React.FC<{
           aria-label="Phone number of the reference"
           style={inputStyle}
         />
+        <input
+          value={draft.email}
+          onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+          placeholder="Their email (optional)"
+          aria-label="Email of the reference"
+          type="email"
+          style={inputStyle}
+        />
         <button
           type="button"
           onClick={() => void add()}
@@ -317,6 +361,7 @@ const ReferencesBlock: React.FC<{
           <Plus size={13} /> {saving ? 'Adding…' : 'Add this person'}
         </button>
       </div>
+      )}
       {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '6px' }}>{error}</div>}
     </div>
   );
@@ -538,14 +583,33 @@ export const RegistrationWizard: React.FC<{
    */
   const [standings, setStandings] = useState<DraftStanding[]>([]);
   const [references, setReferences] = useState<DraftReference[]>([]);
+  // Who referred them. Carried from the interview onto the application, and from the application
+  // onto their record at approval — but this form never showed it, so a desk registration had no
+  // way to record one and the record page read "Nobody recorded" for everybody made here.
+  const [referral, setReferral] = useState<SourceReferralDraft>(EMPTY_REFERRAL);
   useEffect(() => {
     setStandings((reg.application?.extendedProfile?.empanelments ?? []) as DraftStanding[]);
     setReferences((reg.application?.extendedProfile?.references ?? []) as unknown as DraftReference[]);
+    setReferral(referralDraftFrom(reg.application?.extendedProfile?.sourceReferral));
   }, [reg.application]);
   const [step, setStep] = useStepParam<RegistrationStepKey>(REGISTRATION_STEP_KEYS, 'person');
   // Loaded only on the step that shows `hrOwnerName` — see `useHrOwnerOptions`.
   const hrOwnerOpts = useHrOwnerOptions(step === 'people');
   const [stepProblems, setStepProblems] = useState<string[]>([]);
+  /**
+   * The account number typed a second time, when the clerk has typed a NEW one. Local only — it is
+   * compared, never saved. An untouched account (shown masked, as its last digits) needs no second
+   * typing: it was confirmed when it was saved.
+   */
+  const [accountConfirm, setAccountConfirm] = useState('');
+  const accountTypedNow = reg.isDirty(['bankAccountNumber']) && !!(reg.form.bankAccountNumber || '').trim();
+  const accountUnconfirmed = accountTypedNow
+    && !!bankAccountConfirmProblem(reg.form.bankAccountNumber || '', accountConfirm);
+  /**
+   * The noun phrase the "Before this can be saved, it needs …" banner reads. No comma in it: the
+   * banner joins its list by turning the last comma into "and", which would rewrite this sentence.
+   */
+  const ACCOUNT_CONFIRM_NEEDED = 'the bank account number typed a second time to match the first';
   const [addrNote, setAddrNote] = useState<{ message: string; blocking: boolean } | null>(null);
   const [addrLookup, setAddrLookup] = useState(false);
   /** The last resolved IFSC code's bank/branch details — see `applyIfscLookup`. */
@@ -708,31 +772,56 @@ export const RegistrationWizard: React.FC<{
     fieldExtras(field.key),
   );
 
-  /**
-   * The identity boxes, which cannot open on a number that is already on file.
-   *
-   * A resumed registration used to prefill these from the record. The record now hands out masked
-   * identifiers, so the box would have opened holding `••••••234F` — and a clerk who corrected one
-   * character of that would have saved the mask over a real PAN, leaving something that reads
-   * plausibly on every screen afterwards and can never be told apart from the truth.
-   *
-   * So a field with a number already on file shows it masked with a deliberate, recorded reveal
-   * beside it, and only turns back into a box once it has been uncovered. A field with nothing on
-   * file is an ordinary box — there is nothing to protect and nothing to reveal.
-   */
   /*
-    There is nothing to unmask here any more.
+    THE IDENTITY BOXES CANNOT OPEN ON A NUMBER ALREADY ON FILE.
 
-    This used to render a masked value with an audited reveal beside it, because the boxes were
-    reading from an `assayers` row where PAN, Aadhaar and the bank account are encrypted and come
-    back as `••••••234F`. An application is not that row: it holds what was typed, unencrypted,
-    until promotion writes it through `AssayerService.update` — which is where the encryption, the
-    masking and the reveal audit all live.
-
-    So the box is an ordinary box, showing what the desk or the candidate entered. The protection
-    starts when the person does.
+    The application keeps PAN, Aadhaar and the bank account sealed, and every staff read returns
+    them as their last four (`••••••234F`). A box holding that mask invited a clerk to correct one
+    character and save the mask over the real number. So a masked value is shown read-only with a
+    Replace action: Replace empties the box to type the number afresh from the card, and Keep puts
+    the saved value back. Until a new number is typed nothing is sent for it (`withSecretsKept`).
   */
-  const renderIdentity = (field: FieldDef) => renderOne(field);
+  const [replacing, setReplacing] = useState<Record<string, boolean>>({});
+  const renderIdentity = (field: FieldDef) => {
+    const savedValue = reg.saved?.[field.key] ?? '';
+    const onFileMasked = isRegistrationSecretField(field.key) && looksMasked(savedValue);
+    if (!onFileMasked || replacing[field.key]) {
+      if (!onFileMasked) return renderOne(field);
+      return (
+        <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {renderOne(field)}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ alignSelf: 'flex-start', fontSize: 'var(--text-xs)', padding: '2px 6px' }}
+            onClick={() => { reg.set(field.key, savedValue); setReplacing((r) => ({ ...r, [field.key]: false })); }}
+            title="Keep the number already on file"
+          >
+            Keep the number on file
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div key={field.key} data-testid={`masked-${field.key}`}>
+        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>{field.label}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontFamily: 'monospace', fontSize: 'var(--text-sm)', color: 'var(--text-primary)' }} title="On file, shown as its last digits only">
+            {savedValue}
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: 'var(--text-xs)', padding: '4px 10px' }}
+            onClick={() => { reg.set(field.key, ''); setReplacing((r) => ({ ...r, [field.key]: true })); }}
+            title={`Type a new ${field.label} in place of the one on file`}
+          >
+            Replace
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   /**
    * Leave this step, saving what moved.
@@ -745,6 +834,8 @@ export const RegistrationWizard: React.FC<{
   const leaveStep = async (): Promise<boolean> => {
     setAdvanceAttempted(true);
     const problems = validateStep(step, reg.form);
+    // Typed twice, because nothing else catches a wrong digit — account numbers carry no check digit.
+    if (step === 'identity' && accountUnconfirmed) problems.push(ACCOUNT_CONFIRM_NEEDED);
     if (problems.length > 0) { setStepProblems(problems); return false; }
     setStepProblems([]);
     // Papers write through their own route as they go, and the summary owns nothing. `clients`
@@ -768,7 +859,10 @@ export const RegistrationWizard: React.FC<{
      */
     return reg.commit({
       ...(step === 'clients' ? { empanelments: standings } : {}),
-      ...(step === 'people' ? { references: references as unknown as Array<Record<string, unknown>> } : {}),
+      ...(step === 'people' ? {
+        references: references as unknown as Array<Record<string, unknown>>,
+        sourceReferral: referralPayload(referral) as Record<string, string> | null,
+      } : {}),
     });
   };
 
@@ -794,6 +888,15 @@ export const RegistrationWizard: React.FC<{
     if (target === step) return;
     const targetIndex = REGISTRATION_STEP_KEYS.indexOf(target);
     setStepProblems([]);
+    /*
+      The one thing the rail does not wave through: a forward move saves the step, and saving an
+      account number that has not been typed twice is the exact slip this is here to catch. Going
+      back saves nothing, so it stays free.
+    */
+    if (targetIndex >= stepIndex && step === 'identity' && accountUnconfirmed) {
+      setStepProblems([ACCOUNT_CONFIRM_NEEDED]);
+      return;
+    }
     if (targetIndex >= stepIndex && canSaveCurrentStep()) await reg.commit();
     setStep(target);
   };
@@ -1064,6 +1167,35 @@ export const RegistrationWizard: React.FC<{
             keys={['bankAccountNumber', 'ifscCode', 'bankName']}
             render={renderIdentity}
           />
+          {accountTypedNow && (
+            <div style={{ maxWidth: '360px' }}>
+              <label htmlFor="reg-wizard-account-confirm" style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
+                Re-enter account number
+              </label>
+              <input
+                id="reg-wizard-account-confirm"
+                value={accountConfirm}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Type it again, from the passbook"
+                onChange={(e) => setAccountConfirm(e.target.value.replace(/[^\d\s-]/g, '').slice(0, 24))}
+                // A pasted copy repeats the slip it is meant to catch.
+                onPaste={(e) => e.preventDefault()}
+                aria-invalid={!!accountConfirm.trim() && accountUnconfirmed}
+                style={{
+                  width: '100%', padding: '9px 11px', fontSize: 'var(--text-sm)', fontFamily: 'monospace',
+                  background: 'var(--bg-surface-2)', color: 'var(--text-primary)', boxSizing: 'border-box',
+                  border: `1px solid ${accountConfirm.trim() && accountUnconfirmed ? 'var(--danger)' : 'var(--border-color)'}`,
+                  borderRadius: 'var(--radius-sm)',
+                }}
+              />
+              <div style={{ fontSize: 'var(--text-xs)', marginTop: '4px', color: accountConfirm.trim() && accountUnconfirmed ? 'var(--danger)' : 'var(--text-muted)' }}>
+                {accountConfirm.trim()
+                  ? (bankAccountConfirmProblem(reg.form.bankAccountNumber || '', accountConfirm) ?? 'Matches.')
+                  : 'Typed rather than pasted — it is the only check that catches a wrong digit.'}
+              </div>
+            </div>
+          )}
         </div>
       ) : step === 'documents' ? (
         <ApplicationDocumentsStep
@@ -1082,6 +1214,13 @@ export const RegistrationWizard: React.FC<{
             render={renderOne}
           />
           <ReferencesBlock references={references} onChange={setReferences} />
+          <div style={cardish}>
+            <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: '4px' }}>Who referred them</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+              The person who brought them to us — not one of the referees above. Shown on their record once approved.
+            </div>
+            <SourceReferralFields value={referral} onChange={setReferral} idPrefix="desk-referral" />
+          </div>
           <Block
             title="What they have done before"
             note="Their experience, where they are working now, and what they are good at. All of it travels onto their record when they are approved."

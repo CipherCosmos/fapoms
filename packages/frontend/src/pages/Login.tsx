@@ -371,6 +371,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                   className="lg-input"
                   type="text"
                   required
+                  title="Type the username or email address given by your administrator"
                   autoCapitalize="none"
                   autoCorrect="off"
                   // Missing before, which is why saved credentials were never offered.
@@ -392,6 +393,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     style={{ paddingRight: 44 }}
                     type={showPassword ? 'text' : 'password'}
                     required
+                    title="Type your account password"
                     autoComplete="current-password"
                     value={password}
                     onChange={(e) => { setPassword(e.target.value); setUsedDemoDefault(false); }}
@@ -413,6 +415,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 type="submit"
                 disabled={isLoading}
                 className="btn btn-primary"
+                title="Sign in to your account with the details above"
                 style={{
                   padding: '13px', fontWeight: 600, fontSize: 'var(--text-md)', marginTop: 6, width: '100%',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
@@ -476,6 +479,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     className="lg-input"
                     style={{ letterSpacing: 6, fontSize: 'var(--text-xl)', textAlign: 'center' }}
                     inputMode="numeric"
+                    title="Type the 6-digit code from your authenticator app, email or text message"
                     autoComplete="one-time-code"
                     autoFocus
                     value={mfaCode}
@@ -492,6 +496,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                   type="submit"
                   disabled={mfaBusy || mfaCode.trim().length < 6}
                   className="btn btn-primary"
+                  title="Check the code and finish signing in"
                   style={{
                     padding: '13px', fontWeight: 600, fontSize: 'var(--text-md)', marginTop: 2, width: '100%',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
@@ -510,12 +515,14 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
                     {challenge.factors.includes('EMAIL') && (
                       <button type="button" disabled={mfaBusy} onClick={() => sendMfaCode(challenge.id, 'EMAIL')}
+                        title="Send a sign-in code to your email address"
                         className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                         <Mail size={14} /> {mfaSentTo ? 'Resend email code' : 'Email me a code'}
                       </button>
                     )}
                     {challenge.factors.includes('SMS') && (
                       <button type="button" disabled={mfaBusy} onClick={() => sendMfaCode(challenge.id, 'SMS')}
+                        title="Send a sign-in code to your mobile by text message"
                         className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                         <MessageSquare size={14} /> {mfaSentTo ? 'Resend text code' : 'Text me a code'}
                       </button>
@@ -524,6 +531,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 )}
 
                 <button type="button" onClick={cancelMfa} className="btn btn-ghost"
+                  title="Go back and sign in with a different account"
                   style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', alignSelf: 'center' }}>
                   Use a different account
                 </button>
@@ -547,9 +555,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     (`infrastructure/database/seed.ts`): admin, admin2, manager, executive, validator —
                     all on `admin123`.
                   */}
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('admin', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Super Admin</button>
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('manager', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Ops Manager</button>
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('validator', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Validator</button>
+                  <button type="button" className="btn btn-sm btn-secondary" title="Fill in the demo super admin account (development only)" onClick={() => setDemoAccount('admin', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Super Admin</button>
+                  <button type="button" className="btn btn-sm btn-secondary" title="Fill in the demo operations manager account (development only)" onClick={() => setDemoAccount('manager', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Ops Manager</button>
+                  <button type="button" className="btn btn-sm btn-secondary" title="Fill in the demo validator account (development only)" onClick={() => setDemoAccount('validator', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Validator</button>
                 </div>
               </div>
             )}

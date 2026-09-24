@@ -106,9 +106,10 @@ const wireApi = (overrides: Record<string, unknown> = {}) => {
         fixture being accurate rather than convenient.
       */
       const sent = JSON.parse(String(opts?.body ?? '{}'));
-      const { record, empanelments, references, commercial, ...rest } = sent;
+      const { record, empanelments, references, commercial, sourceReferral, ...rest } = sent;
       profile = {
         ...profile,
+        ...(sourceReferral !== undefined ? { sourceReferral } : {}),
         ...(empanelments ? { empanelments } : {}),
         ...(references ? { references } : {}),
         ...(commercial ? { commercial } : {}),
@@ -396,6 +397,29 @@ describe('which banks will take them', () => {
  * on file. `reference-vocabulary.spec.ts` covers the shared list and its escape hatch directly;
  * this proves the wizard is actually wired to it, not a second list of its own.
  */
+describe('who referred them', () => {
+  it('shows the referral the interview recorded, and sends an edit with the step\'s save', async () => {
+    wireApi({
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: {
+          ...APPLICATION,
+          extendedProfile: { sourceReferral: { type: 'ASSAYER', name: 'Suresh Nair', mobile: '9876543210', email: '', recordedBy: 'HR' } },
+        },
+      },
+    });
+    await mount();
+    await click(/Contacts and pay/);
+
+    expect(screen.getByLabelText(/Referrer.s name/)).toHaveValue('Suresh Nair');
+    fireEvent.change(screen.getByLabelText(/Referrer.s name/), { target: { value: 'Suresh K Nair' } });
+    await click(/^Continue/);
+    await waitFor(() => {
+      expect(lastPatch().sourceReferral).toEqual(expect.objectContaining({ name: 'Suresh K Nair', mobile: '9876543210' }));
+    });
+  });
+});
+
 describe('references', () => {
   it('offers the same fixed relationship list the vetting tab uses, and posts the picked value', async () => {
     await mount();
@@ -419,6 +443,47 @@ describe('references', () => {
       expect(lastPatch().references)
         .toEqual([expect.objectContaining({ fullName: 'Auntie Rosa', relationship: 'Friend' })]);
     });
+  });
+
+  it('stops at three references — a fourth has nowhere to go', async () => {
+    await mount();
+    type(/^Full name/, 'Ramesh Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Continue/);
+    await click(/Contacts and pay/);
+
+    for (const name of ['Ref One', 'Ref Two', 'Ref Three']) {
+      type(/Name of the person who can vouch for them/, name);
+      await click(/Add this person/);
+    }
+
+    // No box to type a fourth into, and a sentence saying why — rather than a box that refuses.
+    await waitFor(() => {
+      expect(screen.getByText(/Three references is the most an application takes/)).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText(/Name of the person who can vouch for them/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * With a ceiling of three and no Remove, one mistyped name left the clerk unable to add the
+   * reference they meant — the candidate's own form always had Remove; the desk's did not.
+   */
+  it('removes a reference, which gives the add box back at the ceiling', async () => {
+    await mount();
+    type(/^Full name/, 'Ramesh Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Continue/);
+    await click(/Contacts and pay/);
+
+    for (const name of ['Ref One', 'Ref Two', 'Ref Three']) {
+      type(/Name of the person who can vouch for them/, name);
+      await click(/Add this person/);
+    }
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove reference Ref Two' }));
+
+    expect(screen.queryByText('Ref Two')).not.toBeInTheDocument();
+    expect(screen.getByText('Ref One')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Name of the person who can vouch for them/)).toBeInTheDocument();
   });
 });
 
@@ -1099,5 +1164,99 @@ describe('every box a step declares is on the screen', () => {
     await click(/^Continue/);            // documents — no boxes of its own
     await click(/^Continue/);
     expectDrawn('people');
+  });
+});
+
+/**
+ * A NEW account number is typed twice before the desk can save it — account numbers carry no check
+ * digit, so a wrong digit still "looks right". An account already on file (shown masked) is left
+ * alone: it was confirmed when it was saved.
+ */
+describe('the bank account on the desk form', () => {
+  const openAtIdentity = async () => {
+    wireApi({
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: { ...APPLICATION, fullName: 'Ramesh Iyer', state: 'Kerala', address: '12 MG Road', extendedProfile: { fields: {} } },
+        gaps: [{ key: 'panNumber', label: 'PAN', blocks: 'tax deduction' }],
+      },
+    });
+    await mount();
+    await screen.findByText(/Where their money goes/i);
+  };
+  const accountPatches = () => mockRequest.mock.calls
+    .filter(([url, o]) => url === `/hr/applications/${APP_ID}` && (o as RequestInit)?.method === 'PATCH')
+    .map((c) => bodyOf(c))
+    .filter((b) => b.record?.bankAccountNumber !== undefined || b.bankAccountNumber !== undefined);
+
+  it('asks for a new number a second time, and will not save it until the two agree', async () => {
+    await openAtIdentity();
+    expect(screen.queryByLabelText('Re-enter account number')).not.toBeInTheDocument();
+
+    type(/^Bank Account/, '123456789012');
+    const confirm = await screen.findByLabelText('Re-enter account number');
+    fireEvent.change(confirm, { target: { value: '123456789099' } });
+    expect(screen.getByText(/do not match/)).toBeInTheDocument();
+
+    await click(/Continue/);
+    expect(await screen.findByText(/typed a second time to match the first/)).toBeInTheDocument();
+    expect(accountPatches()).toEqual([]);
+
+    fireEvent.change(confirm, { target: { value: '123456789012' } });
+    await click(/Continue/);
+    await waitFor(() => expect(accountPatches()).toHaveLength(1));
+  });
+
+  /** The rail saves on a forward click; it must not carry an unconfirmed number with it. */
+  it('does not let the step rail save an unconfirmed number', async () => {
+    await openAtIdentity();
+    type(/^Bank Account/, '123456789012');
+    await screen.findByLabelText('Re-enter account number');
+
+    await click(/Contacts and pay/);
+
+    expect(await screen.findByText(/typed a second time to match the first/)).toBeInTheDocument();
+    expect(accountPatches()).toEqual([]);
+  });
+});
+
+
+/**
+ * A NUMBER ON FILE IS SHOWN, NOT EDITED.
+ *
+ * Every staff read gives PAN, Aadhaar and the bank account as their last four. A box holding that
+ * mask let a clerk correct one character and save the mask over the real number; so it is shown
+ * read-only with Replace, and the mask (or Replace's blank) is never sent back.
+ */
+describe('identity numbers already on file', () => {
+  const seededView = {
+    ...VIEW,
+    application: {
+      ...APPLICATION, fullName: 'Ramesh Iyer', state: 'Kerala',
+      extendedProfile: { fields: { panNumber: '••••••234F' } },
+    },
+  };
+  const startAtIdentity = async () => {
+    wireApi({ [`GET /hr/applications/${APP_ID}`]: seededView });
+    await mount();
+    await click(/Continue/);
+    await click(/^Continue/); // address → ID and bank
+  };
+
+  it('shows the masked PAN read-only, with Replace, and sends nothing for it untouched', async () => {
+    await startAtIdentity();
+    expect(await screen.findByTestId('masked-panNumber')).toHaveTextContent('••••••234F');
+    expect(screen.queryByLabelText(/^PAN Number/)).not.toBeInTheDocument();
+    await click(/^Continue/);
+    expect(JSON.stringify(lastPatch())).not.toContain('234F');
+  });
+
+  it('Replace opens an empty box; a blank is not sent, a newly typed number is', async () => {
+    await startAtIdentity();
+    await click(/^Replace/);
+    expect((screen.getByLabelText(/^PAN Number/) as HTMLInputElement).value).toBe('');
+    type(/^PAN Number/, 'ABCDE1234F');
+    await click(/^Continue/);
+    expect(lastPatch()).toEqual({ record: { panNumber: 'ABCDE1234F' } });
   });
 });

@@ -9,9 +9,12 @@ import { useTheme } from '../../theme/ThemeProvider';
 import { Button, Card, Input, SelectField, type SelectOption } from '../../components/ui/primitives';
 import { MapPicker, isPlausibleIndianCoord } from '../../components/ui/MapPicker';
 import { useT, type TranslationKey, type TranslationVars } from '../../i18n';
-import { SelfRegistrationApi, type DraftPatch } from '../../services/self-registration.service';
+import { SelfRegistrationApi, type DraftPatch, type RegistrationReference } from '../../services/self-registration.service';
 import { FieldNote, GroupHeader, StepFooter } from './parts';
 import { FORMAT_HINT_KEYS } from './registration-form';
+import { ReferencesSection } from './ReferencesSection';
+import { SourceReferralSection } from './SourceReferralSection';
+import type { SourceReferral } from '@fapoms/shared';
 import type { StepProps } from './types';
 
 export interface HomePin { latitude: number; longitude: number }
@@ -19,6 +22,11 @@ export interface HomePin { latitude: number; longitude: number }
 export interface StepAddressProps extends StepProps {
   pin: HomePin | null;
   onPinChange: (pin: HomePin | null) => void;
+  references: RegistrationReference[];
+  referencesError: string | null;
+  onReferencesChange: (next: RegistrationReference[]) => void;
+  /** Who referred them — HR's entry, their own, or nothing yet. */
+  sourceReferral?: SourceReferral | null;
   onBack: () => void;
   onContinue: () => void;
 }
@@ -29,7 +37,8 @@ type Place = { state: string; district: string; city: string };
 const placeLine = (p: Place) => [p.city, p.district, p.state].filter(Boolean).join(' · ');
 
 export const StepAddress: React.FC<StepAddressProps> = ({
-  token, form, errors, setField, commitField, pickField, save, pin, onPinChange, onBack, onContinue,
+  token, form, errors, setField, commitField, pickField, save, pin, onPinChange,
+  references, referencesError, onReferencesChange, sourceReferral, onBack, onContinue,
 }) => {
   const t = useTheme();
   const tr = useT();
@@ -340,6 +349,9 @@ export const StepAddress: React.FC<StepAddressProps> = ({
         )}
         {pinError && <FieldNote text={tr(pinError)} tone="danger" />}
       </Card>
+
+      <ReferencesSection references={references} onChange={onReferencesChange} error={referencesError} />
+      <SourceReferralSection stored={sourceReferral} save={save} />
 
       <StepFooter onBack={onBack} onContinue={onContinue} />
     </View>

@@ -7,6 +7,7 @@ import { DerivedFileIntegrity } from './document-integrity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { ENGAGED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
@@ -21,8 +22,21 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 import {
   EventCategory, DocumentStatus, DocumentType, DispatchMethod, businessTodayDateKey,
-  DOCUMENT_TRANSITIONS, canTransitionDocument, AssignmentStatus,
+  DOCUMENT_TRANSITIONS, canTransitionDocument, AssignmentStatus, SystemRole, expandRoles,
 } from '@fapoms/shared';
+
+/**
+ * The roles that work the data entry desk: the head (DESK) works packets too, alongside operators.
+ * One list, read by the delegation picker (`dataEntryTeam`) and by the check that refuses a
+ * delegation to anyone the picker would not have offered.
+ */
+const DATA_ENTRY_ROLES: readonly string[] = [SystemRole.DESK, SystemRole.DESK_OPERATOR];
+
+/**
+ * Who may hand a packet back on someone else's behalf: the desk head and the business owner
+ * (DEVELOPER reaches ADMIN through `expandRoles`). Everyone else hands back only their own.
+ */
+const DATA_ENTRY_HEAD_ROLES: readonly string[] = [SystemRole.DESK, SystemRole.ADMIN];
 
 /** Branch rows returned when the caller names no window. */
 const BRANCH_PAGE_DEFAULT = 25;
@@ -204,9 +218,9 @@ export class DocumentService {
       WHERE u.is_active = true
         -- Heads also work packets themselves, so they are valid assignees alongside
         -- validators — the desk's working members.
-        AND r.name IN ('DESK', 'DESK', 'DESK_OPERATOR')
+        AND r.name = ANY($1)
       ORDER BY name
-    `);
+    `, [[...DATA_ENTRY_ROLES]]);
   }
 
   /**
@@ -244,6 +258,27 @@ export class DocumentService {
         + 'so it cannot be delegated to data entry.',
       );
     }
+    /**
+     * The assignee must be someone the picker (`dataEntryTeam`) would have offered: an existing,
+     * active account holding a desk role. This took any string and wrote it onto the packet —
+     * a deactivated leaver, an assayer, a finance user, or an id that matches nobody — and the
+     * packet then sat "being worked" by a person who could never see it in their queue.
+     */
+    const [eligible] = await this.documentRepository.manager.query(
+      `SELECT u.id
+       FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.id = $1 AND u.is_active = true AND r.name = ANY($2)
+       LIMIT 1`,
+      [assigneeId, [...DATA_ENTRY_ROLES]],
+    );
+    if (!eligible) {
+      throw new BadRequestException(
+        'That person cannot be given this packet: only an active member of the data entry desk can be delegated work.',
+      );
+    }
+
     // Captured before the transition below, or the audit row would record the new status
     // as both the previous and the new one.
     const previousStatus = doc.status;
@@ -324,10 +359,20 @@ export class DocumentService {
    * validation case. Before this, nothing ever advanced a case past PENDING, so
    * the head's review queue and the data entry queue had no connection at all.
    */
-  async completeDataEntry(documentId: string, actorId: string): Promise<DocumentEntity> {
+  async completeDataEntry(documentId: string, actorId: string, actorRoles: readonly string[] = []): Promise<DocumentEntity> {
     const doc = await this.findOne(documentId);
     if (!doc.assignedToUserId) {
       throw new BadRequestException('This packet has not been delegated to anyone.');
+    }
+    /**
+     * A hand-back says "I did this work". Any desk operator could say it about a packet delegated
+     * to someone else — closing a colleague's work, and advancing the validation case, in their
+     * name. Only the assignee may; the head (or ADMIN) may close it on their behalf. Roles absent
+     * means no head override, never the reverse.
+     */
+    const isHead = expandRoles([...actorRoles]).some((r) => DATA_ENTRY_HEAD_ROLES.includes(r));
+    if (doc.assignedToUserId !== actorId && !isHead) {
+      throw new ForbiddenException('This packet is delegated to someone else. Only they, or the desk head, can hand it back.');
     }
     /**
      * A hand-back is a one-time act, not a status re-statement — unlike `updateStatus`, nothing
@@ -540,6 +585,31 @@ export class DocumentService {
       return groups;
     }
     return groups.filter(inScope);
+  }
+
+  /**
+   * An audited return already stored for one of `targetIds` whose bytes are exactly `sha256`.
+   *
+   * The idempotency question for a retried field upload: the phone sent the return, the server
+   * stored it and closed the job, and the answer never reached the phone. What decides "the same
+   * upload" is the content hash recorded from the bytes themselves (`content_sha256`, written by
+   * `create` from `deriveFileIntegrity`) — not the file name, which the app regenerates, and not
+   * the client's word. `targetIds` is every value an upload for one assignment may have been filed
+   * under (the assignment's own id — what the installed app sends — its assessment, its project
+   * branch). Oldest first, so a replay always names the row the first attempt created.
+   */
+  async findStoredReturnByContent(targetIds: string[], sha256: string): Promise<DocumentEntity | null> {
+    const targets = targetIds.filter(Boolean);
+    if (targets.length === 0 || !sha256) return null;
+    return this.documentRepository.findOne({
+      where: {
+        assessmentId: In(targets),
+        type: DocumentType.AUDITED_RETURN_PDF,
+        contentSha256: sha256,
+        isActive: true,
+      },
+      order: { createdAt: 'ASC' },
+    });
   }
 
   async create(dto: CreateDocumentDto, userId: string): Promise<DocumentEntity> {
@@ -1460,20 +1530,53 @@ export class DocumentService {
      * bank branch's paperwork is exactly what "you are not assigned to the branch this document
      * belongs to" is meant to gate, so a called-off assignment must not count as one.
      */
-    const linked = await this.assignmentRepository
+    const linked = await this.countEngagedAssignmentsOnAssessmentBranch(assessment, assayerId);
+
+    if (linked === 0) {
+      throw new BadRequestException('You are not assigned to the branch this document belongs to.');
+    }
+  }
+
+  /**
+   * Engaged assignments this assayer holds on the project/branch an assessment belongs to — the
+   * ownership test behind both `assertAssayerMayDownload` and `assertAssayerMayReceive`, written
+   * once so the two cannot drift.
+   */
+  private async countEngagedAssignmentsOnAssessmentBranch(
+    assessment: { projectId: string; branchId: string },
+    assayerId: string,
+  ): Promise<number> {
+    return this.assignmentRepository
       .createQueryBuilder('a')
       .innerJoin('project_branches', 'pb', 'pb.id = a.project_branch_id')
       .where('a.assayer_id = :assayerId', { assayerId })
       .andWhere('a.is_active = true')
-      .andWhere('a.status NOT IN (:...deadStatuses)', {
-        deadStatuses: [AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED],
-      })
+      // Accepted, under way, or delivered (a reopened redo still needs its packet). Not a
+      // cancelled/declined job — and not an offer still awaiting an answer: the packet is released
+      // to the assayer who took the job, and they are told when they accept.
+      .andWhere('a.status IN (:...engagedStatuses)', { engagedStatuses: ENGAGED_ASSIGNMENT_STATUSES })
       .andWhere('pb.project_id = :projectId', { projectId: assessment.projectId })
       .andWhere('pb.branch_id = :branchId', { branchId: assessment.branchId })
       .getCount();
+  }
 
+  /**
+   * `POST /documents/:id/receive` for a field assayer: only paperwork on a branch they hold an
+   * engaged assignment on. Unlike the download check, a document with no assessment is REFUSED —
+   * there is no branch to prove ownership against, and marking receipt is a write, so the absence
+   * of evidence is not permission.
+   */
+  async assertAssayerMayReceive(documentId: string, assayerId: string): Promise<void> {
+    const doc = await this.findOne(documentId);
+    const assessment = doc.assessmentId
+      ? await this.assessmentRepository.findOne({ where: { id: doc.assessmentId } }).catch(() => null)
+      : null;
+    if (!assessment || !assayerId) {
+      throw new ForbiddenException('You are not assigned to the branch this document belongs to.');
+    }
+    const linked = await this.countEngagedAssignmentsOnAssessmentBranch(assessment, assayerId);
     if (linked === 0) {
-      throw new BadRequestException('You are not assigned to the branch this document belongs to.');
+      throw new ForbiddenException('You are not assigned to the branch this document belongs to.');
     }
   }
 
@@ -1502,9 +1605,10 @@ export class DocumentService {
       .where('a.project_branch_id = :projectBranchId', { projectBranchId })
       .andWhere('a.assayer_id = :assayerId', { assayerId })
       .andWhere('a.is_active = true')
-      .andWhere('a.status NOT IN (:...deadStatuses)', {
-        deadStatuses: [AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED],
-      })
+      // Accepted, under way, or delivered (a reopened redo still needs its packet). Not a
+      // cancelled/declined job — and not an offer still awaiting an answer: the packet is released
+      // to the assayer who took the job, and they are told when they accept.
+      .andWhere('a.status IN (:...engagedStatuses)', { engagedStatuses: ENGAGED_ASSIGNMENT_STATUSES })
       .getCount();
 
     if (linked === 0) {
@@ -1643,10 +1747,20 @@ export class DocumentService {
       return saved;
     }
 
-    const assignment = await this.assignmentRepository.findOne({
+    /**
+     * The branch's CURRENT job, not whichever row the database returns first. A cancelled or
+     * declined row keeps `isActive: true`, so a branch that was cancelled and then re-staffed has
+     * two rows on the same assessment; `findOne` could pick the dead one and the live assayer was
+     * never told. Prefer a live row, newest first; fall back to any row only for the log line.
+     */
+    const candidates = await this.assignmentRepository.find({
       where: { assessmentId: doc.assessmentId, isActive: true },
       relations: ['assayer'],
+      order: { createdAt: 'DESC' },
     });
+    const assignment = candidates.find(
+      (a) => a.status !== AssignmentStatus.CANCELLED && a.status !== AssignmentStatus.REJECTED,
+    ) ?? candidates[0] ?? null;
 
     if (!assignment) {
       // Before the Assessment backfill this was the silent failure mode: assignments carried
@@ -1678,7 +1792,21 @@ export class DocumentService {
       );
     }
 
-    if (assignment?.assayer && assignmentIsLive) {
+    /**
+     * Only an assayer who has said yes is told (and only they can open it — see
+     * `assertAssayerMayDownload`). An offer still waiting for an answer is not their job yet; they
+     * are told the moment they accept (`notifyAcceptedAssayerOfDispatchedPacket`), under the same
+     * once-only key, so nobody hears twice.
+     */
+    const assayerHasAccepted = !!assignment && ENGAGED_ASSIGNMENT_STATUSES.includes(assignment.status);
+    if (assignment && assignmentIsLive && !assayerHasAccepted) {
+      this.logger.log(
+        `Document ${id} dispatched while assignment ${assignment.id} is ${assignment.status} — `
+        + 'the assayer will be told when they accept.',
+      );
+    }
+
+    if (assignment?.assayer && assignmentIsLive && assayerHasAccepted) {
       try {
         // Was `notificationService.create({ userId: assignment.assayerId })`, which passed an
         // assayer id into a column that foreign-keys to `users` — a FK violation swallowed by
@@ -1688,16 +1816,13 @@ export class DocumentService {
           assignment.assayerId,
           assignment.assayer.email,
           {
-            title: branchEmail ? 'Audit paperwork sent to the branch' : 'New Audit PDF',
             // What the assayer is told to *do* is the point. Telling somebody to download a file
             // that was posted to a branch sends them looking for something that is not there.
-            message: branchEmail
-              ? `The audit paperwork for "${doc.fileName}" has been sent to the branch at `
-                + `${branchEmail}. Collect it from them when you arrive.`
-              : `Audit PDF "${doc.fileName}" has been dispatched to you. Open your schedule to view and download.`,
+            ...DocumentService.packetNoticeText(doc.fileName, branchEmail),
+            dedupeKey: DocumentService.packetNoticeKey(doc.id, assignment.assayerId),
             // Kept as a hand-rolled notifyAssayer rather than migrated to a catalog emit: no
             // catalog entry covers "pre-field PDF dispatched to the assayer" (DOCUMENT_UPLOADED
-            // targets the office desk, DOCUMENT_REJECTED is the re-upload path), and inventing
+            // targets the office desk), and inventing
             // one is out of scope here. Only the link is corrected — the frontend declares
             // `/assignments` and reads the record from `?id=`; there is no `/assignments/:id`
             // route, so the old path fell through to the dashboard and the assayer never saw
@@ -1718,6 +1843,68 @@ export class DocumentService {
     }
 
     return saved;
+  }
+
+  /** The words of the "your paperwork is out" notice — one wording for dispatch and acceptance. */
+  private static packetNoticeText(fileName: string, branchEmail: string | null): { title: string; message: string } {
+    return branchEmail
+      ? {
+          title: 'Audit paperwork sent to the branch',
+          message: `The audit paperwork for "${fileName}" has been sent to the branch at `
+            + `${branchEmail}. Collect it from them when you arrive.`,
+        }
+      : {
+          title: 'New Audit PDF',
+          message: `Audit PDF "${fileName}" has been dispatched to you. Open your schedule to view and download.`,
+        };
+  }
+
+  /** Once per packet per assayer, whichever of dispatch or acceptance gets there first. */
+  static packetNoticeKey(documentId: string, assayerId: string): string {
+    return `PRE_FIELD_PACKET_RELEASED:${documentId}:a:${assayerId}`;
+  }
+
+  /**
+   * An assayer has just accepted a job (in the app, by the desk on their behalf, or on a
+   * reassignment confirmed on the call). If the branch's packet already went out — dispatched
+   * while the offer was still unanswered, or to the assayer this job was taken from — nobody has
+   * told THIS assayer, and dispatch cannot run again (only UPLOADED dispatches). Tell them now.
+   *
+   * Called after the acceptance has committed. Best-effort: never throws, because a missed notice
+   * must not undo an acceptance — the packet is on their job card either way.
+   */
+  async notifyAcceptedAssayerOfDispatchedPacket(
+    assignment: Pick<AssignmentEntity, 'id' | 'assayerId' | 'projectBranchId'>,
+    userId: string,
+  ): Promise<number> {
+    try {
+      if (!assignment.assayerId || !assignment.projectBranchId) return 0;
+      const docs = (await this.findByProjectBranch(assignment.projectBranchId)).filter(
+        (d) => d.type === DocumentType.PRE_FIELD_AUDIT_PDF && d.status === DocumentStatus.DISPATCHED,
+      );
+      let told = 0;
+      for (const doc of docs) {
+        const { inAppDelivered } = await this.notificationService.notifyAssayer(
+          assignment.assayerId,
+          null,
+          {
+            ...DocumentService.packetNoticeText(doc.fileName, doc.dispatchedToEmail ?? null),
+            link: `/assignments?id=${assignment.id}`,
+            data: { documentId: doc.id, assignmentId: assignment.id, type: 'document_dispatched' },
+            dedupeKey: DocumentService.packetNoticeKey(doc.id, assignment.assayerId),
+          },
+          userId,
+        );
+        if (inAppDelivered) told++;
+      }
+      return told;
+    } catch (err) {
+      this.logger.error(
+        `Could not tell the assayer on ${assignment.id} that the branch's packet is already out: `
+        + `${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
+    }
   }
 
   /**

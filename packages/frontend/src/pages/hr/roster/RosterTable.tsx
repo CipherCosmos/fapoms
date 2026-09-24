@@ -429,6 +429,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
               type="button"
               onClick={onShowMore}
               className="btn btn-secondary"
+              title={`Load ${Math.min(200, rows.length - visibleCount)} more rows`}
               style={{ padding: '5px 14px', fontSize: 'var(--text-xs)' }}
             >
               Show {Math.min(200, rows.length - visibleCount)} more

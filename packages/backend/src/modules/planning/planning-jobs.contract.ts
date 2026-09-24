@@ -47,11 +47,15 @@ export type ScopeSnapshot = Partial<GlobalScope> | null;
 export interface CoveragePlanJobData extends QueuedJobEnvelope {
   projectId: string;
   scope: ScopeSnapshot;
+  /** The campaign start date the plan's availability is judged on (F1). */
+  startDate?: string | null;
 }
 
 export interface ProjectCandidatesJobData extends QueuedJobEnvelope {
   projectId: string;
   scope: ScopeSnapshot;
+  /** The day availability is judged on (F1); absent, today. */
+  startDate?: string | null;
 }
 
 export interface DayPlansJobData extends QueuedJobEnvelope {

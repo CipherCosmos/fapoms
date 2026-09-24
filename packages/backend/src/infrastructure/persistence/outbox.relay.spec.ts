@@ -112,6 +112,17 @@ describe('OutboxRelay', () => {
       expect(failure.patch.failedAt).toBeInstanceOf(Date);
     });
 
+    it('reports a dead letter through the alerter, not only the log', async () => {
+      due = [row({ id: 'e1', eventName: 'assignment:status-changed', attempts: MAX_ATTEMPTS - 1 })];
+      withAsyncPublisher(0);
+      const report = jest.fn();
+      relay.alerter = { report };
+
+      await relay.drain();
+
+      expect(report).toHaveBeenCalledWith({ method: 'OUTBOX', route: '/outbox/assignment:status-changed', errorName: 'DeadLetter' });
+    });
+
     it('still dispatches normally when somebody is listening', async () => {
       due = [row({ id: 'e1', eventName: 'assignment:status-changed' })];
       withAsyncPublisher(1);

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository } from 'typeorm';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { HolidayService } from '../holiday/holiday.service';
@@ -8,7 +8,6 @@ import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assaye
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { businessDateKey, BypassableRule, AssignmentRule } from '@fapoms/shared';
-import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
 export interface ConstraintContext {
@@ -74,7 +73,10 @@ export class ConstraintEvaluator {
   /**
    * Every rule that decides whether one assayer may work one date, in one place.
    *
-   * These four checks existed individually and each caller picked its own subset, so the
+   * Three checks now — holiday, leave, project timeline. The fourth, double-booking, was retired
+   * by the owner on 2026-09-24: an assayer may take several branches on one day.
+   *
+   * These checks existed individually and each caller picked its own subset, so the
    * answer to "can this assayer work this date?" depended on which screen asked. Creating an
    * assignment checked holidays and double-booking; SchedulingService.create checked leave,
    * project timeline and holidays; rescheduling checked none of them; and the candidate list
@@ -97,8 +99,7 @@ export class ConstraintEvaluator {
     scheduledDate: Date;
     excludeAssignmentId?: string;
   }): Promise<ConstraintResult> {
-    const { assayer, project, scheduledDate, excludeAssignmentId } = params;
-    const assayerId = params.assayerId ?? assayer?.id ?? null;
+    const { assayer, project, scheduledDate } = params;
 
     const holiday = await this.checkHoliday(params.branchState || '', scheduledDate, params.clientId ?? undefined);
     if (!holiday.passed) return holiday;
@@ -113,53 +114,9 @@ export class ConstraintEvaluator {
       if (!timeline.passed) return timeline;
     }
 
-    if (assayerId) {
-      const booking = await this.checkDoubleBooking(assayerId, scheduledDate, excludeAssignmentId);
-      if (!booking.passed) return booking;
-    }
-
-    return { passed: true };
-  }
-
-  /**
-   * Evaluates if the assayer has a double-booking conflict on the scheduled date.
-   */
-  async checkDoubleBooking(
-    assayerId: string,
-    scheduledDate: Date,
-    excludeAssignmentId?: string,
-  ): Promise<ConstraintResult> {
-    const doubleBooked = await this.assignmentRepository.findOne({
-      where: {
-        assayerId,
-        // `scheduledDate` is a `date` column — match on the date-only key, not a Date-with-time,
-        // which never equals a midnight `date` value in Postgres and silenced this guard.
-        scheduledDate: businessDateKey(scheduledDate) as any,
-        // Every status that makes the day exclusive — not just ACCEPTED, and not only the
-        // committed ones. Checking in moves an assignment to CHECKED_IN, which made the person
-        // invisible to this guard: they could be booked a second branch for the same date while
-        // standing in the first one. PENDING counts too, because
-        // `idx_assignments_single_active_assayer_day` counts it, and a rule the database will
-        // enforce anyway is better stated here where the message can name the conflict.
-        status: In(DAY_EXCLUSIVE_ASSIGNMENT_STATUSES),
-        isActive: true,
-      },
-    });
-
-    // Moving an assignment must not collide with the assignment being moved.
-    if (doubleBooked && excludeAssignmentId && doubleBooked.id === excludeAssignmentId) {
-      return { passed: true };
-    }
-
-    if (doubleBooked) {
-      if (this.ruleBypass.isBypassedSync(BypassableRule.DOUBLE_BOOKING)) {
-        return this.allowBypassed(BypassableRule.DOUBLE_BOOKING, `would have collided with ${doubleBooked.assignmentNumber}`);
-      }
-      return {
-        passed: false,
-        reason: `Assayer double booking: already committed to assignment ${doubleBooked.assignmentNumber} on ${businessDateKey(scheduledDate)}.`,
-      };
-    }
+    // No "already booked that day" check any more: owner decision 2026-09-24 (E2) — one assayer
+    // may hold several branches on the same day, with no limit. `assayerId` and
+    // `excludeAssignmentId` stay in the signature so existing callers need not change.
 
     return { passed: true };
   }
@@ -196,39 +153,41 @@ export class ConstraintEvaluator {
 
   /**
    * Evaluates if the scheduled date lies within the project start and end dates.
+   *
+   * Compared as IST calendar keys, both ends inclusive (F20, 2026-09-25). This compared instants:
+   * `project.startDate` is a date column (midnight), the scheduled date usually carries a time or
+   * an IST-midnight offset, so the last day of an engagement failed as "after the end date" and a
+   * plan run at 09:00 on the first day could read as before it — depending on the server's zone.
    */
   checkProjectTimeline(project: ProjectEntity, scheduledDate: Date): ConstraintResult {
-    // Guarded once at the top rather than at each end of the window — the rule is "the date must
-    // be inside the engagement", and suspending it suspends both bounds.
-    if (this.ruleBypass.isBypassedSync(BypassableRule.PROJECT_TIMELINE)) {
-      const outside =
-        (project.startDate && scheduledDate.getTime() < new Date(project.startDate).getTime()) ||
-        (project.endDate && scheduledDate.getTime() > new Date(project.endDate).getTime());
-      if (outside) {
-        return this.allowBypassed(
-          BypassableRule.PROJECT_TIMELINE,
-          `${businessDateKey(scheduledDate)} is outside ${project.startDate ?? '—'}..${project.endDate ?? '—'}`,
-        );
-      }
+    const dayKey = businessDateKey(scheduledDate);
+    const keyOf = (v: Date | string | null | undefined): string | null => {
+      if (v == null || v === '') return null;
+      return typeof v === 'string' ? v.slice(0, 10) : businessDateKey(v);
+    };
+    const startKey = keyOf(project.startDate as any);
+    const endKey = keyOf(project.endDate as any);
+    const before = !!startKey && dayKey < startKey;
+    const after = !!endKey && dayKey > endKey;
+    // Guarded once rather than at each end of the window — the rule is "the date must be inside
+    // the engagement", and suspending it suspends both bounds.
+    if ((before || after) && this.ruleBypass.isBypassedSync(BypassableRule.PROJECT_TIMELINE)) {
+      return this.allowBypassed(
+        BypassableRule.PROJECT_TIMELINE,
+        `${dayKey} is outside ${startKey ?? '—'}..${endKey ?? '—'}`,
+      );
     }
-    const scheduledTime = scheduledDate.getTime();
-    if (project.startDate) {
-      const projectStart = new Date(project.startDate).getTime();
-      if (scheduledTime < projectStart) {
-        return {
-          passed: false,
-          reason: `Timeline Conflict: Scheduled date is before project start date ${project.startDate}.`,
-        };
-      }
+    if (before) {
+      return {
+        passed: false,
+        reason: `Timeline Conflict: Scheduled date is before project start date ${startKey}.`,
+      };
     }
-    if (project.endDate) {
-      const projectEnd = new Date(project.endDate).getTime();
-      if (scheduledTime > projectEnd) {
-        return {
-          passed: false,
-          reason: `Timeline Conflict: Scheduled date is after project end date ${project.endDate}.`,
-        };
-      }
+    if (after) {
+      return {
+        passed: false,
+        reason: `Timeline Conflict: Scheduled date is after project end date ${endKey}.`,
+      };
     }
     return { passed: true };
   }
@@ -310,10 +269,57 @@ export class ConstraintEvaluator {
     project: ProjectEntity,
     scheduledDate?: Date,
   ): ConstraintResult {
+    return this.checkRequirements(
+      assayerEntity,
+      project.requiredSkills ?? [],
+      project.requiredCertifications ?? [],
+      scheduledDate,
+      '',
+    );
+  }
+
+  /**
+   * The CLIENT's own required skills and certifications (`planningPreferences.requiredSkills` /
+   * `.requiredCertifications`), checked exactly like a project's.
+   *
+   * Owner decision 2026-09-25: these are a hard requirement, not a preference. They used to be read
+   * only by the client-preference SCORER, which dropped a non-matching candidate to 0 on one
+   * dimension — so a person the bank had said must hold a certificate still reached the list (a
+   * little lower down), and the write path never looked at the field. Now the engine excludes on it
+   * and create/reassign refuse on it — both overridable with a written reason, like the project's
+   * own skills (same rule, `SKILLS_AND_CERTIFICATIONS`).
+   *
+   * The preferences arrive from jsonb the API does not type-check, so anything that is not a list
+   * of non-empty strings is ignored rather than trusted.
+   */
+  checkClientRequirements(
+    assayerEntity: AssayerEntity,
+    planningPreferences: Record<string, any> | null | undefined,
+    scheduledDate?: Date,
+  ): ConstraintResult {
+    const list = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : [];
+    return this.checkRequirements(
+      assayerEntity,
+      list(planningPreferences?.requiredSkills),
+      list(planningPreferences?.requiredCertifications),
+      scheduledDate,
+      'The client requires ',
+    );
+  }
+
+  private checkRequirements(
+    assayerEntity: AssayerEntity,
+    requiredSkills: string[],
+    requiredCertifications: string[],
+    scheduledDate: Date | undefined,
+    /** Empty for a project's requirements; names the client for the client's own. */
+    clientPrefix: string,
+  ): ConstraintResult {
     const assayer = assayerEntity as AssayerWithWorkforceAttributes;
-    if (project.requiredSkills && project.requiredSkills.length > 0) {
-      const assayerSkills = (assayer.skills || []).map((s) => s.trim().toLowerCase());
-      const missingSkills = project.requiredSkills.filter(
+    if (requiredSkills.length > 0) {
+      const assayerSkills = (assayer.skills || []).map((s) => String(s).trim().toLowerCase());
+      const missingSkills = requiredSkills.filter(
         (skill) => !assayerSkills.includes(skill.trim().toLowerCase())
       );
       if (missingSkills.length > 0) {
@@ -323,12 +329,14 @@ export class ConstraintEvaluator {
         return {
           passed: false,
           rule: AssignmentRule.SKILLS_AND_CERTIFICATIONS,
-          reason: `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`,
+          reason: clientPrefix
+            ? `${clientPrefix}skills this assayer lacks: ${missingSkills.join(', ')}`
+            : `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`,
         };
       }
     }
 
-    if (project.requiredCertifications && project.requiredCertifications.length > 0) {
+    if (requiredCertifications.length > 0) {
       /**
        * A certification the assayer no longer holds does not qualify them.
        *
@@ -342,8 +350,8 @@ export class ConstraintEvaluator {
       const asOf = scheduledDate ?? new Date();
       const assayerCerts = (assayer.certifications || [])
         .filter((c) => !c.expiryDate || new Date(c.expiryDate) > asOf)
-        .map((c) => c.name.trim().toLowerCase());
-      const missingCerts = project.requiredCertifications.filter(
+        .map((c) => String(c.name ?? '').trim().toLowerCase());
+      const missingCerts = requiredCertifications.filter(
         (cert) => !assayerCerts.includes(cert.trim().toLowerCase())
       );
       if (missingCerts.length > 0) {
@@ -353,7 +361,9 @@ export class ConstraintEvaluator {
         return {
           passed: false,
           rule: AssignmentRule.SKILLS_AND_CERTIFICATIONS,
-          reason: `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,
+          reason: clientPrefix
+            ? `${clientPrefix}a valid certification this assayer lacks (missing or expired): ${missingCerts.join(', ')}`
+            : `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,
         };
       }
     }

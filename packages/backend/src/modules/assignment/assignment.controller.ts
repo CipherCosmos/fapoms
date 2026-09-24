@@ -18,17 +18,24 @@ import {
   BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
-import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES, AssignmentStatus } from '@fapoms/shared';
+import {
+  SystemRole,
+  ASSIGNMENT_ISSUE_CATEGORIES,
+  AssignmentStatus,
+  AssignmentAction,
+  ASSAYER_REQUESTABLE_ASSIGNMENT_TRANSITIONS,
+} from '@fapoms/shared';
+import { evaluateOwnership } from './assignment-capabilities';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
-import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
+import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto, MAX_PLANNED_DAY_LOOP_KM } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
 import { OperationalIntegrityService } from './operational-integrity.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, Max, MaxLength } from 'class-validator';
 
 /**
  * Request bodies for the two assignment-mutating routes.
@@ -108,6 +115,46 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
    */
   @IsOptional() @IsString() @MaxLength(100)
   clientRequestId?: string;
+
+  /** The day plan's loop for its first stop — see `CreateAssignmentDto.plannedDayLoopKm`. */
+  @IsOptional() @IsNumber() @Min(0) @Max(MAX_PLANNED_DAY_LOOP_KM)
+  plannedDayLoopKm?: number;
+
+  @IsOptional() @IsNumber() @Min(0) @Max(24 * 60)
+  plannedDayLoopMinutes?: number;
+}
+
+/**
+ * `POST /assignments/:id/reassign`. The move, the desk's typed fee, a new date and the desk's
+ * record of the incoming assayer's acceptance are ONE request and one transaction (owner decision
+ * 2026-09-24) — the planning screen used to send three, and a failure after the first left the job
+ * moved at the rate card's price with nobody's acceptance recorded.
+ */
+class ReassignAssignmentRequestDto {
+  @IsString() @IsNotEmpty()
+  newAssayerId: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  reason: string;
+
+  @IsOptional() @IsNumber()
+  expectedVersion?: number;
+
+  @IsOptional() @IsString() @MaxLength(100)
+  clientRequestId?: string;
+
+  /** The fee the desk typed for the incoming assayer; same ceiling as create (twice the quote). */
+  @IsOptional() @IsNumber() @Min(0)
+  proposedFee?: number;
+
+  @IsOptional() @IsDateString()
+  scheduledDate?: string;
+
+  @IsOptional() @IsBoolean()
+  acceptOnBehalf?: boolean;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  acceptanceReason?: string;
 }
 
 /** Escalation reason is free text and optional; the endpoint applies a default when absent. */
@@ -189,6 +236,27 @@ function requireRealCoordinate(body: any, action: 'Check-in' | 'Check-out'): { l
   return { lat, lng };
 }
 
+/**
+ * Which field-app action a requested target status is, for the ownership evaluator's label. The
+ * answer only names the gate; the ownership rule itself does not vary by action.
+ */
+function ownershipActionFor(targetStatus: string): AssignmentAction {
+  if (targetStatus === AssignmentStatus.REJECTED) return AssignmentAction.DECLINE;
+  if (targetStatus === AssignmentStatus.CHECKED_IN || targetStatus === AssignmentStatus.IN_PROGRESS) {
+    return AssignmentAction.CHECK_IN;
+  }
+  return AssignmentAction.ACCEPT;
+}
+
+/**
+ * The written reason an office check-in must carry (owner decision 2026-09-24, E12). Read from
+ * `officeReason`, else `reason`, else `remarks` — whichever the desk's client sends.
+ */
+function officeReasonFrom(body: any): string | undefined {
+  const raw = body?.officeReason ?? body?.reason ?? body?.remarks;
+  return typeof raw === 'string' ? raw : undefined;
+}
+
 @ApiTags('Assignments')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -244,6 +312,10 @@ export class AssignmentController {
       scope: listScope,
       limit: limit ? Number(limit) : undefined,
       before,
+      // What the assayer may do next on each job, and why not — the server's own verdict, built
+      // by the same evaluators the action routes enforce with. Only for the assayer's own read;
+      // an additive field older app builds ignore.
+      capabilitiesFor: isStaff ? undefined : assayerId,
     });
     // `items` stays an array: that is the shape the shipped app reads, and paging is additive.
     return { success: true, items: assignments, meta: { hasMore, nextCursor, scope: listScope ?? 'all' } };
@@ -294,6 +366,11 @@ export class AssignmentController {
     const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy, {
       expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
       clientRequestId: body.clientRequestId,
+      // Optional, from new app builds: when the phone actually arrived. Whether it is used is the
+      // server's decision (`decideCheckInTime`); the geofence above is still asked of THIS fix.
+      arrivedAt: body.arrivedAt,
+      // Required when the office checks the assayer in (E12); ignored for the assayer's own.
+      officeReason: officeReasonFrom(body),
     });
     if (!result.success) {
       return {
@@ -535,7 +612,19 @@ export class AssignmentController {
   ) {
     // No-op for the mobile app: an ASSAYER principal carries no region assignment.
     await this.regionGuard.assertAssignmentInScope(id, scope);
-    const assignment = await this.assignmentService.findOne(id);
+    const roles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    const isStaff = roles.some((r) => STAFF_ROLES.includes(r as SystemRole));
+    // Staff see which project the job belongs to (the detail drawer names it); only its identity
+    // is sent, not the project's commercial fields. The field app does not need it.
+    const assignment = await this.assignmentService.findOne(id, { withProject: isStaff });
+    const project = (assignment.projectBranch as any)?.project;
+    if (project) {
+      (assignment.projectBranch as any).project = {
+        id: project.id, name: project.name, projectCode: project.projectCode ?? null, clientId: project.clientId ?? null,
+      };
+    }
 
     /**
      * An assayer may read their own assignment and no one else's.
@@ -551,10 +640,7 @@ export class AssignmentController {
      * simply missed. Staff roles are unaffected — they are scoped by region, which is the control
      * that applies to them.
      */
-    const roles: string[] = (req.user?.roles ?? [])
-      .map((r: any) => (typeof r === 'string' ? r : r?.name))
-      .filter(Boolean);
-    if (roles.includes(SystemRole.ASSAYER) && !roles.some((r) => STAFF_ROLES.includes(r as SystemRole))
+    if (roles.includes(SystemRole.ASSAYER) && !isStaff
       && assignment.assayerId !== req.user?.id) {
       throw new ForbiddenException('You can only open an assignment of your own.');
     }
@@ -663,14 +749,14 @@ export class AssignmentController {
        * `COUNTER_OFFER`/`NEGOTIATION`/`PENDING` were in this list while in-app negotiation
        * existed; they left with it (the explicit refusal above answers the old builds).
        */
-      const ASSAYER_TRANSITIONS = ['ACCEPTED', 'REJECTED', 'CHECKED_IN', 'IN_PROGRESS'];
-      if (!ASSAYER_TRANSITIONS.includes(targetStatus)) {
+      // One list, in `@fapoms/shared` beside the transition table it is a permission over.
+      if (!(ASSAYER_REQUESTABLE_ASSIGNMENT_TRANSITIONS as readonly string[]).includes(targetStatus)) {
         throw new ForbiddenException(
           'Cancelling or completing an assignment is done by the operations team, not from the field app.',
         );
       }
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(ownershipActionFor(targetStatus), owned, userId).allowed) {
         throw new ForbiddenException('You can only act on an assignment that is assigned to you.');
       }
     }
@@ -706,12 +792,13 @@ export class AssignmentController {
       // then be paid that figure. This guard shipped in 85aa82bf and was accidentally reverted
       // by 89fd422e ten minutes later; the spec beside this controller now pins it.
       const deskSuppliedFee = callerIsAssayer ? undefined : (body.fee ?? body.agreedFee);
+      const deskScheduledDate = callerIsAssayer ? undefined : (body.scheduledDate ? String(body.scheduledDate) : undefined);
       assignment = await this.assignmentService.acceptOffer(
         id,
         userId,
         deskSuppliedFee != null && !isNaN(Number(deskSuppliedFee)) ? Number(deskSuppliedFee) : undefined,
         body.reason ?? body.remarks,
-        cmdOptions,
+        { ...cmdOptions, scheduledDate: deskScheduledDate },
       );
     } else if (targetStatus === 'REJECTED') {
       /**
@@ -750,7 +837,7 @@ export class AssignmentController {
         body.syncToken,
         userId,
         accuracy,
-        cmdOptions,
+        { ...cmdOptions, arrivedAt: body.arrivedAt, officeReason: officeReasonFrom(body) },
       );
       /**
        * A refused check-in is a failure, on this route too.
@@ -825,7 +912,7 @@ export class AssignmentController {
     const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
     if (callerIsAssayer) {
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(AssignmentAction.ACCEPT, owned, userId).allowed) {
         throw new ForbiddenException('You can only accept an assignment that is assigned to you.');
       }
     }
@@ -860,7 +947,7 @@ export class AssignmentController {
     const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
     if (callerIsAssayer) {
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(AssignmentAction.DECLINE, owned, userId).allowed) {
         throw new ForbiddenException('You can only reject an assignment that is assigned to you.');
       }
     }
@@ -913,8 +1000,11 @@ export class AssignmentController {
       .filter(Boolean);
     const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
     if (callerIsAssayer) {
+      // The shared ownership predicate, like every other route here — and with the action the
+      // generic transition route maps IN_PROGRESS to, so `/start` and `/transition IN_PROGRESS`
+      // cannot answer the same assayer differently.
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(ownershipActionFor(AssignmentStatus.IN_PROGRESS), owned, userId).allowed) {
         throw new ForbiddenException('You can only start an assignment that is assigned to you.');
       }
     }
@@ -948,7 +1038,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Domain Command: Reassign assignment to a new assayer with historical lineage' })
   async reassign(
     @Param('id') id: string,
-    @Body() body: { newAssayerId: string; reason: string; expectedVersion?: number; clientRequestId?: string },
+    @Body() body: ReassignAssignmentRequestDto,
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
@@ -968,6 +1058,10 @@ export class AssignmentController {
       {
         expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
         clientRequestId: body.clientRequestId,
+        proposedFee: body.proposedFee != null ? Number(body.proposedFee) : undefined,
+        scheduledDate: body.scheduledDate,
+        acceptOnBehalf: body.acceptOnBehalf === true,
+        acceptanceReason: body.acceptanceReason,
       },
     );
     return assignment;
@@ -1051,7 +1145,7 @@ export class AssignmentController {
     const isStaff = roles.some((r) => (STAFF_ROLES as string[]).includes(r));
     if (!isStaff) {
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(AssignmentAction.REPORT_ISSUE, owned, userId).allowed) {
         throw new ForbiddenException('You can only report an issue on an assignment that is assigned to you.');
       }
     }

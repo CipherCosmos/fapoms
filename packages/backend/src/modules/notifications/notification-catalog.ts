@@ -280,10 +280,10 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   ASSIGNMENT_REJECTED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
-    // Also to ADMINS: this is the auto-decline-on-negotiation-limit path too (see
-    // AssignmentService.proposeCounterFee), and an OPS-only audience resolved to zero
-    // recipients on a deployment with no active OPERATIONS_MANAGER/EXECUTIVE — a stalled
-    // branch nobody was told about. SLA_BREACHED and ESCALATED already carry this fallback.
+    // Also to ADMINS: an OPS-only audience resolved to zero recipients on a deployment with no
+    // active operations user — a stalled branch nobody was told about. SLA_BREACHED and
+    // ESCALATED already carry this fallback. (A timed-out offer is NOT reported through this
+    // type: `autoDeclineExpiredOffers` suppresses it and sends ASSIGNMENT_AUTO_DECLINED alone.)
     roles: [...OPS, ...ADMINS],
     // Same permission /planning's own route requires (planning.controller.ts) — a custom
     // role that can already open the planning queue a decline needs a replacement from.
@@ -299,15 +299,34 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
    * polling — the assignment simply vanishes from a later fetch — so an assayer who
    * is told nothing keeps it on their schedule and can drive to a branch that no
    * longer expects them. Push, always.
+   *
+   * The assayer's copy only. It used to reach OPS too, so the desk read "Your audit at …" about
+   * somebody else's work; the office's copy is ASSIGNMENT_CANCELLED_DESK below, emitted beside
+   * this one by the same cancellation.
    */
   ASSIGNMENT_CANCELLED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
-    roles: OPS,
+    roles: [],
     special: ['ASSIGNED_ASSAYER'],
     channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Assignment cancelled',
     body: 'Your audit at ${branchName} on ${scheduledDate} has been cancelled. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The desk's copy of a cancellation, in the third person and naming the assayer. Same audience,
+   * priority and channels the combined type had for OPS, so nobody who heard about cancellations
+   * before stops hearing — only the wording changed.
+   */
+  ASSIGNMENT_CANCELLED_DESK: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: OPS,
+    channels: IN_APP_PUSH_AND_EMAIL,
+    title: 'Assignment cancelled',
+    body: 'Audit at ${branchName} on ${scheduledDate} cancelled — ${assayerName}. Reason: ${reason}',
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
@@ -349,6 +368,133 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     title: 'Assignment reassigned',
     body: '${branchName} on ${scheduledDate} moved from ${previousAssayerName} to ${newAssayerName}. Reason: ${reason}',
     link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  // ── Job changes the assayer used to hear nothing about ─────────────────────
+  // Owner decision 2026-09-24: these four changes reached no one in the field. Worded for a
+  // field worker reading a lock screen — short, plain, one thing to do. The desk's own copies
+  // (where they exist) stay separate, in the third person. Every one also triggers the silent
+  // refresh push (`AssignmentRefreshPushService`), so the app is already up to date when opened.
+  /** A completed job put back to open by the office (`AssignmentService.reopen`). */
+  ASSIGNMENT_REOPENED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job opened again',
+    body: 'The office opened your job at ${branchName} again. Please open it to see what is needed. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The office checked the assayer in on their behalf (`AssignmentService.recordCheckIn`, staff
+   * path) — owner decision 2026-09-24 (E12). Neutral on purpose: a record of what happened and why,
+   * not an accusation. The office's reason is always present (the route refuses without one).
+   */
+  ASSIGNMENT_CHECKED_IN_BY_OFFICE: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Checked in by the office',
+    body: 'The office checked you in at ${branchName}. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * A job reached COMPLETED — by any path: the office completing it, the assayer's return upload
+   * closing it, or the calendar's completion (owner decision 2026-09-24). Always sent to the
+   * assayer, including when their own upload closed it: it is the confirmation that it did.
+   * `skipActor` does not apply to the assayer (actors are office users), and is false to say so.
+   */
+  ASSIGNMENT_COMPLETED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job complete',
+    body: 'Your job at ${branchName} is complete. Thank you.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: false,
+  },
+  /**
+   * The desk's copy of a completion, for whoever created the job (`RECORD_OWNER`, from the
+   * assignment's `createdBy`). Skipped when that person is the one who completed it.
+   */
+  ASSIGNMENT_COMPLETED_DESK: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Audit completed',
+    body: 'Audit at ${branchName} completed — ${assayerName}.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The date of an offer changed through the edit route (`AssignmentService.update`). Only when the
+   * day actually moved; `alsoNote` is filled when the office's note changed in the same save.
+   */
+  ASSIGNMENT_DATE_CHANGED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job date changed',
+    body: 'Your job at ${branchName} is now on ${newDate}. ${alsoNote}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The office's note on an offer changed through the edit route, and the date did not. A fee
+   * change alone sends nothing visible: the assayer's app does not show fees.
+   */
+  ASSIGNMENT_NOTE_CHANGED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'New note from the office',
+    body: 'The office changed the note on your job at ${branchName}. Open the job to read it.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The desk escalated the job (`AssignmentService.escalate`). The desk's reason is NOT repeated:
+   * it is written for colleagues and may be about the assayer.
+   */
+  ASSIGNMENT_MARKED_URGENT: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Urgent job',
+    body: 'The office marked your job at ${branchName} as urgent. Please open it now.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * Work cancelled because the office closed the branch or stopped the whole project
+   * (`BranchService.remove`, `ProjectService.cancelProject`). Those paths cancel with a direct
+   * UPDATE and used to tell the assayer nothing — the failure ASSIGNMENT_CANCELLED exists to
+   * prevent. `because` is one of two fixed phrases the emitting code chooses.
+   */
+  ASSIGNMENT_CANCELLED_BY_CLOSURE: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job cancelled',
+    body: 'Your job at ${branchName} is cancelled because ${because}. Do not go to the branch for it.',
+    link: '/assignments',
     skipActor: true,
   },
   // ASSIGNMENT_COUNTER_OFFERED lived here until in-app fee negotiation was removed: the
@@ -415,18 +561,10 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
-  /** A cancelled visit is as time-critical as a moved one, and was the only transition that told the assayer nothing. */
-  SCHEDULE_CANCELLED: {
-    category: NotificationCategory.ASSIGNMENT,
-    priority: NotificationPriority.HIGH,
-    roles: [],
-    special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
-    title: 'Audit cancelled',
-    body: 'Your audit at ${branchName} on ${scheduledDate} is no longer scheduled.',
-    link: '/assignments?id=${assignmentId}',
-    skipActor: true,
-  },
+  // SCHEDULE_CANCELLED lived here with nothing able to raise it — ScheduleStatus has no CANCELLED
+  // member and no transition reaches one. Removed (owner decision 2026-09-24) rather than kept
+  // waiting: an assignment's own cancellation already reaches the assayer as ASSIGNMENT_CANCELLED,
+  // and a cancellation caused by a branch or project closing as ASSIGNMENT_CANCELLED_BY_CLOSURE.
   ASSIGNMENT_AUTO_DECLINED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
@@ -611,17 +749,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/documents',
     skipActor: true,
   },
-  DOCUMENT_REJECTED: {
-    category: NotificationCategory.DOCUMENT,
-    priority: NotificationPriority.HIGH,
-    roles: [],
-    special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
-    title: 'Document needs re-upload',
-    body: '${documentName} for ${branchName} was not accepted. Reason: ${reason}',
-    link: '/assignments?id=${assignmentId}',
-    skipActor: true,
-  },
+  // DOCUMENT_REJECTED (audit-packet re-upload) lived here and was never emitted by anything.
+  // Removed 2026-09-24. A document the office sends back to an assayer is
+  // ASSAYER_IDENTITY_DOCUMENT_REJECTED below.
 
   // ── Data entry hand-offs ────────────────────────────────────────────────
   // Work moving between desks. Each hand-off previously relied on the receiving
@@ -790,15 +920,60 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/billing?tab=assayer-invoices',
     skipActor: true,
   },
+  /*
+    Sent when the bill is cleared for payment — the HOD's final approval (2026-09-24), not the
+    office's approval before it. Telling the assayer "approved" at the office step would be a promise
+    the HOD could still take back.
+  */
   ASSAYER_INVOICE_APPROVED: {
     category: NotificationCategory.BILLING,
     priority: NotificationPriority.HIGH,
     roles: [],
     special: ['ASSIGNED_ASSAYER'],
     channels: IN_APP_PUSH_AND_EMAIL,
-    title: 'Invoice approved',
-    body: 'Your invoice ${invoiceNumber} (${count} audits) has been approved. Your earnings are updated in the app.',
+    title: 'Your bill is approved for payment',
+    body: 'Your bill ${invoiceNumber} (${count} audits) is approved for payment. Your earnings are updated in the app.',
     link: '/earnings',
+    skipActor: true,
+  },
+
+  /*
+    THE HOD'S FINAL APPROVAL (2026-09-24). Something the office approved is waiting for the HOD:
+    an assayer bill, a payout approved without a bill, an expense reimbursement, or a client invoice.
+    Admins by name; a custom role (an "HOD") only when it holds the final-approval permission AND
+    the billing read the queue's page needs — `usersHoldingPermission` requires every listed one.
+    Deduplicated per item and round by the emitter; bursts (a bulk approval) collapse into one line.
+  */
+  BILLING_FINAL_APPROVAL_NEEDED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['BILLING:FINAL_APPROVE:ORGANIZATION', 'BILLING:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Final approval needed',
+    body: '${what} (₹${amount}) was approved by ${officeName} and is waiting for your final approval.',
+    link: '/billing?tab=final',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 300,
+      title: '${count} items need your final approval',
+      body: '${count} bills, payouts or invoices approved by the office are waiting for your final approval.',
+      link: '/billing?tab=final',
+    },
+  },
+  /*
+    And back: the HOD sent it back to the office, with the reason — to whoever did the office's part
+    (approved the payout or bill, or sent the invoice up), addressed by name as RECORD_OWNER.
+  */
+  BILLING_FINAL_APPROVAL_REJECTED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Sent back by the HOD: ${what}',
+    body: '${hodName} did not give ${what} the final approval: "${reason}". It is back with the office to fix and approve again.',
+    link: '/billing?tab=${tab}',
     skipActor: true,
   },
 
@@ -901,8 +1076,8 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   /**
    * The office could not accept a document, and the person who sent it needs to know.
    *
-   * Named for the identity document rather than just DOCUMENT_REJECTED, which already exists on
-   * this catalogue for the audit-packet pipeline and is a different resource entirely.
+   * Named for the identity document. (A generic DOCUMENT_REJECTED for the audit-packet pipeline
+   * used to sit beside it, never emitted; it was removed on 2026-09-24.)
    *
    * Addressed to nobody in the office: `roles: []`. Every other workforce notification goes to the
    * desk, and this one goes the other way — it is the only thing in the system that asks an
@@ -977,6 +1152,155 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     body: 'Background verification for ${assayerName} was recorded: ${outcome}.',
     link: '/hr',
     skipActor: true,
+  },
+  /*
+    THE APPROVAL BEFORE TRAINING (2026-09-23): the approver's queue. Admins by name; a custom role
+    only when it holds BOTH the approve permission and the roster's own view permission — the link
+    is the person's record, and an approver who could not open it could not act on it either
+    (`usersHoldingPermission` requires every listed permission). OPERATIONS is not the audience:
+    HR prepares the file, and the one who sent it up is the actor, skipped.
+  */
+  ASSAYER_SENT_FOR_APPROVAL: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Approval needed: ${assayerName}',
+    body: '${sentBy} sent ${assayerName} up for approval before training.${noteLine} Approve, reject with a reason, or ask HR for more.',
+    // The approver's review — the whole file and the decision on one screen (2026-09-24).
+    link: '/hr/approvals/${assayerId}',
+    skipActor: true,
+  },
+  /** HR answered what the approver asked — it is back with them. Same audience as above. */
+  ASSAYER_APPROVAL_ANSWERED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'HR answered on ${assayerName}',
+    body: '${answeredBy} answered what was asked before approving ${assayerName}: "${answer}". It is back with you to decide.',
+    // The approver's review — the whole file and the decision on one screen (2026-09-24).
+    link: '/hr/approvals/${assayerId}',
+    skipActor: true,
+  },
+  /*
+    The other direction: what the approver decided, told to the HR people who prepared the round —
+    whoever sent it up and anyone who answered on it (one emit each, as RECORD_OWNER). Not the
+    whole HR desk: the file is theirs, and a question broadcast to everybody is answered by nobody.
+  */
+  ASSAYER_APPROVAL_INFO_REQUESTED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'More needed before ${assayerName} is approved',
+    body: '${askedBy} asked: "${question}". Answer it on their record to send them back for approval.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_APPROVAL_APPROVED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: '${assayerName} approved — ${outcome}',
+    body: '${decidedBy} approved ${assayerName}.${noteLine}',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_APPROVAL_REJECTED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
+    title: '${assayerName} was not approved',
+    body: '${decidedBy} did not approve ${assayerName}: "${reason}". They are parked as not approved; they can be put up for approval again from their record.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  /*
+    RE-CHECKS OVER TIME (2026-09-23). An adverse re-check on somebody working goes to the approvers
+    (same audience and reasoning as ASSAYER_SENT_FOR_APPROVAL); what they decide goes back to
+    whoever recorded the check. The due/overdue reminders go to the HR desk, collapsed, because the
+    first round falls due for the whole roster on one date and must not arrive as a thousand rows.
+  */
+  ASSAYER_RECHECK_ADVERSE: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Decision needed: ${assayerName}\'s ${checkLabel}',
+    body: '${checkLabel} for ${assayerName} came back ${outcome}: ${findings} They are held from new work until you decide to keep them working or suspend them.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_RECHECK_REVIEWED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: '${assayerName}: ${checkLabel} decided',
+    body: '${decidedBy} ${outcome}: "${reason}".',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_RECHECK_DUE_SOON: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP,
+    title: '${checkLabel} due soon: ${assayerName}',
+    body: '${assayerName}\'s ${checkLabel} is due on ${dueOn}.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 3600,
+      title: '${count} re-checks due soon',
+      body: '${count} re-checks fall due in the coming weeks — see the re-checks list.',
+      link: '/hr/rechecks',
+    },
+  },
+  ASSAYER_RECHECK_DUE: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: '${checkLabel} due now: ${assayerName}',
+    body: '${assayerName}\'s ${checkLabel} was due on ${dueOn}. If it is not recorded by ${blockFrom}, they will be held from new work.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 3600,
+      title: '${count} re-checks due now',
+      body: '${count} re-checks are due. Anyone still not re-checked after the grace period is held from new work — see the re-checks list.',
+      link: '/hr/rechecks',
+    },
+  },
+  ASSAYER_RECHECK_BLOCKED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Held from new work: ${assayerName}',
+    body: '${assayerName}\'s ${checkLabel} has been overdue since ${dueOn}. They are held from new work until it is recorded; work already assigned continues.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 3600,
+      title: '${count} assayers held from new work',
+      body: '${count} assayers are held from new work until an overdue re-check is recorded — see the re-checks list.',
+      link: '/hr/rechecks',
+    },
   },
   ASSAYER_CODE_ISSUED: {
     category: NotificationCategory.WORKFORCE,

@@ -7,6 +7,7 @@ import { FeedbackMessageEntity } from './feedback-message.entity';
 import { FeedbackAuthorType, FeedbackStatus } from '@fapoms/shared';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { acceptFeedbackAttachments, PostedFeedbackAttachment } from './feedback-attachment-policy';
 
 /**
  * Who is acting on a feedback thread, across both identity spaces.
@@ -27,7 +28,7 @@ export interface FeedbackActor {
 
 export interface PostFeedbackMessageDto {
   body?: string;
-  attachments?: { url: string; fileName: string; fileType: string; storageKey?: string; size?: number }[];
+  attachments?: PostedFeedbackAttachment[];
   /** Team-only note, never shown to the reporter. Ignored for non-team actors. */
   isInternal?: boolean;
 }
@@ -113,6 +114,9 @@ export class FeedbackThreadService {
       throw new ForbiddenException('A message needs text or an attachment.');
     }
 
+    // Only files this poster uploaded — see feedback-attachment-policy.ts.
+    const attachments = acceptFeedbackAttachments(dto.attachments, actor);
+
     const message = this.messageRepository.create({
       feedbackThreadId: threadId,
       authorType: actor.isTeam ? FeedbackAuthorType.TEAM : FeedbackAuthorType.REPORTER,
@@ -120,7 +124,7 @@ export class FeedbackThreadService {
       authorAssayerId: actor.assayerId,
       authorName: actor.name,
       body: dto.body?.trim() || null,
-      attachments: (dto.attachments ?? []).length ? dto.attachments! : null,
+      attachments,
       isInternal,
       createdBy: actor.userId ?? actor.assayerId ?? 'system',
       updatedBy: actor.userId ?? actor.assayerId ?? 'system',

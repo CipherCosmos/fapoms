@@ -1,7 +1,7 @@
 import React, { Suspense, useEffect, useMemo, useRef } from 'react';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Inbox, Map as MapIcon, CalendarDays, ClipboardList } from 'lucide-react';
+import { Inbox, Map as MapIcon, CalendarDays, ClipboardList, Filter, X } from 'lucide-react';
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
@@ -18,6 +18,7 @@ import {
 } from './workTabs';
 import { Page } from '../../components/ui/Page';
 import { SkeletonList } from '../../components/ui/Loading';
+import { useScope } from '../../context/ScopeContext';
 
 /**
  * Audit Work — the single destination that used to be four.
@@ -129,6 +130,7 @@ export const AuditWork: React.FC = () => {
   const [searchParams] = useSearchParams();
   const roles = useCurrentRoles();
   const permissions = useCurrentPermissions();
+  const scope = useScope();
 
   /**
    * A role sees exactly the tabs it could already open as pages, read from the one place that
@@ -292,6 +294,66 @@ export const AuditWork: React.FC = () => {
             </NavLink>
           );
         })}
+
+        {/* Persistent project scope selector — right-aligned on the tab strip.
+         * Reads from and writes to the global ScopeContext, so narrowing here
+         * narrows every tab (inbox, planning, scheduling, field work) consistently.
+         * Only visible when scope applies to the current route and there are projects to pick from. */}
+        {scope.applies && scope.projects.length > 0 && (
+          <div style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '0 4px',
+            flexShrink: 0,
+          }}>
+            <Filter size={13} style={{ color: scope.selectedProjectId !== 'ALL' ? 'var(--accent)' : 'var(--text-muted)', flexShrink: 0 }} />
+            <select
+              value={scope.selectedProjectId}
+              onChange={(e) => scope.setSelectedProjectId(e.target.value)}
+              title="Filter all tabs to a specific project"
+              aria-label="Project filter"
+              style={{
+                background: scope.selectedProjectId !== 'ALL' ? 'rgba(216,174,71,0.12)' : 'var(--bg-surface-2)',
+                border: scope.selectedProjectId !== 'ALL' ? '1px solid var(--accent)' : '1px solid var(--border-color)',
+                borderRadius: '6px',
+                color: 'var(--text-primary)',
+                fontSize: 'var(--text-2xs)',
+                fontWeight: 600,
+                padding: '5px 24px 5px 8px',
+                cursor: 'pointer',
+                maxWidth: '200px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              <option value="ALL">All projects</option>
+              {scope.projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}{p.client ? ` (${p.client.clientCode})` : ''}</option>
+              ))}
+            </select>
+            {scope.selectedProjectId !== 'ALL' && (
+              <button
+                type="button"
+                onClick={() => scope.setSelectedProjectId('ALL')}
+                title="Clear project filter"
+                aria-label="Clear project filter"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        )}
       </nav>
 
       <div style={{ paddingTop: '20px' }}>

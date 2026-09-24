@@ -1,5 +1,6 @@
 import { Module, OnModuleInit, Logger } from '@nestjs/common';
-import { BullModule, InjectQueue } from '@nestjs/bull';
+import { InjectQueue } from '@nestjs/bull';
+import { SLA_SCANNER_QUEUE } from './sla-scanner.constants';
 import { Queue } from 'bull';
 import { ensureRepeatableSchedules, WantedSchedule } from '../queue/repeatable-schedules';
 import { SlaScannerWorker } from './sla-scanner.worker';
@@ -16,7 +17,8 @@ import { ComplianceModule } from '../../modules/compliance/compliance.module';
 
 @Module({
   imports: [
-    BullModule.registerQueue({ name: 'sla-scanner' }),
+    // The queue itself is registered once, by NotificationsModule (imported below) — see
+    // SLA_SCANNER_QUEUE_SETTINGS for why once, and for its stall rule.
     AssignmentModule,
     // The scan also warns HR about credentials falling due — see SlaScannerWorker.
     AssayerModule,
@@ -39,7 +41,7 @@ export class SlaScannerModule implements OnModuleInit {
   private readonly logger = new Logger(SlaScannerModule.name);
 
   constructor(
-    @InjectQueue('sla-scanner') private readonly slaQueue: Queue,
+    @InjectQueue(SLA_SCANNER_QUEUE) private readonly slaQueue: Queue,
     private readonly settings: PlatformSettingsService,
   ) {}
 

@@ -5,10 +5,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { DocumentService } from './document.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
-import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod, businessDateKey } from '@fapoms/shared';
-import { progressReporter } from '../../infrastructure/queue/queued-job';
+import { DocumentStatus, DocumentType, DispatchMethod, businessDateKey } from '@fapoms/shared';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
 import { runAsJobActor } from '../../infrastructure/queue/job-actor';
 import {
   DOCUMENT_DISPATCH_JOB,
@@ -45,6 +46,7 @@ export class DocumentDispatchWorker {
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly documentService: DocumentService,
     private readonly settings: PlatformSettingsService,
+    private readonly tracker: BackgroundJobTracker,
   ) {}
 
   @Process({ name: '*', concurrency: 1 })
@@ -67,13 +69,23 @@ export class DocumentDispatchWorker {
    *
    * Runs as the person who pressed Send (see `JobActor`), and reports progress per
    * document so the page can say "Emailing documents to the branch (12/40)" rather than spin.
+   *
+   * Tracked (`BackgroundJobTracker`): the batch's `background_jobs` row goes RUNNING, carries the
+   * same progress, and ends with a one-line summary, so the Jobs tray shows it after a refresh. The
+   * return value, Bull's progress and a rethrown error are unchanged, so the page's poll of
+   * `GET /documents/dispatch-batch/:jobId` answers exactly as before. The hourly auto-dispatch is
+   * system work nobody started and stays untracked.
    */
   async dispatchBatch(job: Job<DispatchBatchJobData>): Promise<DispatchBatchResult> {
     const { documentIds, branchEmail, actor } = job.data;
     this.logger.log(`Dispatch batch ${job.id}: ${documentIds.length} document(s)${branchEmail ? ', by email to a branch' : ''}.`);
-    return runAsJobActor(
-      actor,
-      () => this.documentService.dispatchMany(documentIds, actor.userId, branchEmail ?? undefined, progressReporter(job)),
+    return this.tracker.run(
+      job,
+      (t) => runAsJobActor(
+        actor,
+        () => this.documentService.dispatchMany(documentIds, actor.userId, branchEmail ?? undefined, t.progress),
+      ),
+      { describe: describeDispatchBatch },
     );
   }
 
@@ -157,7 +169,10 @@ export class DocumentDispatchWorker {
       const accepted = await this.assignmentRepository.find({
         where: {
           assessmentId: In([...new Set(due.map((d) => d.assessmentId))]),
-          status: AssignmentStatus.ACCEPTED,
+          // Accepted and not yet finished. ACCEPTED alone missed a packet still unsent when the
+          // assayer had already checked in (or started): the scan skipped it every night, so the
+          // assayer stood at the branch with no paperwork unless someone sent it by hand.
+          status: In(COMMITTED_ASSIGNMENT_STATUSES),
           isActive: true,
         },
         select: { id: true, assessmentId: true },
@@ -247,4 +262,14 @@ export class DocumentDispatchWorker {
     }
     return sentCount;
   }
+}
+
+/** The line the Jobs tray keeps for a finished batch: a sentence and two counts, never the ids. */
+export function describeDispatchBatch(result: DispatchBatchResult) {
+  const sent = result?.dispatched?.length ?? 0;
+  const failed = result?.failed?.length ?? 0;
+  return {
+    summary: `Sent ${sent} document${sent === 1 ? '' : 's'}${failed ? `; ${failed} did not go.` : '.'}`,
+    counts: { dispatched: sent, failed },
+  };
 }

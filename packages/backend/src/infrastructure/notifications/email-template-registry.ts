@@ -14,6 +14,8 @@ export type EmailTemplateKey =
   | 'app-credentials'
   | 'application-approved'
   | 'application-rejected'
+  | 'application-info-requested'
+  | 'reference-notice'
   | 'branch-audit-paperwork'
   | 'morning-digest'
   | 'account-setup-link'
@@ -215,13 +217,31 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
     category: 'Recruitment',
     description: 'Notice of approval and official appraiser code issuance sent to successfully verified candidates.',
     defaultSubjectTemplate: 'Your Appraiser application has been approved',
-    requiredTokens: ['assayerCode', 'loginUrl', 'logoUrl'],
-    optionalTokens: ['candidateName', 'displayName', 'fullName', 'remarks', 'securityNotice', 'status', 'companyName'],
+    /**
+     * `appDownloadUrl`, not `loginUrl`. This letter used to end in a "Sign in to FAPOMS" button
+     * pointing at the web root — which is the wrong door twice over: the web app has no appraiser
+     * surface at all, and at the moment this is sent the reader has a code but not yet the
+     * password that arrives in their `app-credentials` message. The button is now the app itself.
+     *
+     * `loginUrl` stays DECLARED so an administrator's published version that still uses it keeps
+     * validating as a known token rather than being rejected outright — but it is no longer
+     * required, and a version without `appDownloadUrl` is now correctly treated as broken: an
+     * approval letter that does not say where to get the app is missing the only thing the reader
+     * has to act on.
+     */
+    requiredTokens: ['assayerCode', 'appDownloadUrl', 'logoUrl'],
+    optionalTokens: [
+      'candidateName', 'displayName', 'fullName', 'remarks', 'securityNotice', 'status',
+      'companyName', 'loginUrl',
+      // Emitted by the visual editor's layout for this template (`email-template-html.ts`) and
+      // never declared, so anything built there failed contract validation on publish.
+      'effectiveDate',
+    ],
     rawTokens: [],
     allowRawHtmlTokens: false,
     sampleData: {
       assayerCode: 'ASY-2026-0842',
-      loginUrl: `${appPublicUrl()}/login`,
+      appDownloadUrl: `${appPublicUrl()}/download/app.apk`,
       logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
       candidateName: 'Pooja Sharma',
       // The shipped HTML greets and names the person by this token.
@@ -233,12 +253,17 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
       const greeting = data.candidateName ? `Hello ${data.candidateName},` : 'Hello,';
       const assayerCode = String(data.assayerCode || '');
       const subject = 'Your Appraiser application has been approved';
-      const text = `${greeting}\n\nYour application has been approved. Your Appraiser code is ${assayerCode}. HR will be in touch about next steps.`;
+      const text = `${greeting}\n\nYour application has been approved. Your Appraiser code is ${assayerCode}.\n\n`
+        + 'Install the appraiser app on your phone: '
+        + `${String(data.appDownloadUrl || appPublicUrl())}\n\n`
+        + 'Your sign-in details — your username and a temporary password — are sent to you in a '
+        + 'separate message. HR will be in touch about next steps.';
       const html = renderEmailHtml({
         title: 'Application Approved — Welcome to Sumeru Global',
         bodyLines: [
           greeting,
           'Congratulations! Your application has been approved. You have been officially registered as an authorized Appraiser in our network.',
+          'Install the appraiser app on your phone using the button below. Your sign-in details — your username and a temporary password — are sent to you in a separate message.',
           'Our operations team will be in touch shortly regarding branch roster assignments and field audit schedules.',
         ],
         kvTable: [
@@ -246,8 +271,8 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
           { label: 'Registered Name', value: String(data.candidateName || data.displayName || data.fullName || '—') },
           { label: 'Status', value: String(data.status || 'Active Roster Ready') },
         ],
-        linkUrl: String(data.loginUrl || appPublicUrl()),
-        linkLabel: 'Sign in to FAPOMS',
+        linkUrl: String(data.appDownloadUrl || appPublicUrl()),
+        linkLabel: 'Get the appraiser app',
         securityNotice: data.securityNotice || `Keep your Appraiser code (${assayerCode}) confidential. It is required during bank branch audit verification.`,
       });
       return { html, text, subject };
@@ -290,6 +315,88 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
           tone: 'crimson',
         },
         footer: `Questions regarding this decision may be directed to ${supportEmail}.`,
+      });
+      return { html, text, subject };
+    },
+  },
+
+  'reference-notice': {
+    key: 'reference-notice',
+    name: 'Reference Heads-up',
+    category: 'Recruitment',
+    description: 'Tells somebody a candidate named as a reference that HR may call them. Sent when the candidate is approved.',
+    defaultSubjectTemplate: 'You have been named as a reference',
+    // Every reference carries a name — the form refuses one without — so the greeting can rely on it.
+    requiredTokens: ['refereeName', 'candidateName', 'contactLine', 'logoUrl'],
+    optionalTokens: ['companyName'],
+    rawTokens: [],
+    allowRawHtmlTokens: false,
+    sampleData: {
+      candidateName: 'Ramesh Kulkarni',
+      refereeName: 'Meera Rao',
+      contactLine: 'Priya Nair, grievance officer — privacy@sumeruglobal.com',
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      companyName: 'Sumeru Global',
+    },
+    /*
+      What it says, and what it deliberately does not. The referee learns who named them, why we
+      hold their details and who to write to — the notice a person is owed when somebody else hands
+      us their contact details. Nothing else about the candidate: no phone, no role detail, nothing a
+      referee needs in order to take a call.
+    */
+    fallbackRenderer: (data) => {
+      const greeting = data.refereeName ? `Hello ${data.refereeName},` : 'Hello,';
+      const candidate = String(data.candidateName || 'A candidate');
+      const contact = String(data.contactLine || 'the office that contacted you');
+      const subject = 'You have been named as a reference';
+      const lines = [
+        greeting,
+        `${candidate} has named you as a professional reference in their application to join Sumeru Global as an appraiser.`,
+        'A member of our HR team may call you shortly to ask a few questions about them. You do not need to do anything now.',
+        `They gave us your name and contact details for this reason only, and we keep them with their record. If you do not know them, or would rather not be contacted, write to ${contact} and we will stop.`,
+      ];
+      const text = lines.join('\n\n');
+      const html = renderEmailHtml({ title: 'You Have Been Named As A Reference', bodyLines: lines });
+      return { html, text, subject };
+    },
+  },
+
+  'application-info-requested': {
+    key: 'application-info-requested',
+    name: 'Application Needs Your Attention',
+    category: 'Recruitment',
+    description: 'Sent when HR asks a candidate for specific documents or corrections. Carries the item list, never a link — the candidate reopens the registration link they already hold.',
+    defaultSubjectTemplate: 'Action needed: your Appraiser application',
+    requiredTokens: ['fullName', 'itemsText', 'supportEmail', 'logoUrl'],
+    optionalTokens: ['companyName', 'greeting'],
+    rawTokens: [],
+    allowRawHtmlTokens: false,
+    sampleData: {
+      fullName: 'Rajesh Kumar',
+      itemsText: '• PAN card: The photo was too blurred to read. Please take it again in better light.\n• Bank account number: Please check and correct this field.',
+      supportEmail: 'recruitment@sumeruglobal.com',
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      companyName: 'Sumeru Global',
+      greeting: 'Hello Rajesh Kumar,',
+    },
+    fallbackRenderer: (data) => {
+      const greeting = data.greeting || (data.fullName ? `Hello ${data.fullName},` : 'Hello,');
+      const items = String(data.itemsText || 'Please review your application details.');
+      const supportEmail = String(data.supportEmail || 'recruitment@sumeruglobal.com');
+      const subject = 'Action needed: your Appraiser application';
+      const text = `${greeting}\n\nHR reviewed your application and needs a few specific things before it can proceed. Open your registration link — the same one you applied with — and fix only what is listed:\n\n${items}\n\nOnce done, submit again from the same link.`;
+      const html = renderEmailHtml({
+        title: 'Action Needed On Your Application',
+        bodyLines: [
+          greeting,
+          'HR reviewed your application and needs a few specific things before it can proceed. Open your registration link — the same one you applied with — and fix only what is listed below.',
+        ],
+        callout: {
+          title: 'What HR asked for',
+          text: items,
+          tone: 'gold',
+        },
+        footer: `Once done, submit again from the same link. Questions? Write to ${supportEmail}.`,
       });
       return { html, text, subject };
     },

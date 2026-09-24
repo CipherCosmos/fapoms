@@ -41,7 +41,7 @@ describe('the assayer edit body', () => {
       expect(body).toHaveProperty('certifications', []);
     });
 
-    it.each(['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload'])(
+    it.each(['experienceYears', 'performanceRating', 'maxWeeklyWorkload'])(
       'leaves %s alone, because the column is NOT NULL and has no empty',
       (key) => {
         const body = build([{ key, type: 'number' }], { [key]: '' });
@@ -224,9 +224,10 @@ describe('the assayer edit body', () => {
       // is one — an earlier version of this also matched a run of the letter x, which a fake-
       // looking but legitimate value could carry.
       for (const real of ['ABCDE1234F', 'XXXXX1234X', '000111222333', '123456789012', 'HDFC0000001']) {
+        // Typed twice, as every form now requires for a new account number.
         const out = buildAssayerEditBody(
           [{ key: 'bankAccountNumber', label: 'Bank Account' }],
-          { bankAccountNumber: real },
+          { bankAccountNumber: real, bankAccountNumberConfirm: real },
           onFile as any,
         );
         expect(out.problems).toEqual([]);
@@ -234,4 +235,32 @@ describe('the assayer edit body', () => {
       }
     });
   });
+
+  /**
+   * A NEW account number is typed twice on every form that edits the record — there is no check
+   * digit, so a slip still "looks right". The second typing is compared, never sent.
+   */
+  describe('a new bank account number', () => {
+    const fields = [{ key: 'bankAccountNumber', label: 'Bank Account' }];
+    const onFile = { workingHours: null, certifications: [], bankAccountNumber: '••••••••3457' };
+
+    it('is refused until it has been typed a second time, the same way', () => {
+      expect(buildAssayerEditBody(fields, { bankAccountNumber: '123456789012' }, onFile as any).problems)
+        .toEqual([expect.stringMatching(/second time to confirm/)]);
+      expect(buildAssayerEditBody(fields, { bankAccountNumber: '123456789012', bankAccountNumberConfirm: '123456789099' }, onFile as any).problems)
+        .toEqual([expect.stringMatching(/do not match/)]);
+    });
+
+    it('never puts the second typing in the request', () => {
+      const out = buildAssayerEditBody(fields, { bankAccountNumber: '123456789012', bankAccountNumberConfirm: '1234 5678 9012' }, onFile as any);
+      expect(out.problems).toEqual([]);
+      expect(out.body).not.toHaveProperty('bankAccountNumberConfirm');
+    });
+
+    it('asks nothing of a cleared box, or of an account nobody touched', () => {
+      expect(buildAssayerEditBody(fields, { bankAccountNumber: '' }, onFile as any).problems).toEqual([]);
+      expect(buildAssayerEditBody(fields, {}, onFile as any).problems).toEqual([]);
+    });
+  });
 });
+

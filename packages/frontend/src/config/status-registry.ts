@@ -156,6 +156,11 @@ export const ASSAYER_LIFECYCLE_STATUS_MAP: Record<AssayerLifecycleStatus, Status
     icon: 'shield-check',
     description: 'Undergoing third-party background screening',
   },
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: {
+    semantic: 'warning',
+    icon: 'check-check',
+    description: 'HR checks done; a senior approves before training',
+  },
   [AssayerLifecycleStatus.TRAINING]: {
     semantic: 'warning',
     icon: 'book-open',
@@ -487,6 +492,16 @@ export const INVOICE_STATUS_MAP: Record<InvoiceStatus, StatusDescriptor> = {
     icon: 'file-edit',
     description: 'Invoice created; pending final ops review and issue',
   },
+  [InvoiceStatus.AWAITING_HOD]: {
+    semantic: 'pending',
+    icon: 'clock',
+    description: "Sent by the office for the HOD's final approval; cannot go to the client yet",
+  },
+  [InvoiceStatus.HOD_APPROVED]: {
+    semantic: 'info',
+    icon: 'check-circle',
+    description: 'Approved by the HOD; ready to be marked sent to the client',
+  },
   [InvoiceStatus.ISSUED]: {
     semantic: 'info',
     icon: 'mail',
@@ -514,7 +529,7 @@ export const ASSAYER_PAYABLE_STATUS_MAP: Record<AssayerPayableStatus, StatusDesc
   [AssayerPayableStatus.APPROVED]: {
     semantic: 'info',
     icon: 'lock',
-    description: 'Approved by finance; payment destination locked and frozen',
+    description: "Approved by the office; payment destination frozen. Payable once the HOD gives the final approval",
   },
   [AssayerPayableStatus.PAID]: {
     semantic: 'positive',
@@ -543,10 +558,16 @@ export const ASSAYER_INVOICE_STATUS_MAP: Record<AssayerInvoiceStatus, StatusDesc
     description: 'Invoice submitted by assayer; awaiting ops approval',
   },
   [AssayerInvoiceStatus.APPROVED]: {
-    label: 'Approved',
+    label: 'Approved by the office',
+    semantic: 'pending',
+    icon: 'clock',
+    description: "Approved by the office; waiting for the HOD's final approval before it can be paid",
+  },
+  [AssayerInvoiceStatus.HOD_APPROVED]: {
+    label: 'Approved for payment',
     semantic: 'positive',
     icon: 'check-circle',
-    description: 'Assayer invoice approved for payout',
+    description: "Given the HOD's final approval; its payouts can be paid",
   },
   [AssayerInvoiceStatus.PAID]: {
     label: 'Paid',

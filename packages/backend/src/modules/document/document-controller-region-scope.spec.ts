@@ -59,7 +59,8 @@ describe('DocumentController — staged region scope', () => {
     null as any, // chunkedUploadService
     null as any, // fileScanner
     mockRegionGuard as any,
-    null as any, // dispatchJobs
+    null as any, // dispatchJobs,
+    null as any, // backgroundJobs
   );
 
   const staffReq = () => ({ user: { id: 'staff-1', roles: [{ name: 'ADMIN' }] } });

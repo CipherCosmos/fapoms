@@ -22,6 +22,7 @@ import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 import { workTabLabel } from './work/workTabs';
+import { readQueuePage, truncationNote } from './scheduling-queue-page';
 
 /**
  * Why an audit gets moved — previously not captured at all: `handleConfirmReschedule` only ever
@@ -49,6 +50,7 @@ export const rescheduleReasonSelectValue = (reason: string): string =>
 interface Schedule {
   id: string;
   projectId: string;
+  assignmentId?: string;
   assayerId: string;
   scheduledDate: string;
   completedAt: string | null;
@@ -57,6 +59,7 @@ interface Schedule {
   assayer: { displayName: string; };
   project: { name: string; };
   assignment: {
+    id?: string;
     assignmentNumber: string;
     proposedFee?: number;
     agreedFee?: number | null;
@@ -121,7 +124,7 @@ export const Scheduling: React.FC = () => {
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
   const [selectedDate, setSelectedDate] = useState<string>(todayDateKey());
-  const [viewMode, setViewMode] = useState<'calendar' | 'timeline'>('calendar');
+  const [viewMode, setViewMode] = useState<'calendar' | 'week' | 'timeline'>('calendar');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
 
@@ -206,6 +209,8 @@ export const Scheduling: React.FC = () => {
    * appeared unannounced on the days it didn't. It is now a named control the operator turns on.
    */
   const [bulkMode, setBulkMode] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
   /**
    * The status filter's plain three (Today / Upcoming / Done) cover the whole working day. The
    * remaining five are lifecycle states a coordinator needs perhaps once a month, and mixing them
@@ -259,15 +264,20 @@ export const Scheduling: React.FC = () => {
 
   const assignmentsQ = useQuery({
     queryKey: [...queryKeys.assignments.all, 'available', scopeKey],
-    queryFn: () => api.request<AssignmentOption[]>(`/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100&${scopeQuery}`),
+    // withMeta: the pagination total says how many there really are beyond the first 100.
+    queryFn: async () => readQueuePage<AssignmentOption>(await api.request<unknown>(
+      `/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100&${scopeQuery}`,
+      { withMeta: true },
+    )),
     staleTime: 5_000,
     refetchOnWindowFocus: true,
     refetchOnMount: 'always',
   });
   const isLoadingAssignments = assignmentsQ.isLoading;
   const assignmentsError = loadFailed(assignmentsQ);
-  const rawAssignments = assignmentsQ.data ?? [];
+  const rawAssignments = assignmentsQ.data?.rows ?? [];
   const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
+  const queueTruncation = truncationNote(assignments.length, assignmentsQ.data?.total ?? assignments.length);
 
   // The header's global scope is applied by the server (both queries send it, and both keys
   // include it). Re-filtering here would only duplicate the project dimension and still miss
@@ -293,6 +303,24 @@ export const Scheduling: React.FC = () => {
 
   const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
   const firstDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
+
+  // --- Week view helpers ---
+  // The week that contains `selectedDate`, starting on Sunday.
+  const weekStartDate = React.useMemo(() => {
+    const sel = new Date(selectedDate + 'T00:00:00');
+    const d = new Date(sel);
+    d.setDate(d.getDate() - d.getDay());
+    return d;
+  }, [selectedDate]);
+
+  /** 7 date strings for the current week view. */
+  const weekDates = React.useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStartDate);
+      d.setDate(d.getDate() + i);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    });
+  }, [weekStartDate]);
 
   // Success notices get out of the way on their own; errors stay until dismissed — a backend
   // rejection reason ("assayer already booked at …") that vanished after 4 seconds was unreadable.
@@ -351,6 +379,25 @@ export const Scheduling: React.FC = () => {
   const handleNextMonth = () => {
     if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear(currentYear + 1); }
     else setCurrentMonth(currentMonth + 1);
+  };
+
+  const handlePrevWeek = () => {
+    const d = new Date(weekStartDate);
+    d.setDate(d.getDate() - 7);
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    setSelectedDate(ds);
+    // Keep month/year in sync so the data query covers this week
+    setCurrentMonth(d.getMonth());
+    setCurrentYear(d.getFullYear());
+  };
+
+  const handleNextWeek = () => {
+    const d = new Date(weekStartDate);
+    d.setDate(d.getDate() + 7);
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    setSelectedDate(ds);
+    setCurrentMonth(d.getMonth());
+    setCurrentYear(d.getFullYear());
   };
 
   const handleCreateSchedule = async (e: React.FormEvent) => {
@@ -621,7 +668,7 @@ export const Scheduling: React.FC = () => {
           */
           subtitle={[
             schedulesError ? 'active schedules unavailable' : `${scopedSchedules.length} active schedules`,
-            assignmentsError ? 'unscheduled offers unavailable' : `${scopedAssignments.length} unscheduled confirmed offers`,
+            assignmentsError ? 'unscheduled offers unavailable' : `${assignmentsQ.data?.total ?? scopedAssignments.length} unscheduled confirmed offers`,
           ].join(' · ')}
         />
 
@@ -634,15 +681,16 @@ export const Scheduling: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
             <Filter size={14} style={{ color: 'var(--text-muted)' }} />
             {[
-              { value: 'ALL', label: 'All' },
-              { value: 'ONGOING', label: 'Today' },
-              { value: 'UPCOMING', label: 'Upcoming' },
-              { value: 'COMPLETED', label: 'Done' },
+              { value: 'ALL', label: 'All', tooltip: 'Show all schedules across all dates and statuses' },
+              { value: 'ONGOING', label: 'Today', tooltip: "Show audits scheduled for today that are in progress or awaiting completion" },
+              { value: 'UPCOMING', label: 'Upcoming', tooltip: 'Show future audits scheduled for upcoming days' },
+              { value: 'COMPLETED', label: 'Done', tooltip: 'Show audits that have completed visit execution' },
             ].map(opt => (
               <button
                 key={opt.value}
                 onClick={() => setStatusFilter(opt.value)}
                 className="btn btn-secondary"
+                title={opt.tooltip}
                 style={{
                   padding: '4px 10px', fontSize: 'var(--text-2xs)', fontWeight: 700, borderRadius: '14px',
                   border: statusFilter === opt.value ? '1.5px solid var(--accent)' : '1px solid var(--border-color)',
@@ -666,6 +714,7 @@ export const Scheduling: React.FC = () => {
               if (!showMoreFilters && !activeMore) {
                 return (
                   <button onClick={() => setShowMoreFilters(true)} className="btn btn-secondary"
+                    title="View additional calendar filter views (Confirmed, Tentative, Rescheduled, Historical)"
                     style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', fontWeight: 700, borderRadius: '14px', color: 'var(--text-secondary)' }}>
                     More…
                   </button>
@@ -685,17 +734,28 @@ export const Scheduling: React.FC = () => {
 
           {/* View Toggle */}
           <div style={{ display: 'flex', background: 'var(--bg-primary)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-            <button onClick={() => setViewMode('calendar')} style={{ padding: '4px 8px', borderRadius: '4px', border: 'none', background: viewMode === 'calendar' ? 'var(--accent)' : 'transparent', color: viewMode === 'calendar' ? 'var(--on-accent)' : 'var(--text-primary)', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <Grid size={12} /> Grid
+            <button onClick={() => setViewMode('calendar')}
+              title="Display schedules in standard monthly calendar grid"
+              style={{ padding: '4px 8px', borderRadius: '4px', border: 'none', background: viewMode === 'calendar' ? 'var(--accent)' : 'transparent', color: viewMode === 'calendar' ? 'var(--on-accent)' : 'var(--text-primary)', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Grid size={12} /> Month
             </button>
-            <button onClick={() => setViewMode('timeline')} style={{ padding: '4px 8px', borderRadius: '4px', border: 'none', background: viewMode === 'timeline' ? 'var(--accent)' : 'transparent', color: viewMode === 'timeline' ? 'var(--on-accent)' : 'var(--text-primary)', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button onClick={() => setViewMode('week')}
+              title="Display schedules in detailed week-by-week planner"
+              style={{ padding: '4px 8px', borderRadius: '4px', border: 'none', background: viewMode === 'week' ? 'var(--accent)' : 'transparent', color: viewMode === 'week' ? 'var(--on-accent)' : 'var(--text-primary)', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <CalendarDays size={12} /> Week
+            </button>
+            <button onClick={() => setViewMode('timeline')}
+              title="Display schedules in sequential list timeline with search"
+              style={{ padding: '4px 8px', borderRadius: '4px', border: 'none', background: viewMode === 'timeline' ? 'var(--accent)' : 'transparent', color: viewMode === 'timeline' ? 'var(--on-accent)' : 'var(--text-primary)', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <List size={12} /> Timeline
             </button>
           </div>
 
           {canManageSchedules && (
           <button onClick={() => { setShowCreateModal(true); setScheduleDate(todayDateKey()); setAssayerWorkload(null); setDateChosenByUser(false); setSuggestedDateNote(null); }}
-            className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
+            className="btn btn-primary"
+            title="Book a visit date on the calendar for an accepted audit assignment"
+            style={{ padding: '6px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
             <Plus size={13} /> + Schedule Audit
           </button>
           )}
@@ -732,19 +792,83 @@ export const Scheduling: React.FC = () => {
       ]} />
 
       {/* ── WORKSPACE BODY: RESPONSIVE 3-PANEL FLEX ── */}
-      <div className="responsive-grid-split" style={{ flex: 1, minHeight: 0, overflow: 'auto', gridTemplateColumns: '260px 1fr 260px' }}>
+      <div className="responsive-grid-split" style={{ flex: 1, minHeight: 0, overflow: 'auto', gridTemplateColumns: `${leftCollapsed ? '42px' : '260px'} 1fr ${rightCollapsed ? '42px' : '260px'}` }}>
         
         {/* PANEL 1: UNASSIGNED CONFIRMED AUDITS QUEUE */}
-        <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700 }}>WAITING TO SCHEDULE</span>
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 800, color: 'var(--text-primary)' }}>Confirmed Offers</div>
+        {leftCollapsed ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              height: '100%',
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 4px',
+              gap: '12px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setLeftCollapsed(false)}
+              title="Expand Waiting Offers Queue"
+              className="btn btn-secondary"
+              style={{ padding: '6px', lineHeight: 0 }}
+            >
+              <ChevronRight size={15} />
+            </button>
+            <div
+              style={{
+                writingMode: 'vertical-rl',
+                transform: 'rotate(180deg)',
+                fontSize: 'var(--text-2xs)',
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                color: 'var(--text-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                userSelect: 'none',
+              }}
+            >
+              <span>WAITING TO SCHEDULE</span>
+              <span
+                style={{
+                  fontSize: 'var(--text-3xs)',
+                  padding: '1px 6px',
+                  borderRadius: '8px',
+                  background: 'var(--status-pending-bg)',
+                  color: 'var(--warning)',
+                  fontWeight: 700,
+                }}
+              >
+                {assignmentsError ? '—' : scopedAssignments.length}
+              </span>
             </div>
-            <span style={{ fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
-              {assignmentsError ? '—' : scopedAssignments.length}
-            </span>
           </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700 }}>WAITING TO SCHEDULE</span>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 800, color: 'var(--text-primary)' }}>Confirmed Offers</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
+                  {assignmentsError ? '—' : scopedAssignments.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLeftCollapsed(true)}
+                  title="Collapse Queue panel"
+                  className="btn btn-secondary"
+                  style={{ padding: '3px 6px', lineHeight: 0, border: 'none', background: 'transparent' }}
+                >
+                  <ChevronLeft size={15} />
+                </button>
+              </div>
+            </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
             {assignmentsError ? (
@@ -759,7 +883,12 @@ export const Scheduling: React.FC = () => {
                 <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
                 Loading unscheduled assignments…
               </div>
-            ) : scopedAssignments.length === 0 ? (
+            ) : (queueTruncation && (
+              <div style={{ padding: '6px 12px', fontSize: 'var(--text-2xs)', color: 'var(--warning)', borderBottom: '1px solid var(--border-color)' }}>
+                {queueTruncation}
+              </div>
+            )) || null}
+            {isLoadingAssignments || assignmentsError ? null : scopedAssignments.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '30px 16px', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                 <CheckCircle2 size={24} style={{ margin: '0 auto 8px', opacity: 0.4, color: 'var(--success)' }} />
                 No unscheduled confirmed offers for the selected project.
@@ -855,25 +984,46 @@ export const Scheduling: React.FC = () => {
             )}
           </div>
         </div>
+        )}
 
         {/* PANEL 2: MAIN CALENDAR / TIMELINE CANVAS (CENTER FLEX) */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           
-          {/* Calendar Month Navigation Header */}
+          {/* Calendar Navigation Header — adapts label and arrows to the active view mode */}
           <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-surface-2)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h2 style={{ fontSize: 'var(--text-md)', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>{MONTHS[currentMonth]} {currentYear}</h2>
-              <div style={{ display: 'flex', gap: '2px' }}>
-                <button aria-label="Previous month" onClick={handlePrevMonth} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={16} /></button>
-                <button aria-label="Next month" onClick={handleNextMonth} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronRight size={16} /></button>
-              </div>
+              {viewMode === 'week' ? (
+                <>
+                  <h2 style={{ fontSize: 'var(--text-md)', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
+                    {formatDateOnly(weekDates[0])} — {formatDateOnly(weekDates[6])}
+                  </h2>
+                  <div style={{ display: 'flex', gap: '2px' }}>
+                    <button aria-label="Previous week" title="Go to previous week" onClick={handlePrevWeek} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={16} /></button>
+                    <button aria-label="Next week" title="Go to next week" onClick={handleNextWeek} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronRight size={16} /></button>
+                  </div>
+                  <button
+                    onClick={() => setSelectedDate(todayDateKey())}
+                    className="btn btn-secondary"
+                    title="Jump to today's date"
+                    style={{ padding: '3px 10px', fontSize: 'var(--text-3xs)', fontWeight: 700 }}
+                  >Today</button>
+                </>
+              ) : (
+                <>
+                  <h2 style={{ fontSize: 'var(--text-md)', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>{MONTHS[currentMonth]} {currentYear}</h2>
+                  <div style={{ display: 'flex', gap: '2px' }}>
+                    <button aria-label="Previous month" title="Go to previous month" onClick={handlePrevMonth} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={16} /></button>
+                    <button aria-label="Next month" title="Go to next month" onClick={handleNextMonth} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronRight size={16} /></button>
+                  </div>
+                </>
+              )}
             </div>
-            <button onClick={() => invalidateAll()} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <button onClick={() => invalidateAll()} className="btn btn-secondary" title="Refresh calendar schedules and offers" style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', display: 'flex', alignItems: 'center', gap: '3px' }}>
               <RefreshCw size={10} /> Refresh
             </button>
           </div>
 
-          {/* VIEW MODE 1: GRID CALENDAR */}
+          {/* VIEW MODE 1: MONTH GRID CALENDAR */}
           {viewMode === 'calendar' ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '8px', minHeight: 0, overflowY: 'auto' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '4px' }}>
@@ -942,8 +1092,107 @@ export const Scheduling: React.FC = () => {
                 })}
               </div>
             </div>
+          ) : viewMode === 'week' ? (
+            /* VIEW MODE 2: WEEKLY AGENDA — 7 tall day rows, each showing all schedules */
+            <div style={{ flex: 1, overflowY: 'auto', padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {weekDates.map((dateStr) => {
+                const dt = new Date(dateStr + 'T00:00:00');
+                const dayOfWeek = dt.getDay();
+                const weekIndex = Math.ceil(dt.getDate() / 7);
+                const isSunday = dayOfWeek === 0;
+                const isAltSaturday = dayOfWeek === 6 && (weekIndex === 2 || weekIndex === 4);
+                const daySchedules = getSchedulesForDate(dateStr);
+                const dayHolidays = holidays.filter((h: any) => {
+                  const hd = typeof h.date === 'string' ? h.date.slice(0, 10) : businessDateKey(h.date);
+                  return hd === dateStr;
+                });
+                const isToday = dateStr === todayDateKey();
+                const isSelected = dateStr === selectedDate;
+                const isHoliday = dayHolidays.length > 0 || isSunday || isAltSaturday;
+
+                return (
+                  <div
+                    key={dateStr}
+                    role="button" tabIndex={0}
+                    onClick={() => setSelectedDate(dateStr)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedDate(dateStr); } }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      background: isSelected ? 'rgba(216,174,71,0.18)' : isHoliday ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
+                      border: isSelected ? '2px solid var(--accent)' : isToday ? '2px solid rgba(216,174,71,0.3)' : '1px solid var(--border-hair)',
+                      transition: 'background 0.15s, border-color 0.15s',
+                    }}
+                  >
+                    {/* Day header row */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: daySchedules.length > 0 ? '8px' : 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 800, color: isToday ? 'var(--accent)' : isHoliday ? 'var(--danger)' : 'var(--text-primary)' }}>
+                          {DAYS[dayOfWeek]}
+                        </span>
+                        <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                          {formatDateOnly(dateStr)}
+                        </span>
+                        {isToday && <span style={{ padding: '1px 6px', borderRadius: '4px', fontSize: 'var(--text-3xs)', fontWeight: 700, background: 'var(--accent)', color: 'var(--on-accent)' }}>TODAY</span>}
+                        {isHoliday && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-3xs)', color: 'var(--danger)', fontWeight: 600 }}>
+                            {isSunday ? <><Sun size={11} /> Sunday</> : isAltSaturday ? <><Landmark size={11} /> Alt. Saturday</> : <><Umbrella size={11} /> {dayHolidays[0]?.name || 'Holiday'}</>}
+                          </span>
+                        )}
+                      </div>
+                      <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: daySchedules.length > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                        {daySchedules.length > 0 ? `${daySchedules.length} audit${daySchedules.length > 1 ? 's' : ''}` : 'No audits'}
+                      </span>
+                    </div>
+
+                    {/* Schedule items for this day */}
+                    {daySchedules.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {daySchedules.map((s) => {
+                          const fee = assignmentFeeValue(s.assignment);
+                          const branch = s.assignment?.projectBranch?.branch;
+                          return (
+                            <button
+                              key={s.id} type="button"
+                              onClick={(e) => { e.stopPropagation(); setSelectedSchId(s.id); setSelectedDate(dateStr); }}
+                              style={{
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+                                width: '100%', textAlign: 'left', font: 'inherit',
+                                padding: '8px 12px', borderRadius: '6px',
+                                background: selectedSchId === s.id ? 'rgba(216,174,71,0.22)' : 'var(--bg-primary)',
+                                border: selectedSchId === s.id ? '1px solid var(--accent)' : '1px solid var(--border-hair)',
+                                cursor: 'pointer', transition: 'background 0.1s',
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                  {branch?.name || 'Branch Audit'}
+                                  {branch?.city && <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}> · {branch.city}{branch.state ? `, ${branch.state}` : ''}</span>}
+                                </div>
+                                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '1px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                  <span>{s.assignment?.assignmentNumber}</span>
+                                  <span><User size={10} style={{ verticalAlign: 'middle', marginRight: 2 }} />{s.assayer?.displayName}</span>
+                                  <span>{s.project?.name}</span>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                {fee != null && <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--warning)' }}>{formatRupees(fee)}</span>}
+                                <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: 'var(--text-3xs)', fontWeight: 700, background: (STATUS_COLORS[s.status] || 'var(--accent)') + '20', color: STATUS_COLORS[s.status] || 'var(--accent)' }}>
+                                  {scheduleStatusLabel(s.status)}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
-            /* VIEW MODE 2: TIMELINE LIST */
+            /* VIEW MODE 3: TIMELINE LIST */
             <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column' }}>
               <input
                 type="search"
@@ -1028,20 +1277,83 @@ export const Scheduling: React.FC = () => {
         </div>
 
         {/* PANEL 3: DATE AGENDAS & AUDIT PACKET INSPECTOR */}
-        <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          
-          {/* Selected Date Header */}
-          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700 }}>DATE AGENDA</span>
-              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 800, color: 'var(--text-primary)' }}>
-                {formatDateOnly(selectedDate, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+        {rightCollapsed ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              height: '100%',
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 4px',
+              gap: '12px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setRightCollapsed(false)}
+              title="Expand Date Agenda & Inspector"
+              className="btn btn-secondary"
+              style={{ padding: '6px', lineHeight: 0 }}
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <div
+              style={{
+                writingMode: 'vertical-rl',
+                fontSize: 'var(--text-2xs)',
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                color: 'var(--text-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                userSelect: 'none',
+              }}
+            >
+              <span>DATE AGENDA</span>
+              <span
+                style={{
+                  fontSize: 'var(--text-3xs)',
+                  padding: '1px 6px',
+                  borderRadius: '4px',
+                  background: 'rgba(216,174,71,0.15)',
+                  color: 'var(--accent)',
+                  fontWeight: 700,
+                }}
+              >
+                {schedulesError ? '—' : dateSchedules.length}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            
+            {/* Selected Date Header */}
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700 }}>DATE AGENDA</span>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 800, color: 'var(--text-primary)' }}>
+                  {formatDateOnly(selectedDate, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: 'var(--text-3xs)', padding: '2px 6px', borderRadius: '4px', background: 'rgba(216,174,71,0.15)', color: 'var(--accent)', fontWeight: 700 }}>
+                  {schedulesError ? '— Jobs' : `${dateSchedules.length} Job${dateSchedules.length !== 1 ? 's' : ''}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setRightCollapsed(true)}
+                  title="Collapse Agenda panel"
+                  className="btn btn-secondary"
+                  style={{ padding: '3px 6px', lineHeight: 0, border: 'none', background: 'transparent' }}
+                >
+                  <ChevronRight size={15} />
+                </button>
               </div>
             </div>
-            <span style={{ fontSize: 'var(--text-3xs)', padding: '2px 6px', borderRadius: '4px', background: 'rgba(216,174,71,0.15)', color: 'var(--accent)', fontWeight: 700 }}>
-              {schedulesError ? '— Jobs' : `${dateSchedules.length} Job${dateSchedules.length !== 1 ? 's' : ''}`}
-            </span>
-          </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
             {/* Holiday Banners for Selected Date */}
@@ -1107,7 +1419,7 @@ export const Scheduling: React.FC = () => {
                 <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, marginBottom: '6px' }}>DISPATCH PACKET DETAILS</div>
                 
                 {/* Actions */}
-                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
                   {canManageSchedules &&
                     (selectedSch.status === ScheduleStatus.CONFIRMED || selectedSch.status === ScheduleStatus.RESCHEDULED) &&
                     !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes((selectedSch.assignment?.projectBranch as any)?.status) &&
@@ -1115,6 +1427,28 @@ export const Scheduling: React.FC = () => {
                       <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.RESCHEDULED)} disabled={transitioningId != null} className="btn btn-secondary" style={{ flex: 1, padding: '4px', fontSize: 'var(--text-3xs)' }}>
                         Reschedule
                       </button>
+                  )}
+                  {(selectedSch.assignmentId || selectedSch.assignment?.id) && (
+                    <Link
+                      to={`/assignments?id=${selectedSch.assignmentId || selectedSch.assignment?.id}`}
+                      className="btn btn-secondary"
+                      style={{
+                        flex: 1,
+                        padding: '4px 6px',
+                        fontSize: 'var(--text-3xs)',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '4px',
+                        color: 'var(--accent)',
+                        textDecoration: 'none',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title="Open in Field Work to track GPS check-in, attendance, issues and closeout"
+                    >
+                      Field Tracking →
+                    </Link>
                   )}
                   {canManageSchedules &&
                     selectedSch.status !== ScheduleStatus.COMPLETED &&
@@ -1200,6 +1534,7 @@ export const Scheduling: React.FC = () => {
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* ── CREATE SCHEDULE MODAL ── */}

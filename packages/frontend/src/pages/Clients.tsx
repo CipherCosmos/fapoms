@@ -301,11 +301,11 @@ const Clients: React.FC = () => {
         title="Clients"
         subtitle="Client records, contacts, contracts and billing — and whether each one is still active."
         actions={<>
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
+          <button onClick={() => refetch()} title="Refresh client directory and active status counts" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
             <RefreshCw size={15} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
           {canManage && (
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
+            <button onClick={() => setShowCreate(true)} title="Add a new client organization with commercial details" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
               <Plus size={15} /> Add Client
             </button>
           )}
@@ -326,7 +326,7 @@ const Clients: React.FC = () => {
         <FilterSelect value={clientType} onChange={(v) => setClientType(v)} options={[{ value: '', label: 'All types' }, ...CLIENT_TYPE_FILTERS.map((t) => ({ value: t, label: clientTypeLabel(t) }))]} label="Type" />
         <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={[{ value: '', label: 'All priorities' }, ...PRIORITY_FILTERS.map((p) => ({ value: p, label: priorityLabel(p) }))]} label="Priority" />
         {(status || clientType || priority || debouncedSearch) && (
-          <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)' }}>Clear</button>
+          <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} title="Clear search and all filters" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)' }}>Clear</button>
         )}
       </FilterBar>
 
@@ -357,7 +357,7 @@ const Clients: React.FC = () => {
                 placeholder="Change all to…"
                 compact
               />
-              <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+              <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} title={bulkTarget ? `Move ${selectedClients.length} selected clients to the chosen stage` : 'Pick a stage first, then apply'} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                 {bulkBusy ? `Applying to ${selectedClients.length}…` : `Apply to ${selectedClients.length}`}
               </button>
               {/*
@@ -382,7 +382,7 @@ const Clients: React.FC = () => {
           ) : (
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>No stage is reachable from the selected clients.</span>
           )}
-          <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
+          <button onClick={() => setSelectedIds(new Set())} title="Untick all selected clients" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
         </div>
       )}
 
@@ -392,7 +392,7 @@ const Clients: React.FC = () => {
             <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
             <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
             {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
-            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+            <button onClick={() => setBulkReport(null)} title="Dismiss this bulk result" className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
           </div>
           {bulkReport.skipped.length > 0 && (
             <div style={{ marginTop: '6px' }}>
@@ -454,7 +454,7 @@ const Clients: React.FC = () => {
               <Building2 size={34} style={{ color: 'var(--danger)', opacity: 0.5 }} />
               <div style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>Couldn&apos;t load clients</div>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>This is not saying there are none — the request failed.</div>
-              <button onClick={() => refetch()} className="btn btn-secondary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={() => refetch()} title="Try loading the client list again" className="btn btn-secondary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <RefreshCw size={13} /> Retry
               </button>
             </div>
@@ -468,7 +468,7 @@ const Clients: React.FC = () => {
                 : 'Add your first client to start booking audits.'}
             </div>
             {!(status || clientType || priority || debouncedSearch) && canManage && (
-              <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={() => setShowCreate(true)} title="Add your first client to start booking audits" className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Plus size={13} /> Add Client
               </button>
             )}
@@ -511,16 +511,16 @@ const Clients: React.FC = () => {
               <div style={{ display: 'flex', gap: 6 }}>
                 {canManage && (
                   <>
-                    <button onClick={() => setShowEdit(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button onClick={() => setShowEdit(true)} title="Edit client organization information" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Pencil size={14} /> Edit
                     </button>
-                    <button onClick={() => setShowLifecycle(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button onClick={() => setShowLifecycle(true)} title="Advance or update client operational lifecycle status" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <ArrowLeftRight size={14} /> Change status
                     </button>
                   </>
                 )}
                 {canDelete && (
-                  <button onClick={() => { setDeleteConfirmText(''); setShowDeleteConfirm(true); }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                  <button onClick={() => { setDeleteConfirmText(''); setShowDeleteConfirm(true); }} title="Permanently delete client record" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                     <Trash2 size={14} /> Delete
                   </button>
                 )}
@@ -589,9 +589,10 @@ const Clients: React.FC = () => {
         <Modal open={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)} title="Delete Client" width="400px"
           footer={
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowDeleteConfirm(false)} className="btn btn-secondary">Cancel</button>
+              <button onClick={() => setShowDeleteConfirm(false)} title="Close without deleting" className="btn btn-secondary">Cancel</button>
               <button 
                 onClick={handleDelete} 
+                title={`Permanently delete ${selectedClient.clientCode}`}
                 className="btn btn-primary" 
                 style={{ background: 'var(--danger)', border: 'none' }}
                 disabled={deleteConfirmText !== selectedClient.clientCode}
@@ -613,6 +614,7 @@ const Clients: React.FC = () => {
               value={deleteConfirmText}
               onChange={(e) => setDeleteConfirmText(e.target.value)}
               placeholder={selectedClient.clientCode}
+              title={`Type ${selectedClient.clientCode} to confirm deletion`}
               className="form-control"
               style={{
                 width: '100%',
@@ -632,10 +634,10 @@ const Clients: React.FC = () => {
 
 const TabGroup: React.FC<{ active: string; onChange: (t: 'contacts' | 'contracts' | 'billing' | 'config') => void }> = ({ active, onChange }) => {
   const tabs = [
-    { key: 'contacts' as const, label: 'Contacts' },
-    { key: 'contracts' as const, label: 'Contracts' },
-    { key: 'billing' as const, label: 'Billing' },
-    { key: 'config' as const, label: 'Settings' },
+    { key: 'contacts' as const, label: 'Contacts', hint: 'Client key personnel, escalations, and branch liaison contacts' },
+    { key: 'contracts' as const, label: 'Contracts', hint: 'Commercial agreements, fee schedules, SLA terms, and active mandates' },
+    { key: 'billing' as const, label: 'Billing', hint: 'Invoicing configurations, GSTIN, PAN, and payment terms' },
+    { key: 'config' as const, label: 'Settings', hint: 'Shortfall thresholds, custom rules, and client-level preferences' },
   ];
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)' }}>
@@ -643,6 +645,7 @@ const TabGroup: React.FC<{ active: string; onChange: (t: 'contacts' | 'contracts
         <button
           key={t.key}
           onClick={() => onChange(t.key)}
+          title={t.hint}
           style={{
             padding: '8px 14px',
             background: 'none',

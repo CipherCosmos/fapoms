@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
-import { Send, Banknote, Ban, Undo2, Printer } from 'lucide-react';
+import { Send, Banknote, Ban, Undo2, Printer, ShieldCheck } from 'lucide-react';
 import { DetailDrawer, StyledInput, Select, useConfirm, useToast } from '../../components/ui';
-import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment } from '../../hooks/useBilling';
-import { InvoiceStatus, PaymentMethod, paymentMethodLabel } from '@fapoms/shared';
+import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment, useRequestInvoiceFinalApproval } from '../../hooks/useBilling';
+import { InvoiceStatus, PaymentMethod, paymentMethodLabel, AWAITING_HOD_MESSAGE } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { todayDateKey } from '../../utils/statusLabels';
 import { moneyExact as money } from '../../utils/money';
 import { billingApi } from '../../services/billing';
-import { openInvoicePrintWindow } from './invoicePrint';
+import { openInvoicePrintWindow, taxInvoicePrintBlockedReason } from './invoicePrint';
 import { InvoiceStatusPill, LineStatePill, fmtDate, inputStyle, th, td, tdNum } from './shared';
 
 // Named by the shared label layer, never by de-casing the enum — see the same note in
@@ -52,7 +52,9 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const { confirm, confirmDialog } = useConfirm();
   const invoiceQuery = useBillingInvoice(invoiceId);
   const invoice = invoiceQuery.data;
+  const printBlocked = invoice ? taxInvoicePrintBlockedReason(invoice.status) : null;
   const send = useSendInvoice();
+  const requestFinal = useRequestInvoiceFinalApproval();
   const pay = useRecordBillingPayment();
   const cancel = useCancelInvoice();
   const reverse = useReversePayment();
@@ -135,13 +137,21 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const doSend = async () => {
     const ok = await confirm({
       title: 'Mark this invoice as sent?',
-      message: <>Mark <strong>{invoice.invoiceNumber}</strong> as sent to the client{invoice.clientName ? <> ({invoice.clientName})</> : null}. It moves out of Draft and becomes payable, and payments can then be recorded against it.</>,
+      message: <>Mark <strong>{invoice.invoiceNumber}</strong> as sent to the client{invoice.clientName ? <> ({invoice.clientName})</> : null}. The HOD has approved it; it becomes payable, and payments can then be recorded against it.</>,
       confirmLabel: 'Sent to client',
       reversible: false,
     });
     if (!ok) return;
     try { await send.mutateAsync(invoice.id); toast('success', 'Invoice marked as sent'); }
     catch (e) { toast({ type: 'error', title: 'Could not send', message: userMessage(e) }); }
+  };
+
+  /** DRAFT → with the HOD (2026-09-24). Only an invoice the HOD approved can be marked sent. */
+  const doRequestFinal = async () => {
+    try {
+      await requestFinal.mutateAsync(invoice.id);
+      toast('success', `${invoice.invoiceNumber} sent for the HOD's final approval`);
+    } catch (e) { toast({ type: 'error', title: 'Could not send for final approval', message: userMessage(e) }); }
   };
 
   const doPay = async () => {
@@ -196,24 +206,52 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       subtitle={<InvoiceStatusPill status={invoice.status} partPaid={partPaid} />}
       footer={canAct ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
-          {(invoice.status === InvoiceStatus.DRAFT || (invoice.status === InvoiceStatus.ISSUED && Number(invoice.paidAmount) === 0)) && (
-            <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Ban size={14} /> Cancel invoice</button>
+          {(invoice.status === InvoiceStatus.DRAFT || invoice.status === InvoiceStatus.AWAITING_HOD || invoice.status === InvoiceStatus.HOD_APPROVED || (invoice.status === InvoiceStatus.ISSUED && Number(invoice.paidAmount) === 0)) && (
+            <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" title="Cancel this invoice — its lines return to unbilled" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Ban size={14} /> Cancel invoice</button>
           )}
           {invoice.status === InvoiceStatus.DRAFT && (
-            <button onClick={doSend} disabled={send.isPending} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
+            <button onClick={doRequestFinal} disabled={requestFinal.isPending} className="btn btn-secondary" title="Send this draft to the HOD for the final approval — it can go to the client once they approve it" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><ShieldCheck size={14} /> Send for final approval</button>
+          )}
+          {/*
+            "Sent to client" is shown on a draft and while it is with the HOD, disabled with the reason,
+            so nobody wonders where it went. Only an invoice the HOD approved can go (the server
+            refuses the rest with AWAITING_HOD_APPROVAL).
+          */}
+          {(invoice.status === InvoiceStatus.DRAFT || invoice.status === InvoiceStatus.AWAITING_HOD) && (
+            <button disabled className="btn btn-primary" title={`${AWAITING_HOD_MESSAGE} — only an invoice the HOD has approved can be marked sent to the client.`} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
+          )}
+          {invoice.status === InvoiceStatus.HOD_APPROVED && (
+            <button onClick={doSend} disabled={send.isPending} className="btn btn-primary" title="Mark this invoice as sent — it becomes payable and outstanding" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
           )}
           {invoice.status === InvoiceStatus.ISSUED && (
-            <button onClick={() => setPayOpen((o) => !o)} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Banknote size={14} /> Record payment</button>
+            <button onClick={() => setPayOpen((o) => !o)} className="btn btn-primary" title="Record a payment received against this invoice" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Banknote size={14} /> Record payment</button>
           )}
         </div>
       ) : undefined}
     >
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button onClick={doPrint} disabled={printing} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
-          title="Open the GST tax invoice as a print-ready A4 page — use the browser's Print to save it as a PDF for the client">
+        {/* Only a sent or paid invoice is a tax invoice (audit E1) — disabled, with the reason, otherwise. */}
+        <button onClick={doPrint} disabled={printing || !!printBlocked} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title={printBlocked ?? "Open the GST tax invoice as a print-ready A4 page — use the browser's Print to save it as a PDF for the client"}>
           <Printer size={14} /> {printing ? 'Preparing…' : 'Print / PDF invoice'}
         </button>
       </div>
+
+      {invoice.status === InvoiceStatus.AWAITING_HOD && (
+        <div role="note" style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', background: 'var(--status-pending-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+          With the HOD for the final approval{invoice.hodRequestedAt ? ` since ${fmtDate(invoice.hodRequestedAt)}` : ''}. It can be marked sent to the client once they approve it.
+        </div>
+      )}
+      {invoice.status === InvoiceStatus.HOD_APPROVED && (
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', background: 'var(--status-active-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+          ✓ Approved by the HOD{invoice.hodApprovedAt ? ` on ${fmtDate(invoice.hodApprovedAt)}` : ''}. Ready to be marked sent to the client.
+        </div>
+      )}
+      {invoice.status === InvoiceStatus.DRAFT && invoice.hodRejectReason && (
+        <div role="note" style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', background: 'var(--status-pending-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+          Sent back by the HOD{invoice.hodRejectedAt ? ` on ${fmtDate(invoice.hodRejectedAt)}` : ''}: <em>{invoice.hodRejectReason}</em>
+        </div>
+      )}
 
       {cancelOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
@@ -232,8 +270,8 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
             <textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} rows={2} placeholder="Reason *" style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
           )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => { setCancelOpen(false); setCancelPreset(''); setCancelReason(''); }} className="btn btn-secondary">Keep</button>
-            <button onClick={doCancel} disabled={cancel.isPending || !effectiveCancelReason} className="btn btn-primary">Cancel invoice</button>
+            <button onClick={() => { setCancelOpen(false); setCancelPreset(''); setCancelReason(''); }} className="btn btn-secondary" title="Keep this invoice — close without cancelling">Keep</button>
+            <button onClick={doCancel} disabled={cancel.isPending || !effectiveCancelReason} className="btn btn-primary" title={effectiveCancelReason ? 'Cancel this invoice and return its lines to unbilled' : 'Choose a reason first'}>Cancel invoice</button>
           </div>
         </div>
       )}
@@ -242,16 +280,16 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
             <Select value={method} onChange={(v) => setMethod(v as PaymentMethod)} options={METHODS.map((m) => ({ value: m, label: paymentMethodLabel(m) }))} />
-            <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} />
+            <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} title="Bank reference, UTR or cheque number for this payment" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-            <StyledInput placeholder={`Amount (outstanding ${money(outstanding)}) *`} type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            <StyledInput type="date" value={receivedDate} onChange={(e) => setReceivedDate(e.target.value)} />
+            <StyledInput placeholder={`Amount (outstanding ${money(outstanding)}) *`} type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} title={`Amount received — ${money(outstanding)} still outstanding`} />
+            <StyledInput type="date" value={receivedDate} onChange={(e) => setReceivedDate(e.target.value)} title="Date the payment was received" />
           </div>
-          <StyledInput placeholder="Notes" value={payNote} onChange={(e) => setPayNote(e.target.value)} />
+          <StyledInput placeholder="Notes" value={payNote} onChange={(e) => setPayNote(e.target.value)} title="Optional note about this payment" />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => setAmount(String(outstanding))} className="btn btn-secondary">Full amount</button>
-            <button onClick={doPay} disabled={pay.isPending} className="btn btn-primary">{pay.isPending ? 'Recording…' : 'Save payment'}</button>
+            <button onClick={() => setAmount(String(outstanding))} className="btn btn-secondary" title="Fill in the full outstanding amount">Full amount</button>
+            <button onClick={doPay} disabled={pay.isPending} className="btn btn-primary" title="Save this payment against the invoice">{pay.isPending ? 'Recording…' : 'Save payment'}</button>
           </div>
         </div>
       )}

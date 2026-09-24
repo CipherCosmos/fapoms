@@ -17,6 +17,8 @@ export interface CheckInOutPayload {
   lat: number;
   lng: number;
   accuracy?: number;
+  /** Check-in only: when the arrival happened, if earlier than the send (see `checkInBranch`). */
+  arrivedAt?: string;
 }
 
 export interface AssignmentStatusPayload {
@@ -60,22 +62,23 @@ export const actionDispatchers: {
   // nature (first arrival kept; an already-checked-out assignment just returns success), so a
   // retry that actually landed the first time is harmless without one.
   CHECK_IN: async (p) => {
-    const res = await MobileApiService.checkInBranch(p.assignmentId, p.lat, p.lng, p.accuracy);
+    const res = await MobileApiService.checkInBranch(p.assignmentId, p.lat, p.lng, p.accuracy, undefined, p.arrivedAt);
     return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
   },
   CHECK_OUT: async (p) => {
     const res = await MobileApiService.checkOutBranch(p.assignmentId, p.lat, p.lng, p.accuracy);
     return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
   },
-  ASSIGNMENT_STATUS: async (p) => {
+  // The clientRequestId goes to the server on both branches: `POST /assignments/:id/transition`
+  // keys `assignment_idempotency_records` on it, so a retry after a lost response is answered with
+  // the original result. Without it an accept was harmless to repeat, but a decline that had
+  // already landed came back as a refused transition and was shown as a failure.
+  ASSIGNMENT_STATUS: async (p, clientRequestId) => {
     if (p.op === 'reject') {
-      const res = await MobileApiService.rejectAssignment(p.assignmentId, p.reason);
+      const res = await MobileApiService.rejectAssignment(p.assignmentId, p.reason, clientRequestId);
       return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
     }
-    // No clientRequestId: every transition an assayer still holds (accept, check-in,
-    // in-progress) is idempotent server-side — repeating one is a no-op. The action that needed
-    // dedup, the counter-offer, no longer exists in this app.
-    const { ok, status, error, code } = await MobileApiService.updateAssignmentStatus(p.assignmentId, p.status, p.notes);
+    const { ok, status, error, code } = await MobileApiService.updateAssignmentStatus(p.assignmentId, p.status, p.notes, clientRequestId);
     return { success: ok, error: ok ? undefined : (error || 'Failed to update assignment status'), code, retryable: isRetryableStatus(status) };
   },
   EXPENSE_CLAIM: async (p, clientRequestId) => {

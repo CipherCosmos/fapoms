@@ -4,14 +4,13 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Wifi, WifiOff, Settings as SettingsIcon, LogOut, Filter, ChevronDown, Search, X, Check } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { NotificationDropdown } from './NotificationDropdown';
+import { JobsTray } from './jobs/JobsTray';
 import { FeedbackLauncher } from '../pages/feedback/FeedbackLauncher';
 import { MenuToggle } from './ui/MenuToggle';
 import { Select } from './ui/Select';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useScope } from '../context/ScopeContext';
 import { GlobalSearch } from './GlobalSearch';
-import { canAccessRoute } from '../config/route-permissions';
-import { permissionKeysFrom } from '../hooks/useCurrentRoles';
 
 interface HeaderProps {
   user?: { displayName: string; email: string; roles?: { name: SystemRole }[] };
@@ -94,6 +93,7 @@ const ScopeSelect: React.FC<{
       disabled={options.length === 0}
       options={[{ value: 'ALL', label: allLabel }, ...options]}
       compact
+      title={`Narrow the whole app to one ${label.toLowerCase()}`}
       style={{
         width: '100%',
         fontWeight: value !== 'ALL' ? 700 : 500,
@@ -386,6 +386,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                     placeholder="Search projects..."
                     value={projectSearch}
                     onChange={(e) => setProjectSearch(e.target.value)}
+                    title="Type to find a project by name, number or client"
                     style={{
                       width: '100%',
                       background: 'transparent',
@@ -398,6 +399,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                   {projectSearch && (
                     <button
                       onClick={() => setProjectSearch('')}
+                      title="Clear the project search"
                       style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
                     >
                       <X size={12} />
@@ -413,6 +415,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                       setFilterDropdownOpen(false);
                       setProjectSearch('');
                     }}
+                    title="Show work from all projects"
                     style={{
                       width: '100%',
                       textAlign: 'left',
@@ -442,6 +445,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                           setFilterDropdownOpen(false);
                           setProjectSearch('');
                         }}
+                        title={`Show only the ${p.name} project`}
                         style={{
                           width: '100%',
                           textAlign: 'left',
@@ -483,6 +487,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                         setFilterDropdownOpen(false);
                         setProjectSearch('');
                       }}
+                      title="Clear all scope filters and show everything"
                       style={{
                         width: '100%',
                         padding: '4px',
@@ -526,12 +531,13 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
           {live ? <Wifi size={12} /> : <WifiOff size={12} />}
           {live ? 'Live' : 'Offline'}
         </div>
-        {/* The support entry point, on every page — for whoever may open /feedback. It used to
-            be unconditional ("any user, any page"); the platform owner asked for the channel to be
-            visible to the super administrator and nobody else, and the launcher's own "View my
-            support requests" navigates to /feedback, so it follows that route's permission exactly
-            rather than carrying a second copy of the role list. */}
-        {canAccessRoute((user?.roles ?? []).map((r) => r.name), permissionKeysFrom(user), '/feedback') && <FeedbackLauncher />}
+        {/* The support entry point, on every page, for everyone — reporting a problem is not a
+            desk privilege. (It was gated on the desk's permission to open /feedback, which hid it
+            from every normal user; the desk-only part lives inside the page.) */}
+        <FeedbackLauncher />
+        {/* Uploads and other work running on the server — restored from the server on every load,
+            so a refresh never hides a job that is still going. Quiet unless something is. */}
+        <JobsTray />
         <NotificationDropdown />
 
         {/* Profile / account menu */}
@@ -600,6 +606,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                   setProfileMenuOpen(false);
                   void navigate('/settings');
                 }}
+                title="Open your profile and preferences"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -629,6 +636,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                     setProfileMenuOpen(false);
                     onLogout();
                   }}
+                  title="Sign out of this session"
                   style={{
                     display: 'flex',
                     alignItems: 'center',

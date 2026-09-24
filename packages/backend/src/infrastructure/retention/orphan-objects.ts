@@ -44,6 +44,8 @@ export const STORAGE_KEY_SOURCES: readonly StorageKeySource[] = [
   { table: 'assayer_documents', column: 'file_paths', kind: 'jsonb-array', why: "A roster member's identity and qualification scans." },
   { table: 'assayer_application_documents', column: 'file_paths', kind: 'jsonb-array', why: "A candidate's scans, before they are on the roster." },
   { table: 'assayer_document_versions', column: 'file_path', kind: 'text', why: 'Superseded versions of a scan, kept for the audit trail.' },
+  { table: 'assayer_interviews', column: 'attachments', kind: 'jsonb-objects', keyField: 'storageKey', why: 'The test papers an interview decision rested on — kept with it for good.' },
+  { table: 'assayer_background_checks', column: 'report_files', kind: 'jsonb-objects', keyField: 'path', why: 'The report each background check was read from — kept with the check for good.' },
   { table: 'assayers', column: 'photograph', kind: 'text', why: 'The photograph on the identity card.' },
   { table: 'branch_documents', column: 'file_path', kind: 'text', why: 'Branch paperwork.' },
   { table: 'customer_master_versions', column: 'file_path', kind: 'text', why: 'Uploaded customer master sheets.' },
@@ -56,6 +58,9 @@ export const STORAGE_KEY_SOURCES: readonly StorageKeySource[] = [
   { table: 'assayer_remarks', column: 'attachment_paths', kind: 'jsonb-array', why: 'Evidence attached to a remark about somebody.' },
   { table: 'feedback_messages', column: 'attachments', kind: 'jsonb-objects', keyField: 'storageKey', why: 'Screenshots and files on a feedback thread.' },
   { table: 'validation_query_messages', column: 'attachments', kind: 'jsonb-objects', keyField: 's3Key', why: 'Files exchanged on a validation query.' },
+  { table: 'background_jobs', column: 'input_object_key', kind: 'text', why: 'The file a background job (an import) was uploaded with — kept 30 days, then retention deletes it.' },
+  { table: 'background_jobs', column: 'result_object_key', kind: 'text', why: "A background job's downloadable report — kept 30 days with its job." },
+  { table: 'background_jobs', column: 'input_objects', kind: 'jsonb-objects', keyField: 'key', why: 'The files of a several-file background job (a batch of audit packets) — kept 30 days, then retention deletes them.' },
 ];
 
 /**
@@ -69,6 +74,7 @@ export const NOT_STORAGE_KEYS: ReadonlyArray<{ table: string; column: string; wh
   { table: 'assayer_document_versions', column: 'file_checksum', why: 'A hash of the contents.' },
   { table: 'assayer_document_versions', column: 'file_size', why: 'A byte count.' },
   { table: 'assayer_documents', column: 'document_number', why: 'The number printed ON the document (a PAN, a licence number).' },
+  { table: 'assayer_documents', column: 'reupload_note', why: "HR's sentence asking for the document again — text, not a key." },
   { table: 'assayer_client_empanelments', column: 'documents_outstanding', why: 'A list of document TYPES still to be collected.' },
   { table: 'assayers', column: 'documents_link', why: 'A link to an external folder, not an object in our bucket.' },
   { table: 'branch_documents', column: 'file_name', why: 'The name the uploader gave it.' },
@@ -82,6 +88,11 @@ export const NOT_STORAGE_KEYS: ReadonlyArray<{ table: string; column: string; wh
   { table: 'notifications', column: 'dedupe_key', why: 'A de-duplication key for notifications.' },
   { table: 'notifications', column: 'group_key', why: 'A grouping key for notifications.' },
   { table: 'assayer_applications', column: 'extended_profile', why: "The candidate's typed answers; their scans live in assayer_application_documents." },
+  { table: 'background_jobs', column: 'input_file_name', why: 'The name the uploader gave the file.' },
+  { table: 'background_jobs', column: 'input_mime_type', why: 'The declared type of the uploaded file.' },
+  { table: 'background_jobs', column: 'result_file_name', why: 'The name the report is downloaded as.' },
+  { table: 'background_jobs', column: 'result_mime_type', why: 'The type the report is downloaded as.' },
+  { table: 'background_jobs', column: 'runner_queue', why: 'The name of the Bull queue that runs a tracked job.' },
 ];
 
 export interface OrphanReport {

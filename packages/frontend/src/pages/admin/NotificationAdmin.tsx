@@ -463,11 +463,11 @@ const TemplateEditor: React.FC<{
       // out of reach at the moment you want it is the whole reason this slot exists.
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-          <button className="btn btn-secondary" onClick={runPreview} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button className="btn btn-secondary" onClick={runPreview} title="Render this notification with sample data to check the wording" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Eye size={13} /> Preview
           </button>
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={save} disabled={saving} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button className="btn btn-secondary" onClick={onClose} title="Close without saving">Cancel</button>
+          <button className="btn btn-primary" onClick={save} disabled={saving} title="Save this notification wording" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Save size={13} /> {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
@@ -480,6 +480,7 @@ const TemplateEditor: React.FC<{
             {type.placeholders.map((p) => (
               <button
                 key={p} onClick={() => insertPlaceholder(setTitle, title, p)}
+                title={`Insert ${'${' + p + '}'} into the title`}
                 style={{
                   margin: '2px', padding: '2px 7px', fontSize: 'var(--text-3xs)', cursor: 'pointer',
                   background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
@@ -492,20 +493,20 @@ const TemplateEditor: React.FC<{
           </div>
         )}
 
-        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }} title="Shown as the notification heading in the app and push">
           In-app / push title
-          <input value={title} onChange={(e) => setTitle(e.target.value)} style={{ ...input, marginTop: '4px' }} />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} title="Notification title — ${...} inserts a live value" style={{ ...input, marginTop: '4px' }} />
         </label>
 
-        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }} title="Shown as the notification message">
           In-app / push body
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2}
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2} title="Notification message body"
             style={{ ...input, marginTop: '4px', resize: 'vertical' }} />
         </label>
 
-        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }} title="Where tapping the notification lands — leave the ${...} parts intact">
           Click-through route
-          <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="/assignments?id=${assignmentId}"
+          <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="/assignments?id=${assignmentId}" title="App route opened when the notification is tapped"
             style={{ ...input, marginTop: '4px' }} />
         </label>
 
@@ -576,6 +577,9 @@ const TemplateEditor: React.FC<{
             <div style={{ border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden' }}>
               <iframe
                 title="Email preview"
+                // The preview is rendered template HTML: fully sandboxed (no script, no same
+                // origin, no forms), so nothing in a template can act as this signed-in admin.
+                sandbox=""
                 srcDoc={
                   preview.emailHtml
                     ? preview.emailHtml

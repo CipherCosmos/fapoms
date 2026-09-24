@@ -3,6 +3,7 @@ import { ProjectQueryService } from '../project/project-query.service';
 import { PlanningService, AssayerRecommendation } from './planning.service';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { WorkloadProvider } from './planning-providers.interface';
+import { businessTodayDateKey } from '@fapoms/shared';
 
 export interface OptimizationMatching {
   projectBranchId: string;
@@ -34,7 +35,12 @@ export class OptimizationEngine {
   /**
    * Generates an optimized deployment plan for the project using a greedy solver.
    */
-  async generateProjectDeploymentPlan(projectId: string, weights: Record<string, number> = {}): Promise<OptimizationPlan> {
+  async generateProjectDeploymentPlan(
+    projectId: string,
+    weights: Record<string, number> = {},
+    /** The day availability is judged on (F1); absent, today (IST) — never "the moment it ran". */
+    startDate?: string | null,
+  ): Promise<OptimizationPlan> {
     const project = await this.projectQueryService.findOne(projectId);
     if (!project) {
       throw new NotFoundException(`Project ${projectId} not found.`);
@@ -62,7 +68,9 @@ export class OptimizationEngine {
     for (const pb of unassignedPBs) {
       let candidates: AssayerRecommendation[] = [];
       try {
-        candidates = await this.planningService.getRecommendedCandidates(pb.branchId, weights);
+        candidates = await this.planningService.getRecommendedCandidates(
+          pb.branchId, weights, startDate ?? businessTodayDateKey(), { projectId: pb.projectId ?? projectId },
+        );
       } catch (err) {
         console.error(`Failed to fetch recommendations for branch ${pb.branchId}:`, err);
       }

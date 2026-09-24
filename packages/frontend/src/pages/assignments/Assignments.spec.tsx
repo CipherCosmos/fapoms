@@ -211,10 +211,8 @@ describe('Assignments Workspace: Domain & Attention Logic', () => {
           </MemoryRouter>
         );
 
-        // Verify that branch status column rendered without error
-        expect(screen.getByText('Branch Workflow')).toBeInTheDocument();
-        expect(screen.getByText('Assignment State')).toBeInTheDocument();
-        expect(screen.getByText('Attention')).toBeInTheDocument();
+        // Verify that unified Status & Progress column rendered without error
+        expect(screen.getByText('Status & Progress')).toBeInTheDocument();
         unmount();
       });
     });

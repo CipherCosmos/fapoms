@@ -65,6 +65,10 @@ const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m)
 const AssayerRecordPage = React.lazy(() => import('./pages/hr/AssayerRecordPage').then((m) => ({ default: m.AssayerRecordPage })));
 const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
 const HrIssuesPage = React.lazy(() => import('./pages/hr/HrIssuesPage').then((m) => ({ default: m.HrIssuesPage })));
+const VerifyIdCard = React.lazy(() => import('./pages/VerifyIdCard').then((m) => ({ default: m.VerifyIdCard })));
+const HrRechecksPage = React.lazy(() => import('./pages/hr/HrRechecksPage').then((m) => ({ default: m.HrRechecksPage })));
+const HrApprovalsPage = React.lazy(() => import('./pages/hr/approvals/HrApprovalsPage').then((m) => ({ default: m.HrApprovalsPage })));
+const ApprovalReviewPage = React.lazy(() => import('./pages/hr/approvals/ApprovalReviewPage').then((m) => ({ default: m.ApprovalReviewPage })));
 const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
 const HrHiringPage = React.lazy(() => import('./pages/hr/hiring/HrHiringPage').then((m) => ({ default: m.HrHiringPage })));
 /**
@@ -297,6 +301,22 @@ export const App: React.FC = () => {
     account is made for them. Same shape as the candidate link below — matched off the pathname
     because it sits outside the authenticated router, and the token is the only authorisation.
   */
+  /*
+    Checking an appraiser's digital ID card — the page a bank branch opens by scanning the live QR
+    (`/verify/card/<token>`) or by going to `/verify` and typing the ID number and code. No sign-in,
+    matched off the pathname like the two links below; the token (or the typed code) is the check.
+  */
+  const verifyCardMatch = /^\/verify(?:\/card\/([^/]+))?\/?$/.exec(location.pathname);
+  if (verifyCardMatch) {
+    return (
+      <ErrorBoundary area="ID card check">
+        <Suspense fallback={<RouteFallback />}>
+          <VerifyIdCard token={verifyCardMatch[1] ? decodeURIComponent(verifyCardMatch[1]) : null} />
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
   const accountSetupMatch = /^\/account-setup\/([^/]+)\/?$/.exec(location.pathname);
   if (accountSetupMatch) {
     return (
@@ -546,6 +566,12 @@ export const App: React.FC = () => {
               same pair the underlying endpoint requires.
             */}
             <Route path="issues" element={<HrIssuesPage />} />
+            {/* Re-checks over time: who is due, overdue, or held (2026-09-23). */}
+            <Route path="rechecks" element={<HrRechecksPage />} />
+            {/* Joiners awaiting the approval before training — the approver's list (2026-09-24). */}
+            <Route path="approvals" element={<HrApprovalsPage />} />
+            {/* One person's whole file, and the decision beside it — the approver's review. */}
+            <Route path="approvals/:assayerId" element={<ApprovalReviewPage />} />
             <Route path="where" element={<HrWherePeopleArePage />} />
 
             {/*

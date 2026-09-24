@@ -17,6 +17,7 @@ import { api } from '../../services/api';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   canAdministerNotifications: () => true,
 }));

@@ -17,11 +17,22 @@ import { Editor } from './hr-ui';
  * the same eight strings, which is the kind of duplicate that stays right until somebody adds a
  * ninth reason to one of them.
  */
+/** The server's bounds on the note it forwards to the assayer (request-reupload body). */
+const REUPLOAD_NOTE_MIN = 10;
+const REUPLOAD_NOTE_MAX = 500;
+
 export const RejectDocumentModal: React.FC<{
   label: string;
   onCancel: () => void;
   onSubmit: (reason: string, note: string) => void;
-}> = ({ label, onCancel, onSubmit }) => {
+  /**
+   * `sendBack` reviews a scan nobody has accepted yet. `reupload` reopens one HR already VERIFIED
+   * (or the locked ID-card photo): the note is then required, because the server sends it to the
+   * assayer's phone as the reason they are asked again — and it is the only unlock, so it should
+   * say what to fix.
+   */
+  mode?: 'sendBack' | 'reupload';
+}> = ({ label, onCancel, onSubmit, mode = 'sendBack' }) => {
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
 
@@ -37,16 +48,21 @@ export const RejectDocumentModal: React.FC<{
     display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px',
   };
 
+  const reupload = mode === 'reupload';
+  const noteTooShort = reupload && note.trim().length < REUPLOAD_NOTE_MIN;
+
   return (
     <Editor
-      title={`Why is ${label} being sent back?`}
-      intro="They are told this, on their phone, with what to do about it."
+      title={reupload ? `Ask for ${label} again?` : `Why is ${label} being sent back?`}
+      intro={reupload
+        ? 'It was checked and accepted, so it is locked. This unlocks it for them to send a new one. The accepted copy stays on the record.'
+        : 'They are told this, on their phone, with what to do about it.'}
       onCancel={onCancel}
-      onSave={() => onSubmit(reason, note)}
+      onSave={() => onSubmit(reason, note.trim())}
       // Not "Send it back" again — that is the row's own button, which stays on screen behind this
       // dialog, and two controls with one name is confusing to click and to test alike.
-      saveLabel="Yes, send it back"
-      saveDisabled={!reason}
+      saveLabel={reupload ? 'Yes, ask them again' : 'Yes, send it back'}
+      saveDisabled={!reason || noteTooShort}
     >
       <div>
         <label style={labelStyle}>Reason</label>
@@ -62,16 +78,26 @@ export const RejectDocumentModal: React.FC<{
       </div>
       <div>
         <label htmlFor="reject-note" style={labelStyle}>
-          Note (optional — kept on the record, not shown to them)
+          {reupload
+            ? 'What to tell them (required — sent to their phone)'
+            : 'Note (optional — kept on the record, not shown to them)'}
         </label>
         <textarea
           id="reject-note"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={3}
-          placeholder="Anything worth remembering about this, for whoever looks at this record next."
+          maxLength={reupload ? REUPLOAD_NOTE_MAX : undefined}
+          placeholder={reupload
+            ? 'For example: The photo is from before your haircut. Please take a new one against a plain wall.'
+            : 'Anything worth remembering about this, for whoever looks at this record next.'}
           style={{ ...fieldStyle, resize: 'vertical' }}
         />
+        {reupload && noteTooShort && note.length > 0 && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
+            A few more words, please — at least {REUPLOAD_NOTE_MIN} characters.
+          </div>
+        )}
       </div>
     </Editor>
   );

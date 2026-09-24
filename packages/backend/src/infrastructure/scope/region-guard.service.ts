@@ -26,7 +26,7 @@ import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { GlobalScope, assignedRegions } from './global-scope';
-import { Region } from '@fapoms/shared';
+import { Region, resolveRegion } from '@fapoms/shared';
 import { AssignmentEntity } from '../../modules/assignment/assignment.entity';
 import { ValidationQueryEntity } from '../../modules/validation-query/validation-query.entity';
 import { UserEntity } from '../../modules/user/user.entity';
@@ -104,6 +104,24 @@ export class RegionGuardService {
       throw new ForbiddenException(
         'That record belongs to a region your account is not assigned to.',
       );
+    }
+  }
+
+  /**
+   * `assertRegionAllowed` as a yes/no, for a LIST that has to leave rows out rather than refuse the
+   * whole request.
+   *
+   * Derived from the assertion rather than restating it, so the two cannot drift: a list filtered by
+   * a copy of the rule would offer somebody a row that the record itself then refuses on opening.
+   * Only the refusal becomes `false`; anything else the assertion throws still throws.
+   */
+  isRegionAllowed(region: string | null | undefined, scope?: Partial<GlobalScope>): boolean {
+    try {
+      this.assertRegionAllowed(region, scope);
+      return true;
+    } catch (err) {
+      if (err instanceof ForbiddenException) return false;
+      throw err;
     }
   }
 
@@ -800,6 +818,101 @@ export class RegionGuardService {
       [issueIds],
     );
     for (const row of rows) this.assertRegionAllowed(row.region, scope);
+  }
+
+  // ── The hiring pipeline ────────────────────────────────────────────────────
+  //
+  // A candidate is not an assayer yet, so `assertAssayerInScope` has no row to read: the region a
+  // candidate belongs to is their application's `state`, read through the same `resolveRegion`
+  // that places them when they are promoted (`AssayerService.create` falls back to
+  // `resolveRegion(dto.state)`), so a candidate sits in the region they will land in. A draft
+  // nobody has filled a state into yet has no region and stays visible to every desk — the same
+  // data-gap rule `assertRegionAllowed` applies everywhere else, and the only way such a draft
+  // ever gets its state typed in.
+  //
+  // This boundary was ADDED (audit F5, 2026-09-24) where none existed, so it follows the staged
+  // rollout: READS honour `security.regionScope.mode` exactly as the six earlier additions do, and
+  // WRITES always enforce — a decision on another region's candidate either happens or it does
+  // not, and "log it and let it through" is not a smaller answer to a write, it is the write.
+
+  /** The region a candidate's application belongs to — see the note above. */
+  static applicationRegion(state: string | null | undefined): Region | null {
+    return resolveRegion(state ?? null);
+  }
+
+  /** The ceiling, for a candidate's application (application → its state → region). */
+  async assertApplicationInScope(
+    applicationId: string | null | undefined,
+    scope: Partial<GlobalScope> | undefined,
+    access: 'read' | 'write',
+  ): Promise<void> {
+    if (applicationId && scope?.regions?.length) {
+      const rows = await this.dataSource.query(
+        `SELECT state FROM assayer_applications WHERE id = $1`,
+        [applicationId],
+      );
+      await this.hiringCeiling(RegionGuardService.applicationRegion(rows?.[0]?.state), scope, access, 'hr-applications');
+    }
+  }
+
+  /**
+   * The ceiling, for an interview (interview → the application its PASS opened → state → region).
+   *
+   * An interview that opened nothing — a FAIL, or one recorded before the form was filled — has no
+   * region, and is left visible for the same reason a stateless draft is.
+   */
+  async assertInterviewInScope(
+    interviewId: string | null | undefined,
+    scope: Partial<GlobalScope> | undefined,
+    access: 'read' | 'write',
+  ): Promise<void> {
+    if (interviewId && scope?.regions?.length) {
+      const rows = await this.dataSource.query(
+        `SELECT a.state
+           FROM assayer_interviews i
+           LEFT JOIN assayer_applications a ON a.id = i.spawned_application_id
+          WHERE i.id = $1`,
+        [interviewId],
+      );
+      await this.hiringCeiling(RegionGuardService.applicationRegion(rows?.[0]?.state), scope, access, 'assayer-interviews');
+    }
+  }
+
+  /**
+   * The hiring queue narrowed to the caller's regions, mode-aware like every staged list: Off
+   * returns everything, Log returns everything and says what it would have hidden, Enforce hides
+   * it. Derived from `isRegionAllowed`, so the queue can never offer a row the detail route then
+   * refuses on opening.
+   */
+  async narrowApplicationsToScope<T extends { state?: string | null }>(
+    rows: T[],
+    scope: Partial<GlobalScope> | undefined,
+  ): Promise<T[]> {
+    if (!scope?.regions?.length || rows.length === 0) return rows;
+    const mode = await this.stagedMode();
+    if (mode === 'off') return rows;
+    const inScope = (r: T) => this.isRegionAllowed(RegionGuardService.applicationRegion(r.state), scope);
+    const hidden = rows.filter((r) => !inScope(r)).length;
+    if (hidden === 0) return rows;
+    if (mode === 'log') {
+      this.logger.warn(
+        `[region-scope:hr-applications:list] would hide ${hidden} of ${rows.length} application(s) outside ` +
+          `[${scope.regions.join(', ')}]. Currently in Log mode: all returned.`,
+      );
+      return rows;
+    }
+    return rows.filter(inScope);
+  }
+
+  /** Reads honour the staged mode; writes always enforce. See the note at the top of this block. */
+  private async hiringCeiling(
+    region: string | null,
+    scope: Partial<GlobalScope> | undefined,
+    access: 'read' | 'write',
+    context: string,
+  ): Promise<void> {
+    if (access === 'write') this.assertRegionAllowed(region, scope);
+    else await this.assertRegionAllowedStaged(region, scope, `${context}:read`);
   }
 
   // ── Realtime room entitlement ──────────────────────────────────────────────

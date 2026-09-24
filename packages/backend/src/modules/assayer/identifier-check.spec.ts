@@ -3,8 +3,7 @@ import * as path from 'path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AssayerController } from './assayer.controller';
 import { AssayerService } from './assayer.service';
-import { RosterImportService } from './roster-import.service';
-import { ImportJobService } from '../import/import-job.service';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
 import { RosterRecordsService } from './roster-records.service';
 import { DataIntegrityService } from './data-integrity.service';
 import { WorkforceBulkJobsService } from './workforce-bulk-jobs.service';
@@ -81,8 +80,7 @@ describe('GET /assayers/identifier-check', () => {
         controllers: [AssayerController],
         providers: [
           { provide: AssayerService, useValue: {} },
-          { provide: RosterImportService, useValue: {} },
-          { provide: ImportJobService, useValue: {} },
+          { provide: BackgroundJobsService, useValue: {} },
           { provide: RosterRecordsService, useValue: {} },
           { provide: 'StorageEngine', useValue: {} },
           { provide: RegionGuardService, useValue: {} },

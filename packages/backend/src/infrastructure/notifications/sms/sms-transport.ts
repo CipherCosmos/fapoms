@@ -28,6 +28,12 @@ export interface SmsSendResult {
   error?: string;
   /** True when retrying cannot help: a refused number, bad credentials, an unregistered template. */
   permanent?: boolean;
+  /**
+   * The gateway itself is unusable — unreachable, down (5xx), or refusing our key (401/403) — so
+   * every text would get the same answer and each becomes sendable once that is fixed. The message
+   * is re-queued on a long backoff rather than settled FAILED (see `deliverOutboundMessage`).
+   */
+  transportFault?: boolean;
   providerMessageId?: string;
 }
 
@@ -45,5 +51,11 @@ export const SMS_SEND_TIMEOUT_MS = 10_000;
  * gets the same answer, so it is settled rather than retried.
  */
 export function isPermanentHttpStatus(status: number): boolean {
+  if (isTransportHttpStatus(status)) return false;
   return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+/** The gateway refusing our credentials, or being down — a fault of the channel, not of one text. */
+export function isTransportHttpStatus(status: number): boolean {
+  return status === 401 || status === 403 || status >= 500;
 }

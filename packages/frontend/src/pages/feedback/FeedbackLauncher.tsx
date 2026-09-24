@@ -42,22 +42,12 @@ export const FeedbackLauncher: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   /**
-   * Whether this user can actually open /feedback, asked of ROUTE_PERMISSIONS rather than
-   * assumed. The channel was narrowed to super administrators (2026-08-17) and then moved to
-   * the people who actually answer the tickets — DEVELOPER and PRODUCT_SUPPORT, with ADMIN
-   * dropped (2026-09-05) — while the launcher stayed available to everyone who can reach it —
-   * so "View my support requests" is a link that ProtectedRoute would bounce straight back to
-   * the dashboard for anybody else, silently.
-   *
-   * Today Header.tsx only mounts this launcher when the same check passes, so the bounce is
-   * not reachable in the shipped app. The check is repeated here because the component cannot
-   * assume where it is mounted, and because the reporter view it links to is explicitly kept
-   * "for the day the desk is widened again" (FeedbackPage.tsx) — the day one of those two
-   * lists moves is exactly when a dead link would appear with nothing to catch it.
-   *
-   * When the user cannot follow the link, the reassurance it carried is given as text instead:
-   * the report was received and a reply will arrive as a notification. Sending feedback stays
-   * available to everyone — only *browsing the channel* is restricted.
+   * Whether this user can open /feedback to follow the request, asked of ROUTE_PERMISSIONS rather
+   * than assumed. Since 2026-09-25 the route is open to every signed-in person (the reporting side
+   * is everyone's; only the desk inside the page is restricted), so this is true in the shipped
+   * app. It stays because the component cannot assume where it is mounted, and a "View my support
+   * requests" link that ProtectedRoute bounces would fail silently: when it cannot be followed, the
+   * reassurance is given as text instead.
    */
   const roles = useCurrentRoles();
   const permissions = useCurrentPermissions();

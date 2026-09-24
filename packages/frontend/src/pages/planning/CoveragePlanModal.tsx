@@ -99,10 +99,12 @@ export const CoveragePlanModal: React.FC<{
     setPreviewError(null);
     setProgress(null);
     try {
+      // Judged on the campaign's start date (F1): who is on leave, what is a holiday, whether the
+      // project window is open — on the day the work starts, not the day the plan was opened.
       const loaded = await getCoveragePlanPreview<CoveragePreview>(projectId, {
         signal: watch,
         onProgress: (p) => setProgress(p.stage),
-      });
+      }, scheduledDate);
       if (!watch.cancelled) setPreview(loaded);
     } catch (e: any) {
       if (!watch.cancelled) setPreviewError(e?.message || 'Could not load the coverage plan.');
@@ -112,7 +114,7 @@ export const CoveragePlanModal: React.FC<{
         setProgress(null);
       }
     }
-  }, [projectId]);
+  }, [projectId, scheduledDate]);
 
   useEffect(() => { void loadPreview(); }, [loadPreview]);
 
@@ -148,7 +150,8 @@ export const CoveragePlanModal: React.FC<{
     }
   };
 
-  const doGenerate = () => run('generate', async () => { setPlan(await createCoveragePlan(projectId, {}, follow())); });
+  // The version is generated for the same start date the preview was judged on (F1).
+  const doGenerate = () => run('generate', async () => { setPlan(await createCoveragePlan(projectId, { startDate: scheduledDate }, follow())); });
   const doApprove = () => run('approve', async () => {
     if (!plan) return;
     setPlan(await transitionCoveragePlan(plan.id, 'APPROVED'));
@@ -193,6 +196,15 @@ export const CoveragePlanModal: React.FC<{
         </div>
 
         {/* Preview */}
+        {!plan && (
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            Campaign starts
+            <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)}
+              aria-label="Campaign start date — availability (leave, holidays, project dates) is judged on this day"
+              title="Who is on leave, which days are holidays and whether the project is open are judged on this day. Deploy starts from it."
+              style={{ fontSize: 'var(--text-2xs)', padding: '3px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+          </label>
+        )}
         {loadingPreview ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', padding: '20px', justifyContent: 'center' }}>
             <Loader2 size={16} className="spin" /> Analysing coverage…
@@ -201,7 +213,7 @@ export const CoveragePlanModal: React.FC<{
         ) : previewError ? (
           <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
             <AlertTriangle size={18} /> {previewError}
-            <button onClick={loadPreview} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Retry</button>
+            <button onClick={loadPreview} title="Try loading the coverage preview again" className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Retry</button>
           </div>
         ) : preview ? (
           <>
@@ -321,20 +333,20 @@ export const CoveragePlanModal: React.FC<{
                 </div>
               </details>
             )}
-            <button onClick={onClose} className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: '4px', fontSize: 'var(--text-xs)', padding: '6px 14px' }}>Done</button>
+            <button onClick={onClose} title="Close without deploying anything" className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: '4px', fontSize: 'var(--text-xs)', padding: '6px 14px' }}>Done</button>
           </div>
         ) : (
           /* Lifecycle actions */
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
             {!plan && (
-              <button onClick={doGenerate} disabled={busy != null || loadingPreview || !!previewError} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={doGenerate} disabled={busy != null || loadingPreview || !!previewError} title="Create a first draft plan for the whole project" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 {busy === 'generate' ? <Loader2 size={14} className="spin" /> : null} Generate plan version
               </button>
             )}
             {plan && !approved && (
               <>
                 <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Version {plan.currentVersion} · <b>{plan.status}</b></span>
-                <button onClick={doApprove} disabled={busy != null} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button onClick={doApprove} disabled={busy != null} title="Approve this plan so it can be deployed" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   {busy === 'approve' ? <Loader2 size={14} className="spin" /> : <CheckCircle2 size={14} />} Approve plan
                 </button>
               </>
@@ -350,11 +362,11 @@ export const CoveragePlanModal: React.FC<{
                 </label>
                 <div style={{ flexBasis: '100%', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', order: 9 }}>
                   Each branch is booked on its <b>own</b> workable date on or after this one — Sundays,
-                  holidays and each assayer's daily capacity are applied per branch, so the work spreads
+                  holidays and each assayer's recorded leave are applied per branch, so the work spreads
                   over a range instead of stacking on one day. Deploying creates <b>pending offers</b> at the
                   approved fees; every assayer still has to accept.
                 </div>
-                <button onClick={doDeploy} disabled={busy != null} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success)' }}>
+                <button onClick={doDeploy} disabled={busy != null} title="Create all assignments in this approved plan" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success)' }}>
                   {busy === 'deploy' ? <Loader2 size={14} className="spin" /> : <Rocket size={14} />} Deploy whole project
                 </button>
               </>

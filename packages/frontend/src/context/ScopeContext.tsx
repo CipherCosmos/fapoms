@@ -30,6 +30,7 @@ import { Region } from '@fapoms/shared';
 import { api } from '../services/api';
 import { queryKeys } from '../hooks/queryKeys';
 import { loadFailed } from '../queryClient';
+import { isStaffRole, readCachedRoles } from '../hooks/useCurrentRoles';
 
 export interface ProjectOption {
   id: string;
@@ -209,7 +210,11 @@ export const ScopeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Gated on a token. This provider mounts above the router, so without the gate it fires on
     // the login page and 401s on every cold visit; the request re-enables on the re-render that
     // follows a successful sign-in.
-    enabled: Boolean(localStorage.getItem('fapoms_token')),
+    //
+    // And on a staff role: `GET /scope/options` is `@Roles(...STAFF_ROLES)` with no fallback, so a
+    // role built in Admin → Roles got a 403 here on every page it opened. Read fresh each render
+    // for the same reason as the token (this provider outlives the sign-in).
+    enabled: Boolean(localStorage.getItem('fapoms_token')) && isStaffRole(readCachedRoles()),
     staleTime: 5 * 60_000,
     // No local `retry: 1` override. The shared policy in queryClient.ts declines to retry a
     // refusal, and a retry is the only thing that can leave a query PAUSED — pending forever with

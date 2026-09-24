@@ -468,7 +468,6 @@ export class ReportsService {
       a.assayerCode ?? '',
       a.district ?? '',
       a.state ?? '',
-      a.maxDailyWorkload ?? '',
       a.baseFee != null ? inr(a.baseFee) : '',
       a.openAssignments ?? 0,
     ]);
@@ -499,7 +498,7 @@ export class ReportsService {
           'Unassigned',
           'Isolated',
           'Demand (days)',
-          'Daily Capacity',
+          'Daily Capacity (assayer-days)',
           'Realised Revenue',
           'Pipeline Value',
           'States Covered',
@@ -517,7 +516,7 @@ export class ReportsService {
           'Audit Hours',
           'Demand (days)',
           'Assayers',
-          'Daily Capacity',
+          'Daily Capacity (assayer-days)',
           'Load Ratio',
           'Avg Nearest (km)',
           'Unassigned %',
@@ -551,7 +550,7 @@ export class ReportsService {
       },
       {
         name: 'Assayer Detail',
-        headers: ['Assayer', 'Code', 'District', 'State', 'Max Daily Load', 'Base Fee', 'Open Assignments'],
+        headers: ['Assayer', 'Code', 'District', 'State', 'Base Fee', 'Open Assignments'],
         rows: assayerRows,
       },
     ]);

@@ -20,7 +20,17 @@ import { api } from '../../services/api';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../services/socket', () => ({ connectSocket: () => null }));
+// The roster import's background-job hook reads `GET /jobs`; this suite is not about the import
+// (roster-import-rehearsal.spec.tsx is), so the page sees no roster job.
+jest.mock('../../hooks/useBackgroundJob', () => ({
+  useBackgroundJob: () => ({
+    job: null, active: [], recent: [], isLoading: false, upload: { phase: 'idle' },
+    start: jest.fn(), abortUpload: jest.fn(), cancel: jest.fn(), commit: jest.fn(),
+    downloadResult: jest.fn(), resetUpload: jest.fn(),
+  }),
+}));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   canManageAssayers: () => true,
   canCreateAssayers: () => true,
@@ -29,10 +39,6 @@ jest.mock('../../hooks/useQueuedExcelExport', () => ({ useQueuedExcelExport: () 
 jest.mock('../../hooks/useClients', () => ({ useClientOptions: () => ({ data: [] }) }));
 jest.mock('./ImportIssuesPanel', () => ({ ImportIssuesPanel: () => null }));
 jest.mock('./registration/RegistrationWizard', () => ({ RegistrationWizard: () => null }));
-jest.mock('../../components/import/useImportJob', () => ({
-  useImportJob: () => ({ state: { phase: 'idle' }, start: jest.fn(), reset: jest.fn() }),
-}));
-jest.mock('../../components/import/ImportProgressPanel', () => ({ ImportProgressPanel: () => null }));
 
 const mockRequest = api.request as jest.Mock;
 
@@ -144,14 +150,14 @@ describe('arriving on the record with ?section=', () => {
     const base = mockRequest.getMockImplementation()!;
     mockRequest.mockImplementation((url: string) => (url.endsWith('/id-card/preview')
       ? Promise.resolve({
-        canDownload: true, blockedBecause: [], gaps: [], issuedOn: '2026-09-16T00:00:00.000Z', validTill: '2026-12-31T00:00:00.000Z',
+        issued: true, blockedBecause: [], gaps: [], issuedOn: '2026-09-16T00:00:00.000Z', validTill: '2026-12-31T00:00:00.000Z',
         jobTitle: 'Gold Appraiser', fullName: 'Person One', assayerCode: 'AS0001', department: null, location: 'Kochi, Kerala',
         signatoryName: null, signatoryTitle: null, helplinePhone: null, officeAddress: null,
       })
       : base(url)));
     renderRecordAt('/hr/roster/a-1?section=idcard');
 
-    await waitFor(() => expect(screen.getByTestId('appraiser-id-card')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('digital-id-card')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
   });
 

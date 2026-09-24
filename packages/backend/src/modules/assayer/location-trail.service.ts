@@ -249,12 +249,21 @@ export class LocationTrailService {
     lookbackHours?: number;
     /** Passed through so an empty trail can say whether sharing was off or simply silent. */
     trackingEnabled?: boolean;
+    /**
+     * The journey cannot have started before this — the assayer's departure from an earlier
+     * branch the same day. Since 2026-09-24 one assayer may work several branches a day, and the
+     * leg into the second one starts at the first, not at home; a window reaching back past that
+     * departure would count the morning's work as this journey and read it as a detour.
+     */
+    notBefore?: Date | null;
   }): Promise<TravelAssessment | null> {
     if (!params.checkedInAt) return null;
     const end = new Date(params.checkedInAt);
     const hours =
       params.lookbackHours ?? LocationTrailService.lookbackHoursFor(params.expectedDistanceKm);
-    const start = new Date(end.getTime() - hours * 3_600_000);
+    const windowStart = new Date(end.getTime() - hours * 3_600_000);
+    const floor = params.notBefore ? new Date(params.notBefore) : null;
+    const start = floor && !Number.isNaN(floor.getTime()) && floor > windowStart && floor < end ? floor : windowStart;
     const fixes = await this.fixesBetween(params.assayerId, start, end);
     return assessTravel(fixes, start, end, params.expectedDistanceKm ?? null, {
       trackingEnabled: params.trackingEnabled,

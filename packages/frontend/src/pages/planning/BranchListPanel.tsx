@@ -102,7 +102,7 @@ export const BranchListPanel: React.FC<{
     <div style={{ width: `${width}px`, minWidth: `${width}px`, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
       <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)' }}>
         <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => onSearchTermChange(e.target.value)}
+        <input type="text" placeholder="Search branches..." title="Search branches by name, city, or district" value={searchTerm} onChange={e => onSearchTermChange(e.target.value)}
           style={{ flex: 1, background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-xs)' }} />
       </div>
       {bulkEnabled && selectableBranches.length > 0 && (
@@ -112,6 +112,7 @@ export const BranchListPanel: React.FC<{
             checked={allSelectableSelected}
             onChange={() => onToggleBulkSelectAll?.()}
             style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
+            title={allSelectableSelected ? 'Clear bulk selection' : `Select all ${selectableBranches.length} unassigned branches`}
             aria-label={
               allSelectableSelected
                 ? `Clear the ${selectableBranches.length} unassigned branches shown`
@@ -169,6 +170,7 @@ export const BranchListPanel: React.FC<{
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectBranch(pb.id); }
               }}
               aria-pressed={isSelected}
+              title={`Branch: ${pb.branch.name} (${pb.branch.city}, ${pb.branch.state}) — Status: ${branchStatusLabel(pb.status)}`}
               style={{
                 padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
                 background: isSelected ? 'rgba(216,174,71,0.25)' : isDone ? 'var(--status-active-bg)' : isAssigned ? 'rgba(216,174,71,0.06)' : 'var(--bg-surface-2)',

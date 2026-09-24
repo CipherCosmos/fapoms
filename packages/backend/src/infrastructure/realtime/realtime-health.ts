@@ -14,4 +14,12 @@ export const realtimeHealth = {
   redisConfigured: false,
   /** True unless the adapter failed to connect at boot. */
   redisAdapterConnected: true,
+  /**
+   * True once THIS process's Socket.IO server was built on the Redis adapter, so a room emit here
+   * reaches every replica's sockets. The gateway reads it to decide whether an event that arrived
+   * over the domain-event bridge still needs emitting locally: with the adapter, the origin
+   * process's emit already reached this process's sockets and a second emit is a duplicate; on
+   * the in-memory adapter (Redis down at boot, tests) nothing else will reach them.
+   */
+  crossProcessFanOut: false,
 };

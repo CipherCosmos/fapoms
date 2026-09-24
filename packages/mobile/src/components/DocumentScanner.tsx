@@ -1,25 +1,23 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Modal, Image, ScrollView, Platform, ActivityIndicator } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
+import { View, Modal, Platform, ActivityIndicator, Linking } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import {
   scanDocument,
   isDocumentScannerAvailable,
   type ScannedPage,
 } from '../../modules/document-scanner';
-import { SCAN_UPLOAD_MIME_TYPES, uploadSizeProblem } from '@fapoms/shared';
 import { scanPlanFor, scanFileName } from './document-scan-options';
+import { captureWith, chooseFiles, isCameraAvailable, type CaptureOutcome } from './document-capture';
 import { hintKeyFor } from '../services/registration-checklist';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Icon, IconButton, Input, Badge } from './ui/primitives';
+import { AppText, Button, Icon, IconButton } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
-import { assetToBase64 } from '../utils/pickDocument';
 import { useT, serverErrorText } from '../i18n';
 
 export interface ScannedDocument {
-  /** Filename the user confirmed, including extension. */
+  /** Filename including extension — the document's own name (`scanFileName`), never typed. */
   fileName: string;
-  /** `file://` URI of the assembled multi-page PDF, when ML Kit produced one. */
+  /** `file://` URI of the assembled multi-page PDF, when ML Kit produced one (or a PDF was chosen). */
   pdfUri: string | null;
   /** Per-page images, in order. */
   pages: ScannedPage[];
@@ -31,7 +29,7 @@ export interface DocumentScannerProps {
   visible: boolean;
   onClose: () => void;
   onSaved: (doc: ScannedDocument) => void;
-  /** Shown on the save screen so the assayer knows what they are filing. */
+  /** What is being filed — names the file, and heads the fallback screen. */
   purpose?: string;
   /**
    * WHICH document this is (`OnboardingDocument`), so the phone scans it the way the browser does:
@@ -42,18 +40,23 @@ export interface DocumentScannerProps {
   requirement?: string | null;
 }
 
-/**
- * Drive names scans by capture time rather than making the user invent one, which matters
- * when an assayer files several packets at one branch and needs them to sort predictably.
- */
-const baseName = (purpose?: string | null): string =>
-  scanFileName(purpose, 'x', new Date()).replace(/\.x$/, '');
-
 /** Reads a scanned artifact off disk. Only used by callers that genuinely need the bytes. */
 export async function readAsBase64(uri: string): Promise<string> {
   return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
 }
 
+/**
+ * Tap → Google's scanner → filed. Nothing in between.
+ *
+ * There used to be a "Save document" screen after every scan, with a file-name box and a "Save 1
+ * page" button. Nobody filling in a form has a better name for their PAN card than "PAN card", and
+ * the extra screen was one more place to get lost. The file is named by `scanFileName` — the
+ * document's own label, the same naming the browser uses — and handed over as soon as ML Kit
+ * returns. Cropping, rotating and re-taking all happen inside Google's own editor before that.
+ *
+ * Where ML Kit is not available (iOS, or a phone without it) a small screen offers the phone camera
+ * and the file picker instead.
+ */
 export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   visible,
   onClose,
@@ -65,156 +68,98 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   const tr = useT();
   const feedback = useFeedback();
   const plan = scanPlanFor(requirement);
-  // One place decides what to say about a document — the hand-written sentence where somebody has
-  // written one, the shape's own otherwise. See `hintKeyFor`.
   const hint = requirement ? hintKeyFor(requirement) : null;
-  const [pages, setPages] = useState<ScannedPage[]>([]);
-  const [pdfUri, setPdfUri] = useState<string | null>(null);
-  /*
-    Named after the document where there is one. A record used to collect eight files all called
-    `Scan_2026-09-16_…`; `scanFileName` keeps that timestamp only for scans nothing can name —
-    an audit packet, a photo on a query — and is shared with the browser's naming.
-  */
-  const [fileName, setFileName] = useState(() => baseName(purpose));
+  const scannerAvailable = isDocumentScannerAvailable();
+  const cameraAvailable = isCameraAvailable();
   const [scanning, setScanning] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [cameraDenied, setCameraDenied] = useState(false);
 
   /**
-   * Guards the auto-launch effect.
-   *
-   * Without this, any re-render while the scanner is open re-fires the launch and stacks a
-   * second Google activity on top of the first.
+   * Guards the auto-launch effect. Without this, any re-render while the scanner is open re-fires
+   * the launch and stacks a second Google activity on top of the first.
    */
   const launchedRef = useRef(false);
 
-  const reset = useCallback(() => {
-    setPages([]);
-    setPdfUri(null);
-    setFileName(baseName(purpose));
-    setScanning(false);
-    setSaving(false);
-    launchedRef.current = false;
-  }, [purpose]);
-
   const dismiss = useCallback(() => {
-    reset();
+    launchedRef.current = false;
+    setScanning(false);
+    setCameraDenied(false);
     onClose();
-  }, [onClose, reset]);
+  }, [onClose]);
 
-  /**
-   * Hands straight over to Google's scanner instead of showing a wrapper screen first.
-   *
-   * The previous implementation opened a custom modal — header, filter chips, empty state —
-   * and launched the native scanner behind it, so the assayer saw two unrelated UIs stitched
-   * together. Drive goes from tap to viewfinder with nothing in between.
-   */
+  const deliver = useCallback((doc: ScannedDocument) => {
+    launchedRef.current = false;
+    onSaved(doc);
+  }, [onSaved]);
+
   const launchScanner = useCallback(async () => {
     setScanning(true);
     try {
       const result = await scanDocument(plan.options);
       if (result.status !== 'success' || result.pages.length === 0) {
-        // Backing out of the scanner without capturing closes the whole flow, as it does in
-        // Drive — landing the user on an empty review screen would be a dead end.
-        if (pages.length === 0) {
-          dismiss();
-          return;
-        }
+        // Backing out of Google's scanner closes the whole flow, as it does in Drive.
+        dismiss();
         return;
       }
-      setPages(result.pages);
-      setPdfUri(result.pdf?.uri ?? null);
+      const pdfUri = result.pdf?.uri ?? null;
+      deliver({
+        fileName: scanFileName(purpose, pdfUri ? 'pdf' : 'jpg', new Date()),
+        pdfUri,
+        pages: result.pages,
+        pageCount: result.pages.length,
+        // The type is what the file actually is; relabelled JPEG bytes as PDF were unopenable.
+        mimeType: pdfUri ? 'application/pdf' : 'image/jpeg',
+      });
     } catch (err: any) {
-      feedback.error(
-        tr('scanner.unavailableTitle'),
-        serverErrorText(err?.message, 'scanner.unavailableBody'),
-      );
+      feedback.error(tr('scanner.unavailableTitle'), serverErrorText(err?.message, 'scanner.unavailableBody'));
       dismiss();
     } finally {
       setScanning(false);
     }
-  }, [dismiss, feedback, pages.length, plan.options, tr]);
+  }, [deliver, dismiss, feedback, plan.options, purpose, tr]);
 
   useEffect(() => {
     if (!visible || launchedRef.current) return;
     launchedRef.current = true;
+    if (scannerAvailable) void launchScanner();
+  }, [visible, launchScanner, scannerAvailable]);
 
-    if (isDocumentScannerAvailable()) {
-      launchScanner();
-    }
-  }, [visible, launchScanner]);
-
-  /** Fallback for iOS/web/Expo Go, where the ML Kit scanner does not exist. */
-  const pickFile = useCallback(async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        // The server's own accept-list rather than `image/*`, which is both wider (SVG) and
-        // narrower (no HEIC by name, no TIFF or BMP — what a branch flatbed writes) than what an
-        // upload is actually allowed to be. Same list the browser's picker offers.
-        type: SCAN_UPLOAD_MIME_TYPES,
-        copyToCacheDirectory: true,
-        multiple: true,
-      });
-      if (result.canceled || !result.assets?.length) return;
-
-      /*
-        Refused here rather than after the upload. The browser has told people a file is too big
-        before sending it since the size rule was written; the phone sent it anyway and let the
-        server answer, which on a field worker's connection means watching a progress bar for a
-        minute to be told no. Same rule, same sentence, from `uploadSizeProblem`.
-      */
-      const tooBig = result.assets
-        .map((a) => (a.size ? uploadSizeProblem({ name: a.name ?? 'file', size: a.size }) : null))
-        .find((problem): problem is string => !!problem);
-      if (tooBig) {
-        feedback.warning(tr('scanner.tooBigTitle'), tooBig);
-        return;
-      }
-
-      const picked = result.assets.map((a, i) => ({ uri: a.uri, pageNumber: pages.length + i + 1 }));
-      const pdf = result.assets.find((a) => a.mimeType === 'application/pdf');
-      setPages((prev) => [...prev, ...picked]);
-      if (pdf) setPdfUri(pdf.uri);
-      if (result.assets[0]?.name) setFileName(result.assets[0].name.replace(/\.[^.]+$/, ''));
-    } catch (err: any) {
-      feedback.error(tr('scanner.pickFailedTitle'), serverErrorText(err?.message, 'scanner.pickFailedBody'));
-    }
-  }, [feedback, pages.length, tr]);
-
-  const save = useCallback(() => {
-    const trimmed = fileName.trim();
-    if (!trimmed) {
-      feedback.warning(tr('scanner.nameRequiredTitle'), tr('scanner.nameRequiredBody'));
+  /** The camera or file picker's answer, turned into the same shape a scan hands over. */
+  const take = useCallback((outcome: CaptureOutcome) => {
+    if (outcome.status === 'cameraDenied') {
+      setCameraDenied(true);
       return;
     }
-    if (pages.length === 0) return;
-
-    setSaving(true);
-    /**
-     * Prefers the single PDF and only falls back to images when ML Kit did not produce one.
-     *
-     * The mime type is whatever the artifact actually is. The old flow relabelled JPEG bytes
-     * as `application/pdf`, which put unopenable files into the audit record.
-     */
-    const hasPdf = Boolean(pdfUri);
-    onSaved({
-      fileName: hasPdf ? `${trimmed}.pdf` : `${trimmed}.jpg`,
-      pdfUri,
-      pages,
-      pageCount: pages.length,
-      mimeType: hasPdf ? 'application/pdf' : 'image/jpeg',
+    if (outcome.status === 'refused') {
+      feedback.warning(tr('scanner.tooBigTitle'), outcome.message);
+      return;
+    }
+    if (outcome.status === 'failed') {
+      feedback.error(tr('scanner.pickFailedTitle'), serverErrorText(outcome.message, 'scanner.pickFailedBody'));
+      return;
+    }
+    if (outcome.status !== 'captured') return;
+    const pdf = outcome.files.find((f) => f.mimeType === 'application/pdf');
+    const first = pdf ?? outcome.files[0];
+    deliver({
+      fileName: first.name,
+      pdfUri: pdf?.uri ?? null,
+      pages: outcome.files.map((f, i) => ({ uri: f.uri, pageNumber: i + 1 })),
+      pageCount: outcome.files.length,
+      mimeType: first.mimeType,
     });
-    reset();
-  }, [feedback, fileName, onSaved, pages, pdfUri, reset]);
+  }, [deliver, feedback, tr]);
+
+  const label = purpose ?? '';
+  const takePhoto = async () => take(await captureWith('camera', requirement ?? '', label));
+  // Several files only where a document has pages; an audit packet (no requirement) may have many.
+  const pickFile = async () => take(await chooseFiles(label, { multiple: requirement ? plan.profile.multiPage : true, imagesOnly: false }));
 
   if (!visible) return null;
-
-  const unavailable = !isDocumentScannerAvailable();
-  const hasScan = pages.length > 0;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={dismiss}>
       <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
-        {/* Header */}
         <View
           style={{
             paddingTop: Platform.OS === 'ios' ? 56 : 24,
@@ -230,154 +175,43 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
         >
           <IconButton icon="close" onPress={dismiss} accessibilityLabel={tr('scanner.close')} />
           <View style={{ flex: 1 }}>
-            <AppText variant="h3">{hasScan ? tr('scanner.saveTitle') : tr('scanner.scanTitle')}</AppText>
-            {purpose ? (
-              <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
-                {purpose}
-              </AppText>
-            ) : null}
-            {/*
-              What to do with this particular paper, in the reader's own language: the same
-              sentence the browser prints under its viewfinder, looked up by the profile's
-              `hintKey` because this app is English and Hindi and a translator cannot be handed an
-              English string as a key. Shown before the first capture, which is when it helps.
-            */}
-            {!hasScan && hint ? (
-              <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
-                {tr(hint)}
-              </AppText>
+            <AppText variant="h3">{purpose || tr('scanner.scanTitle')}</AppText>
+            {hint ? (
+              <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>{tr(hint)}</AppText>
             ) : null}
           </View>
-          {hasScan ? (
-            <Badge
-              label={pages.length === 1 ? tr('scanner.onePage') : tr('scanner.manyPages', { count: pages.length })}
-              tone="primary"
-            />
-          ) : null}
         </View>
 
         {scanning ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: t.space.md }}>
             <ActivityIndicator size="large" color={t.colors.primary} />
-            <AppText variant="body" tone="muted">
-              {tr('scanner.opening')}
-            </AppText>
+            <AppText variant="body" tone="muted">{tr('scanner.opening')}</AppText>
           </View>
-        ) : hasScan ? (
-          <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.lg }}>
-            {/* File name — Drive lets you rename before the document is filed. */}
-            <Input
-              label={tr('scanner.fileNameLabel')}
-              icon="document-text-outline"
-              value={fileName}
-              onChangeText={setFileName}
-              selectTextOnFocus
-              placeholder={tr('scanner.fileNamePlaceholder')}
-              rightAccessory={<AppText variant="body" tone="muted">{pdfUri ? '.pdf' : '.jpg'}</AppText>}
-            />
-
-            {/* Page previews */}
-            <View style={{ gap: t.space.sm }}>
-              <AppText variant="caption" tone="muted">
-                {tr('scanner.pagesLabel')}
-              </AppText>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.md }}>
-                {pages.map((page) => (
-                  <View
-                    key={page.uri}
-                    style={{
-                      width: '30%',
-                      aspectRatio: 0.72,
-                      borderRadius: t.radius.md,
-                      overflow: 'hidden',
-                      borderWidth: 1,
-                      borderColor: t.colors.border,
-                      backgroundColor: t.colors.surfaceAlt,
-                    }}
-                  >
-                    <Image source={{ uri: page.uri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-                    <View
-                      style={{
-                        position: 'absolute',
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        paddingVertical: 3,
-                        alignItems: 'center',
-                        backgroundColor: 'rgba(0,0,0,0.6)',
-                      }}
-                    >
-                      <AppText variant="caption" style={{ color: '#fff' }}>
-                        {page.pageNumber}
-                      </AppText>
-                    </View>
-                  </View>
-                ))}
-              </View>
-              <AppText variant="caption" tone="muted">
-                {pdfUri ? tr('scanner.savedAsPdf') : tr('scanner.savedAsImages')}
-              </AppText>
-            </View>
-          </ScrollView>
         ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: t.space.xl, gap: t.space.md }}>
-            <Icon name="scan-outline" size={48} color={t.colors.textMuted} />
-            <AppText variant="h3" style={{ textAlign: 'center' }}>
-              {unavailable ? tr('scanner.notHereTitle') : tr('scanner.readyTitle')}
-            </AppText>
-            <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>
-              {unavailable ? tr('scanner.notHereBody') : tr('scanner.readyBody')}
-            </AppText>
-          </View>
-        )}
-
-        {/* Footer */}
-        {!scanning && (
-          <View
-            style={{
-              padding: t.space.lg,
-              gap: t.space.md,
-              backgroundColor: t.colors.surface,
-              borderTopWidth: 1,
-              borderColor: t.colors.border,
-            }}
-          >
-            <View style={{ flexDirection: 'row', gap: t.space.md }}>
-              {!unavailable && (
-                <View style={{ flex: 1 }}>
-                  <Button
-                    label={hasScan ? tr('scanner.rescan') : tr('scanner.openScanner')}
-                    icon="camera"
-                    variant={hasScan ? 'neutral' : undefined}
-                    onPress={launchScanner}
-                    disabled={saving}
-                    full
-                  />
-                </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Button
-                  label={tr('scanner.attachFile')}
-                  icon="document-attach"
-                  variant="neutral"
-                  onPress={pickFile}
-                  disabled={saving}
-                  full
-                />
-              </View>
+          <View style={{ flex: 1, justifyContent: 'center', padding: t.space.xl, gap: t.space.lg }}>
+            <View style={{ alignItems: 'center', gap: t.space.md }}>
+              <Icon name="camera-outline" size={48} color={t.colors.textMuted} />
+              <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>
+                {tr('scanner.cameraBody')}
+              </AppText>
             </View>
-
-            {hasScan && (
-              <Button
-                label={pages.length === 1 ? tr('scanner.saveOne') : tr('scanner.saveMany', { count: pages.length })}
-                icon="checkmark"
-                variant="accent"
-                onPress={save}
-                loading={saving}
-                disabled={saving}
-                full
-              />
+            {cameraAvailable && (
+              <Button label={tr('scanner.takePhoto')} icon="camera" size="lg" onPress={() => { void takePhoto(); }} full />
             )}
+            {cameraDenied && (
+              <View style={{ gap: t.space.sm, alignItems: 'center' }}>
+                <AppText variant="small" tone="danger" style={{ textAlign: 'center' }}>{tr('scanner.cameraDenied')}</AppText>
+                <Button label={tr('scanner.openSettings')} variant="neutral" size="sm" onPress={() => { void Linking.openSettings(); }} />
+              </View>
+            )}
+            <Button
+              label={cameraAvailable ? tr('scanner.orChooseFile') : tr('scanner.chooseFile')}
+              icon="document-attach-outline"
+              variant={cameraAvailable ? 'ghost' : undefined}
+              size={cameraAvailable ? 'md' : 'lg'}
+              onPress={() => { void pickFile(); }}
+              full
+            />
           </View>
         )}
       </View>

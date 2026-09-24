@@ -18,6 +18,8 @@ import { AssayerDetailModal } from './planning/AssayerDetailModal';
 import { type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
 import { CoveragePlanModal } from './planning/CoveragePlanModal';
+import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder, feeToSend, dayPlanStopBody } from './planning/assign-route';
+import { feeQuoteRequestBody, dayTravelNote, homeRouteOf, liveDistanceNote, cappedCandidatesNote } from './planning/fee-quote';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
 import {
   getProjects,
@@ -84,6 +86,11 @@ interface FeeQuote {
   /** Mode and one-way minutes of the recommended option; null on the legacy per-km path. */
   travelMode?: string | null;
   travelDurationMinutes?: number | null;
+  /**
+   * True when this assayer's travel for the quoted day (`onDate`) is already paid on another of
+   * their jobs; `total` is then the base fee alone.
+   */
+  travelAlreadyCharged?: boolean;
 }
 
 /** One priced mode from the transport rate card, as `TransportRateService.estimate()` returns it. */
@@ -139,6 +146,15 @@ export interface Candidate {
   durationMinutes?: number | null;
   /** 'OSRM' = measured by road; 'ESTIMATE' = straight line at an assumed speed (routing was down). */
   distanceSource?: 'OSRM' | 'ESTIMATE' | null;
+  /**
+   * From HOME — what the job is priced from and the service limit / independence rule measure (F2).
+   * `distanceKm` is the RANKING figure, which is a live fix for anyone sharing their location.
+   */
+  homeDistanceKm?: number | null;
+  homeDurationMinutes?: number | null;
+  homeDistanceSource?: 'OSRM' | 'ESTIMATE' | null;
+  /** True when the ranking (and `distanceKm`) used a live GPS fix. */
+  rankedFromLive?: boolean;
   latitude: number | null;
   longitude: number | null;
   score?: number;
@@ -153,9 +169,10 @@ export interface Candidate {
   scoreContribution?: Record<string, number>;
   /**
    * Set only when "Ignore date availability" is on and this candidate has a clash on the
-   * planned date ("Already booked that day on ASG-0042.", "On leave 2026-08-10 to 2026-08-14.").
+   * planned date ("On leave 2026-08-10 to 2026-08-14."). Being booked elsewhere that day is no
+   * longer a clash — one assayer may take several branches on one day (2026-09-24).
    * Null means genuinely free. Relaxing the filter reveals the person; it must not conceal the
-   * clash, or the operator dispatches into a double-booking believing the list was clean.
+   * clash, or the operator dispatches someone who is on leave believing the list was clean.
    */
   dateConflict?: string | null;
   /** The client's service limit, set only when this candidate is beyond it. */
@@ -274,6 +291,10 @@ interface DayPlanCandidate {
   costPerPacket: number | null;
   idleHours: number;
   stops: DayPlanStop[];
+  /** Work this assayer already has that day, elsewhere — counted in `totalDayHours` (F5). */
+  existingSameDayJobs?: { count: number; hours: number };
+  /** The day, existing jobs included, runs past the working day (within the grace). */
+  exceedsWorkingDay?: boolean;
   clientPreferencesMatch: {
     skillsMatch: boolean;
     certificationsMatch: boolean;
@@ -489,6 +510,12 @@ export const PlanningWorkspace: React.FC = () => {
    * operator is answering a question the screen asked rather than decoding a refusal afterwards.
    */
   const [overrideReasonInput, setOverrideReasonInput] = useState('');
+  /**
+   * Why the branch's open offer is moving to the chosen assayer. Asked for only when the branch is
+   * already offered to (or accepted by) somebody else — that is a reassignment, which the server
+   * refuses without a reason and announces to both assayers. See `assignRoute`.
+   */
+  const [reassignReasonInput, setReassignReasonInput] = useState('');
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [selectedCandidateForMap, setSelectedCandidateForMap] = useState<Candidate | null>(null);
   // The server's quote for the currently selected candidate, so every fee figure on this
@@ -500,6 +527,12 @@ export const PlanningWorkspace: React.FC = () => {
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkScheduledDate, setBulkScheduledDate] = useState('');
+  /**
+   * The written reason that waives an overridable rule (rotation, skills, client requirements, the
+   * service ceiling) on every branch of a bulk offer — recorded against each offer it was used on.
+   * Empty means "waive nothing": a branch that needs a waiver is refused with the rule named.
+   */
+  const [bulkOverrideReason, setBulkOverrideReason] = useState('');
   const [bulkFailures, setBulkFailures] = useState<Array<{ branchId: string; branchName: string; error: string }>>([]);
   /**
    * Where a bulk run on the server has got to ("Offering branches (37/120)"). Bulk offer and bulk
@@ -509,6 +542,15 @@ export const PlanningWorkspace: React.FC = () => {
   const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
   /** The total fee (base + travel) agreed on the call, as typed into the assign modal. */
   const [agreedFeeInput, setAgreedFeeInput] = useState('');
+  /**
+   * Whether the desk typed in the fee box. The box is prefilled with the rate card's quote as a
+   * reading; only a figure the desk actually typed is sent as `proposedFee` (see `feeToSend`).
+   * Otherwise the server records its own day-aware quote — sending the travel-inclusive prefill
+   * made it the "desk's" number and charged travel twice on an assayer's second job that day.
+   */
+  const [feeEdited, setFeeEdited] = useState(false);
+  /** Drops a quote answer that a newer request (another candidate, another date) superseded. */
+  const quoteSeqRef = useRef(0);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
   /**
@@ -837,17 +879,19 @@ export const PlanningWorkspace: React.FC = () => {
     // whatever the last request found.
     queryKey: queryKeys.planning.recommendations(
       selectedBranchKey ?? '', scheduledAuditDate, ignoreDateAvailability, engineRadiusKm,
-      ignoreClientPolicy, ignoreDistancePolicy,
+      ignoreClientPolicy, ignoreDistancePolicy, selectedPb?.projectId ?? selectedProjectId ?? null,
     ),
     queryFn: ({ signal }) => getRecommendations<Candidate, ExcludedCandidate>(
       selectedBranchKey!, scheduledAuditDate, ignoreDateAvailability, engineRadiusKm, signal,
-      ignoreClientPolicy, ignoreDistancePolicy,
+      ignoreClientPolicy, ignoreDistancePolicy, selectedPb?.projectId ?? selectedProjectId ?? null,
     ),
     enabled: !!selectedBranchKey,
     staleTime: 30_000,
   });
   const candidates = candidatesQuery.data?.data ?? NO_CANDIDATES;
   const excludedCandidates = candidatesQuery.data?.meta?.excluded ?? NO_EXCLUDED;
+  /** How many the engine ranked before the server's top-N cut (F9); the list may be shorter. */
+  const candidateTotal = candidatesQuery.data?.meta?.candidateTotal ?? candidates.length;
   const isLoadingCandidates = candidatesQuery.isLoading;
   /**
    * A failure has to look different from "nobody suitable".
@@ -1172,39 +1216,46 @@ export const PlanningWorkspace: React.FC = () => {
     const key = `${cluster.clusterId}:${plan.assayerId}`;
     setDayPlanAssigning(key);
 
-    const stops = onlyBranchIds
+    // Route order (`order` is the stop's place in the day), whatever order the list arrived in.
+    const stops = (onlyBranchIds
       ? plan.stops.filter((s) => onlyBranchIds.includes(s.branchId))
-      : plan.stops;
+      : [...plan.stops]
+    ).sort((a, b) => a.order - b.order);
 
-    // Each stop is a distinct branch → distinct assignment record, so these are independent and run
-    // concurrently rather than one serial round-trip per stop (a 10-branch route was 10x slower than
-    // it needed to be). Per-item results are still collected for the retry-failed-only flow below.
-    const results = await Promise.all(
-      stops.map(async (stop) => {
+    // Posted ONE AT A TIME, in route order (`postStopsInOrder`). These used to run concurrently —
+    // each stop is its own assignment, so they looked independent — but the server now charges
+    // travel once per assayer per day: whichever of that day's jobs it records first carries the
+    // travel, the rest are base fee only. In parallel, network timing decided which stop that was,
+    // so the travel landed on a random branch of the route. In order, it is the first stop, every
+    // time. Per-stop results are still collected for the retry-failed-only flow below; a refused
+    // stop (e.g. BRANCH_HAS_LIVE_OFFER — the branch is already offered to someone) is reported
+    // against that stop in the server's words and never moves the existing offer.
+    // The whole loop's travel is booked on the route's FIRST stop, priced on the loop the plan
+    // showed (F6) — see `dayPlanStopBody`. Every other stop prices base-only on the server.
+    const firstStopOrder = Math.min(...plan.stops.map((s) => s.order));
+    const outcomes = await postStopsInOrder(
+      stops,
+      async (stop) => {
         const branchMeta = cluster.branches.find((b) => b.branchId === stop.branchId);
-        if (!branchMeta) {
-          return { branchId: stop.branchId, branchName: stop.branchName, ok: false, error: 'Branch missing from cluster data' };
-        }
-        try {
-          await api.request('/assignments', {
-            method: 'POST',
-            body: JSON.stringify({
-              projectBranchId: branchMeta.id,
-              assayerId: plan.assayerId,
-              // The date the plan was actually built for, not the operator's raw request. The
-              // planner moves off weekends and holidays and reports the shift in the banner
-              // above; sending dayPlanTargetDate committed the rejected date instead, so an
-              // audit could be booked onto the very Saturday the planner had just refused.
-              scheduledDate: dayPlanData?.targetDate ?? dayPlanTargetDate,
-              remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
-            }),
-          });
-          return { branchId: stop.branchId, branchName: stop.branchName, ok: true };
-        } catch (err: any) {
-          return { branchId: stop.branchId, branchName: stop.branchName, ok: false, error: err?.message || 'Failed' };
-        }
-      }),
+        if (!branchMeta) throw new Error('Branch missing from cluster data');
+        await api.request('/assignments', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...dayPlanStopBody(stop, firstStopOrder, plan),
+            projectBranchId: branchMeta.id,
+            assayerId: plan.assayerId,
+            // The date the plan was actually built for, not the operator's raw request. The
+            // planner moves off weekends and holidays and reports the shift in the banner
+            // above; sending dayPlanTargetDate committed the rejected date instead, so an
+            // audit could be booked onto the very Saturday the planner had just refused.
+            scheduledDate: dayPlanData?.targetDate ?? dayPlanTargetDate,
+            remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
+          }),
+        });
+      },
+      userMessage,
     );
+    const results = outcomes.map((o) => ({ branchId: o.stop.branchId, branchName: o.stop.branchName, ok: o.ok, error: o.error }));
 
     setDayPlanAssigning(null);
     const failed = results.filter((r) => !r.ok);
@@ -1299,6 +1350,7 @@ export const PlanningWorkspace: React.FC = () => {
         acceptanceReason: assignDirectly
           ? `Agreed by phone — bulk-assigned to ${assayerName} from the planning queue.`
           : undefined,
+        overrideReason: bulkOverrideReason.trim() || undefined,
       }, { onProgress: (p) => setBulkProgress(p.stage) });
     } catch (err: any) {
       // The run as a whole did not report back (it failed, or it is still going past the wait). The
@@ -1454,18 +1506,25 @@ export const PlanningWorkspace: React.FC = () => {
    * (the server quotes it again regardless), but the operator has to be told they are committing
    * without seeing it.
    */
-  const fetchFeeQuote = async (c: Candidate): Promise<FeeQuote | null> => {
+  const fetchFeeQuote = async (c: Candidate, onDate: string = scheduledAuditDate): Promise<FeeQuote | null> => {
+    const pb = branches.find((b) => b.id === selectedBranchId);
+    // On a reassign, the job being moved must not count as "travel already paid" that day.
+    const route = pb ? assignRoute(pb.assignment, c.id) : null;
     try {
+      // From HOME (F2): the job is priced from where they live, not where their phone is now.
+      const home = homeRouteOf(c);
       return await api.request<FeeQuote>('/pricing/quote', {
         method: 'POST',
-        body: JSON.stringify({
+        body: JSON.stringify(feeQuoteRequestBody({
           assayerId: c.id,
-          projectId: selectedProjectId || undefined,
-          distanceKm: c.distanceKm || 0,
-          durationMinutes: c.durationMinutes && c.durationMinutes > 0 ? c.durationMinutes : undefined,
-          roadSource: c.durationMinutes && c.durationMinutes > 0 ? (c.distanceSource ?? 'ESTIMATE') : undefined,
-          branchId: branches.find((b) => b.id === selectedBranchId)?.branchId || undefined,
-        }),
+          projectId: selectedProjectId,
+          distanceKm: home.distanceKm,
+          durationMinutes: home.durationMinutes,
+          distanceSource: home.distanceSource,
+          branchId: pb?.branchId,
+          onDate,
+          excludeAssignmentId: route?.kind === 'reassign' ? route.assignmentId : undefined,
+        })),
       });
     } catch {
       return null;
@@ -1479,6 +1538,9 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const openAssignment = async (c: Candidate, agreedOnCall: boolean) => {
     setSelectedCandidate(c);
+    setReassignReasonInput('');
+    setFeeEdited(false);
+    const seq = ++quoteSeqRef.current;
     setLoadingCommercial(true);
     // The only thing the two buttons disagree about: whether somebody has already said yes.
     // The money is typed in the same box either way.
@@ -1489,6 +1551,7 @@ export const PlanningWorkspace: React.FC = () => {
       // here from a hardcoded ₹8/km and a ₹1200 fallback, which meant the recommended fee shown
       // to ops could differ from what the server actually stored on assign.
       const quote = await fetchFeeQuote(c);
+      if (seq !== quoteSeqRef.current) return;
       if (!quote) throw new Error('quote unavailable');
       setFeeQuote(quote);
       setAgreedFeeInput(String(Math.round(Number(quote.total))));
@@ -1530,6 +1593,27 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const handleSendToApp = (c: Candidate) => openAssignment(c, false);
 
+  /**
+   * Re-quote when the form's date changes while it is open. Travel is paid once per assayer per
+   * day, so the figure for Tuesday (their second job) and Wednesday (their first) differ. A fee
+   * the desk typed is theirs and is left alone; only the prefill follows the quote.
+   */
+  useEffect(() => {
+    if (!showAssignModal || !selectedCandidate) return;
+    const seq = ++quoteSeqRef.current;
+    void fetchFeeQuote(selectedCandidate, scheduledAuditDate).then((quote) => {
+      if (seq !== quoteSeqRef.current || !quote) return;
+      setFeeQuote(quote);
+      if (!feeEdited) setAgreedFeeInput(String(Math.round(Number(quote.total))));
+    });
+  // Only the date re-quotes; opening the form quotes in `openAssignment`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduledAuditDate]);
+
+  /** What the open assign modal will do — see `assignRoute`. Drives its reason box and its button. */
+  const modalRoute = selectedCandidate && selectedPb ? assignRoute(selectedPb.assignment, selectedCandidate.id) : null;
+  const modalBlocker = modalRoute ? assignBlocker(modalRoute, reassignReasonInput) : null;
+
   const handleConfirmAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBranchId || !selectedCandidate) return;
@@ -1542,18 +1626,64 @@ export const PlanningWorkspace: React.FC = () => {
      * failed. The operator was left on the branch list with an error banner and had to reopen the
      * candidate and re-enter the fee, the date and both checkboxes to correct one field.
      */
+    // A branch already offered to somebody else is a reassignment, not a second offer: the create
+    // route refuses it (BRANCH_HAS_LIVE_OFFER) and used to move it silently. `assignRoute` is the
+    // one place that decides, shared with "Assign anyway" below.
+    const route = assignRoute(selectedPb?.assignment, selectedCandidate.id);
+    const blocker = assignBlocker(route, reassignReasonInput);
+    if (blocker) {
+      setMessage({ type: 'error', text: blocker });
+      return;
+    }
+    // Only a fee the desk typed is sent. Untouched, the box holds the quote it was prefilled
+    // with, and the server records its own day-aware figure instead (see `feeToSend`).
+    const typedFee = feeToSend(agreedFeeInput, feeEdited);
+    if (route.kind === 'reassign') {
+      try {
+        // ONE request: the move, the typed fee, the date and (Call & Assign) the acceptance.
+        const moved = await reassignAndApply(api.request.bind(api), {
+          assignmentId: route.assignmentId,
+          newAssayerId: selectedCandidate.id,
+          reason: reassignReasonInput,
+          fee: typedFee,
+          scheduledDate: scheduledAuditDate || undefined,
+          acceptOnBehalf: assignDirectly,
+        });
+        const recordedFee = typedFee ?? (moved.proposedFee != null ? Number(moved.proposedFee) : Number(agreedFeeInput));
+        // A call outcome of AGREED is only true when somebody agreed on a call — Call & Assign.
+        // Send to app leaves an offer nobody has answered yet.
+        if (assignDirectly) recordCall(selectedCandidate.id, 'AGREED', recordedFee, 'Agreed during Call & Assign (reassigned)');
+        setShowAssignModal(false);
+        const confirmed = moved.status === 'ACCEPTED';
+        setMessage({
+          type: 'success',
+          text: `Moved this branch from ${route.fromName} to ${selectedCandidate.displayName}. Both have been told. `
+            + (confirmed
+              ? `${selectedCandidate.displayName} is confirmed at ${money(recordedFee)} — no acceptance needed.`
+              : `It stays pending until ${selectedCandidate.displayName} accepts on the mobile app.`),
+        });
+        refreshBranches();
+        refreshCandidates();
+      } catch (err: unknown) {
+        // One request, one transaction: a refusal means nothing moved. Refreshed anyway, in case
+        // somebody else changed the branch meanwhile (the usual reason for a refusal).
+        setMessage({ type: 'error', text: userMessage(err) });
+        refreshBranches();
+      }
+      return;
+    }
     try {
-      const created = await api.request<{ status?: string }>('/assignments', {
+      const created = await api.request<{ status?: string; proposedFee?: number | string | null }>('/assignments', {
         method: 'POST',
         body: JSON.stringify({
           projectBranchId: selectedBranchId,
           assayerId: selectedCandidate.id,
-          proposedFee: Number(agreedFeeInput),
+          proposedFee: typedFee,
           scheduledDate: scheduledAuditDate,
           autoSchedule: autoDispatch,
           acceptOnBehalf: assignDirectly,
           acceptanceReason: assignDirectly
-            ? `Agreed at ${money(agreedFeeInput)} during Call & Assign.`
+            ? (typedFee != null ? `Agreed at ${money(typedFee)} during Call & Assign.` : 'Agreed during Call & Assign.')
             : undefined,
           /**
            * Sent only when a rule on this candidate actually needs waiving.
@@ -1572,7 +1702,11 @@ export const PlanningWorkspace: React.FC = () => {
       // when. `call_logs` has existed since the first migration with nowhere writing to it, so
       // a negotiated fee had no supporting record if the assayer later disputed it. Logged
       // after the assignment so a logging failure can never cost the assignment itself.
-      recordCall(selectedCandidate.id, 'AGREED', Number(agreedFeeInput), 'Agreed during Call & Assign');
+      // AGREED only for Call & Assign: Send to app is an offer nobody has answered yet.
+      if (assignDirectly) {
+        const recordedFee = typedFee ?? (created?.proposedFee != null ? Number(created.proposedFee) : Number(agreedFeeInput));
+        recordCall(selectedCandidate.id, 'AGREED', recordedFee, 'Agreed during Call & Assign');
+      }
 
       // Reports what the server actually did, not what was asked for. Direct assignment can fall
       // back to a PENDING offer if the confirmation could not be applied, and telling ops the job
@@ -1873,14 +2007,49 @@ export const PlanningWorkspace: React.FC = () => {
       setMessage({ type: 'error', text: 'Select a branch before assigning an excluded candidate.' });
       return;
     }
+    // Same routing as the assign modal: a branch already offered to somebody else is moved with a
+    // reassignment (the override reason doubles as its reason), never re-offered over the top.
+    const route = assignRoute(selectedPb.assignment, candidate.assayerId);
+    const blocker = assignBlocker(route, reason);
+    if (blocker) {
+      setMessage({ type: 'error', text: blocker });
+      // Rethrown like any refusal, so the panel shows it beside the row that was clicked.
+      throw new Error(blocker);
+    }
     setAssigningExcludedId(candidate.assayerId);
+    if (route.kind === 'reassign') {
+      try {
+        await reassignAndApply(api.request.bind(api), {
+          assignmentId: route.assignmentId,
+          newAssayerId: candidate.assayerId,
+          reason: `Filter override — bypassed "${candidate.reason}". Reason: ${reason}`,
+          // No fee on this path: the server's re-price for the new assayer stands, as it does for
+          // an override create. A date the panel asked for (a date-bound exclusion) is applied;
+          // otherwise the job keeps the date it already had.
+          scheduledDate: scheduledDate || undefined,
+          acceptOnBehalf: false,
+        });
+        setMessage({
+          type: 'success',
+          text: `Moved ${selectedPb.branch?.name || 'this branch'} from ${route.fromName} to ${candidate.displayName} (override recorded). Both have been told.`,
+        });
+        refreshBranches();
+        refreshCandidates();
+      } catch (err: unknown) {
+        setMessage({ type: 'error', text: userMessage(err) });
+        throw err;
+      } finally {
+        setAssigningExcludedId(null);
+      }
+      return;
+    }
     try {
       await api.request('/assignments', {
         method: 'POST',
         body: JSON.stringify({
           projectBranchId: selectedPb.id,
           assayerId: candidate.assayerId,
-          // Date-bound exclusions (booked / on leave today) are assigned FOR a chosen date the
+          // Date-bound exclusions (on leave that day) are assigned FOR a chosen date the
           // assayer is free — the whole point of surfacing them instead of hiding them. Every
           // other exclusion kind (POLICY/SKILLS/ROTATION/DISTANCE) leaves the panel's own
           // `scheduledDate` empty, so this used to fall through to `undefined` and let the
@@ -2040,6 +2209,12 @@ export const PlanningWorkspace: React.FC = () => {
           inside `searchRadiusKm`. Stated once here so the gap between the two views is a fact
           the operator is told, rather than one they infer from a pin that is not there.
         */}
+        {/* The list is the top N the server returns (F9); say so whenever more were ranked. */}
+        {candidateTotal > candidates.length && (
+          <div data-testid="candidates-capped" style={{ marginBottom: '8px', padding: '5px 9px', fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', borderRadius: '6px' }}>
+            {cappedCandidatesNote(candidates.length, candidateTotal)}
+          </div>
+        )}
         {qualificationBlock && (
           <div style={{ marginBottom: '8px', padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--danger)', background: 'var(--status-cancelled-bg)', borderRadius: '6px', lineHeight: 1.5 }}>
             <div>
@@ -2099,8 +2274,10 @@ export const PlanningWorkspace: React.FC = () => {
           // fixed: being near the branch is good for service level and bad only for independence,
           // so "compliant"/"breach" here is about whether the assayer is far enough away to audit
           // this branch — nothing to do with the SLA clock. Renamed so the variable says so too.
-          const independenceStatus = slaEnabled && c.distanceKm !== null
-            ? (c.distanceKm >= slaRadius ? 'independent' : 'too-close')
+          // From HOME, as the independence rule measures it (F2) — never the live fix.
+          const independenceKm = homeRouteOf(c).distanceKm;
+          const independenceStatus = slaEnabled && independenceKm !== null
+            ? (independenceKm >= slaRadius ? 'independent' : 'too-close')
             : null;
           const cardBorderColor = independenceStatus === 'independent' ? 'var(--status-active-bg)' : independenceStatus === 'too-close' ? 'var(--status-cancelled-bg)' : 'var(--border-color)';
           const cardBg = independenceStatus === 'independent' ? 'var(--status-active-bg)' : independenceStatus === 'too-close' ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)';
@@ -2172,17 +2349,29 @@ export const PlanningWorkspace: React.FC = () => {
                         <> · {formatTravelTime(c.durationMinutes, c.distanceSource ?? null).replace(' by road', '')}</>
                       )}
                     </span>
+                    {/* Ranked from a live fix (F2): say so, and give the home figure the job is priced from. */}
+                    {c.rankedFromLive && (
+                      <span title="Ranked by where their phone is now. The fee, the service limit and the independence rule are measured from their home."
+                        style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
+                        ({liveDistanceNote(c, (km, src) => formatRouteDistance(km, (src as any) ?? null))}
+                        {homeRouteOf(c).distanceKm != null ? `; home ${formatRouteDistance(homeRouteOf(c).distanceKm!, (homeRouteOf(c).distanceSource as any) ?? null)}` : '; home not located'})
+                      </span>
+                    )}
                     {/*
                       This chip is about the *independence floor* — "far enough away not to be
                       auditing their own doorstep" — and nothing else. Labelled "✓ >50km Radius"
                       it read as general approval, so an assayer 1,749 km away wore a green tick
                       and no other distance signal at all. It now says which rule it is answering.
                     */}
-                    {slaEnabled && c.distanceKm !== null && (
-                      <span title={`Client independence rule: an assayer must be at least ${slaRadius} km from the branch they audit.`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: c.distanceKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
-                        {c.distanceKm >= slaRadius ? <><Check size={9} /> independent (&gt;{slaRadius}km)</> : <><X size={9} /> too close (&lt;{slaRadius}km)</>}
-                      </span>
-                    )}
+                    {/* Measured from HOME, as the rule itself is (F2). */}
+                    {slaEnabled && homeRouteOf(c).distanceKm !== null && (() => {
+                      const homeKm = homeRouteOf(c).distanceKm!;
+                      return (
+                        <span title={`Client independence rule: an assayer must be at least ${slaRadius} km from the branch they audit (measured from home).`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: homeKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: homeKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
+                          {homeKm >= slaRadius ? <><Check size={9} /> independent (&gt;{slaRadius}km)</> : <><X size={9} /> too close (&lt;{slaRadius}km)</>}
+                        </span>
+                      );
+                    })()}
                     {/*
                       And the ceiling, which nothing on this card used to mention.
                       The engine deliberately does not exclude on the service radius — see
@@ -2472,6 +2661,7 @@ export const PlanningWorkspace: React.FC = () => {
             onChange={setSelectedProjectId}
             options={projects.map(p => ({ value: p.id, label: `${p.name} (${p.projectNumber})` }))}
             menuWidth={320}
+            title="Filter planning workspace by project"
             style={{
               border: '1px solid rgba(216,174,71,0.35)',
               borderRadius: '6px',
@@ -2505,17 +2695,18 @@ export const PlanningWorkspace: React.FC = () => {
         {/* Right: Key Metrics & Report Export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Total: <b style={{ color: 'var(--text-primary)' }}>{totalCount}</b></span>
-            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-active-bg)', color: 'var(--success)', fontWeight: 700 }}>
+            <span style={{ color: 'var(--text-muted)' }} title={`Total branches in project: ${totalCount}`}>Total: <b style={{ color: 'var(--text-primary)' }}>{totalCount}</b></span>
+            <span title={`${confirmedCount} branches have confirmed assayer assignments (${coveragePct}% coverage)`} style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-active-bg)', color: 'var(--success)', fontWeight: 700 }}>
               {coveragePct}% ({confirmedCount})
             </span>
-            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
+            <span title={`${totalCount - confirmedCount} branches still waiting to be staffed with an assayer`} style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
               Pending ({totalCount - confirmedCount})
             </span>
           </div>
 
           <button
             onClick={handleExportCoverageReport}
+            title="Download full project branch coverage schedule as an Excel spreadsheet (.xlsx)"
             style={{
               background: 'var(--status-active-bg)',
               border: '1px solid var(--status-active-bg)',
@@ -2606,6 +2797,7 @@ export const PlanningWorkspace: React.FC = () => {
           <input
             type="text"
             placeholder="Filter city..."
+            title="Filter branch list by city name"
             value={cityFilter}
             onChange={e => setCityFilter(e.target.value)}
             style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-2xs)' }}
@@ -2615,6 +2807,7 @@ export const PlanningWorkspace: React.FC = () => {
           <input
             type="text"
             placeholder="Filter district..."
+            title="Filter branch list by district name"
             value={districtFilter}
             onChange={e => setDistrictFilter(e.target.value)}
             style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-2xs)' }}
@@ -2701,6 +2894,19 @@ export const PlanningWorkspace: React.FC = () => {
             />
           </label>
 
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}
+            title="Only needed when a rule would refuse a branch — the rotation rule, a skill or certification the client requires, or the service limit. Recorded against every offer it is used on.">
+            Reason (if a rule needs waiving)
+            <input
+              type="text"
+              value={bulkOverrideReason}
+              onChange={(e) => setBulkOverrideReason(e.target.value)}
+              placeholder="Recorded on each offer"
+              maxLength={1000}
+              style={{ width: '200px', padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-2xs)' }}
+            />
+          </label>
+
           {/* Shares the Call & Assign preference — one setting, so what the button does here
               never contradicts what it does in the modal. Shown rather than inherited silently:
               committing fourteen branches for someone must not be a hidden default. */}
@@ -2740,12 +2946,15 @@ export const PlanningWorkspace: React.FC = () => {
             }}
             disabled={bulkAssigning || bulkTargetBranches.rows.length === 0}
             className="btn btn-secondary"
+            title="Mark selected branches as unable to cover and record explanation"
             style={{ padding: '5px 11px', fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--danger)', borderColor: 'var(--danger)' }}>
             Mark unable to cover
           </button>
 
           <button onClick={() => { setBulkSelectedIds(new Set()); setBulkFailures([]); }}
-            className="btn btn-secondary" style={{ padding: '5px 11px', fontSize: 'var(--text-2xs)' }}>
+            className="btn btn-secondary"
+            title="Deselect all branches currently ticked"
+            style={{ padding: '5px 11px', fontSize: 'var(--text-2xs)' }}>
             Clear
           </button>
 
@@ -2753,7 +2962,7 @@ export const PlanningWorkspace: React.FC = () => {
               server re-checks every constraint per branch, so some offers may still bounce. */}
           {selectedCandidate && (
             <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
-              Each branch is validated separately — distance, double-booking and holiday rules still apply.
+              Each branch is validated separately — distance, leave and holiday rules still apply.
             </span>
           )}
 
@@ -2854,8 +3063,10 @@ export const PlanningWorkspace: React.FC = () => {
           footer={
           <>
             <button type="button" onClick={() => setShowAssignModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {assignDirectly ? <><Check size={14} /> Assign now</> : <><Send size={14} /> Send to app</>}
+            <button type="submit" className="btn btn-primary" disabled={modalBlocker != null} title={modalBlocker ?? undefined} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {modalRoute?.kind === 'reassign'
+                ? <><Users size={14} /> {assignDirectly ? 'Reassign and confirm' : 'Reassign'}</>
+                : assignDirectly ? <><Check size={14} /> Assign now</> : <><Send size={14} /> Send to app</>}
             </button>
           </>
         }>            {/* Assayer Summary */}
@@ -2879,6 +3090,40 @@ export const PlanningWorkspace: React.FC = () => {
                 <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}><Compass size={10} /> {formatRouteDistance(selectedCandidate.distanceKm, selectedCandidate.distanceSource ?? null, { emptyAs: 'Distance n/a' })}</span>
               </div>
             </div>
+
+            {/*
+              The branch is already with somebody. Moving it is a reassignment: the server needs the
+              reason and tells both assayers, so the form says both of those before the button does.
+              Checked in is a dead end on purpose — the visit is theirs; the job is cancelled instead.
+            */}
+            {modalRoute?.kind === 'blocked' && (
+              <div role="alert" style={{ padding: '10px 12px', background: 'var(--status-danger-bg)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--text-primary)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
+                <span>{modalRoute.message}</span>
+              </div>
+            )}
+            {modalRoute?.kind === 'reassign' && (
+              <div style={{ padding: '10px 12px', background: 'rgba(216,174,71,0.06)', border: '1px solid var(--warning)', borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                  <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: '1px', color: 'var(--warning)' }} />
+                  <span>
+                    This branch is {modalRoute.fromStatus === 'ACCEPTED' ? 'already accepted by' : 'already offered to'} <strong>{modalRoute.fromName}</strong>.
+                    Continuing moves it to <strong>{selectedCandidate.displayName}</strong>. Both assayers will be told.
+                  </span>
+                </div>
+                <label htmlFor="reassignReason" style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', fontWeight: 700 }}>
+                  Why is it moving? (required)
+                </label>
+                <input
+                  id="reassignReason"
+                  value={reassignReasonInput}
+                  onChange={e => setReassignReasonInput(e.target.value)}
+                  required
+                  placeholder={`e.g. ${modalRoute.fromName} cannot make the date`}
+                  style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--warning)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)', boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
 
             {/* Branch + Assignment details in 2-col grid */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -2931,7 +3176,7 @@ export const PlanningWorkspace: React.FC = () => {
                 </label>
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>₹</span>
-                  <input type="number" value={agreedFeeInput} onChange={e => setAgreedFeeInput(e.target.value)} required
+                  <input type="number" value={agreedFeeInput} onChange={e => { setAgreedFeeInput(e.target.value); setFeeEdited(true); }} required
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-base)', boxSizing: 'border-box' }} />
                 </div>
                 {/*
@@ -2943,6 +3188,11 @@ export const PlanningWorkspace: React.FC = () => {
                 <div style={{ marginTop: '6px', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                   {loadingCommercial ? 'Reading the rate card…' : feeReferenceLine(feeQuote)}
                 </div>
+                {!loadingCommercial && dayTravelNote(feeQuote) && (
+                  <div style={{ marginTop: '4px', fontSize: 'var(--text-3xs)', color: 'var(--success)', fontWeight: 600, lineHeight: 1.5 }}>
+                    {dayTravelNote(feeQuote)}
+                  </div>
+                )}
               </div>
               {/*
                 * The rule this assignment will break, and the box that lets it through.
@@ -2983,7 +3233,7 @@ export const PlanningWorkspace: React.FC = () => {
                 costs by the recommended mode, with the alternatives, so the caller can argue
                 in specifics ("bus both ways is ₹240") instead of feel. Server-quoted — this
                 modal computes nothing. */}
-            {feeQuote?.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended && (
+            {feeQuote?.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended && !feeQuote.travelAlreadyCharged && (
               <div style={{ marginTop: '12px', padding: '10px 12px', background: 'rgba(216,174,71,0.06)', border: '1px dashed rgba(216,174,71,0.35)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 700, color: 'var(--text-primary)' }}>
                   <Bus size={12} /> Recommended fee includes ₹{feeQuote.travelFee.toLocaleString()} travel — {feeQuote.transport.recommended.modeLabel}, round trip
@@ -3419,7 +3669,11 @@ export const PlanningWorkspace: React.FC = () => {
                                     { label: 'Branches', val: String(plan.totalBranches), icon: <Building2 size={10} />, warn: false },
                                     { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: <Clock size={10} />, warn: false },
                                     { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: <Car size={10} />, warn: false },
-                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: <Calendar size={10} />, warn: false },
+                                    // Jobs already booked that day elsewhere are part of the day (F5).
+                                    ...(plan.existingSameDayJobs && plan.existingSameDayJobs.count > 0
+                                      ? [{ label: 'Already booked', val: `${plan.existingSameDayJobs.count} job${plan.existingSameDayJobs.count > 1 ? 's' : ''} · ${plan.existingSameDayJobs.hours}h`, icon: <AlertTriangle size={10} />, warn: true }]
+                                      : []),
+                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: plan.exceedsWorkingDay ? <AlertTriangle size={10} /> : <Calendar size={10} />, warn: plan.exceedsWorkingDay === true },
                                     { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: <Clock size={10} />, warn: false },
                                     { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? <Flame size={10} /> : <BarChart3 size={10} />, warn: false },
                                   ].map((m, mi) => (

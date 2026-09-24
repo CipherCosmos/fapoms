@@ -150,23 +150,25 @@ describe('canAccessRoute', () => {
     ];
 
     /**
-     * The workforce console is CLOSED to it, and that is the honest answer rather than a
-     * regression.
+     * The workforce console is OPEN to it again, because its API now serves it.
      *
-     * This asserted `true` on the strength of `GET /hr/workforce` declaring
-     * `assayer:view:organization`. Measured against a live custom role holding exactly that grant,
-     * the route answers 403: its `@Roles(ADMIN, OPERATIONS)` carries no permission fallback, so
-     * `RolesGuard` refuses an unrecognised role name before it reads a permission. Opening the page
-     * anyway produced "The workforce figures could not be loaded just now. An unknown problem
-     * occurred." — a page that opens and cannot fill itself.
-     *
-     * `modules/assayer/**` belongs to another workstream. One `@AllowPermissionFallback()` on
-     * `HrController.workforce` makes this `true` again, and the entry says so.
+     * This was closed while `GET /hr/workforce` refused every custom role (no permission fallback
+     * behind `@Roles(ADMIN, OPERATIONS)`). HrController.workforce and the roster list
+     * (`GET /assayers`) now carry `@AllowPermissionFallback()`, so a role holding
+     * ASSAYER:VIEW:ORGANIZATION loads the console and its roster — see the backend's
+     * custom-role-page-parity.spec.ts, which pins both ends.
      */
-    it('is NOT offered the workforce console, because its API refuses a custom role', () => {
-      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr')).toBe(false);
-      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr/roster')).toBe(false);
-      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/assayers')).toBe(false);
+    it('is offered the workforce console, because its API now serves a custom role', () => {
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr/roster')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/assayers')).toBe(true);
+      // Without the grant, still closed.
+      expect(canAccessRoute(CUSTOM_ROLE, [], '/hr')).toBe(false);
+    });
+
+    it('offers the approvals queue only to a custom role holding both approve and view', () => {
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'], '/hr/approvals')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION', 'ASSAYER:APPROVE:ORGANIZATION'], '/hr/approvals')).toBe(true);
     });
 
     /**
@@ -399,8 +401,8 @@ describe('canAccessRoute', () => {
 
     it('grants a super administrator everything except what the developer split fenced off', () => {
       // Implication runs DEVELOPER → ADMIN, never the reverse: the service logs are the
-      // technical estate, and the support desk moved to the people who answer the tickets.
-      const CLOSED_TO_ADMIN = ['/admin/logs', '/feedback'];
+      // technical estate. (Support is open to admins again, as reporters: the desk is inside the page.)
+      const CLOSED_TO_ADMIN = ['/admin/logs'];
       for (const rp of ROUTE_PERMISSIONS) {
         const routePath = rp.path.replace(':id', 'some-id');
         const expected = !CLOSED_TO_ADMIN.includes(rp.path);
@@ -464,10 +466,17 @@ describe('canAccessRoute', () => {
       expect(canAccessRoute([SystemRole.ADMIN], [], '/admin/logs')).toBe(false);
     });
 
-    it('shares the support desk with PRODUCT_SUPPORT; ADMIN lost it', () => {
-      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/feedback')).toBe(true);
-      expect(canAccessRoute([SystemRole.PRODUCT_SUPPORT], [], '/feedback')).toBe(true);
-      expect(canAccessRoute([SystemRole.ADMIN], [], '/feedback')).toBe(false);
+    /**
+     * 2026-09-25: the page holds both sides of support. Reporting is everyone's — hiding the route
+     * from non-developers hid the Support button and sidebar entry with it, so nobody but the desk
+     * could report anything. The desk (queue, triage, resolve) is switched inside the page and
+     * enforced by the backend's FEEDBACK_TEAM_ROLES.
+     */
+    it('lets every signed-in role open Support, not just the desk', () => {
+      for (const role of Object.values(SystemRole)) {
+        expect({ role, allowed: canAccessRoute([role], [], '/feedback') }).toEqual({ role, allowed: true });
+      }
+      expect(canAccessRoute(CUSTOM_ROLE, [], '/feedback')).toBe(true);
     });
 
     /**
@@ -519,18 +528,17 @@ describe('defaultRouteFor', () => {
     expect(defaultRouteFor([SystemRole.PRODUCT_SUPPORT], [])).toBe('/feedback');
   });
 
+  it('does not land anyone else on Support just because everyone may open it', () => {
+    expect(defaultRouteFor(CUSTOM_ROLE, [])).toBe('/notifications');
+    expect(defaultRouteFor([SystemRole.CLIENT_USER], ['PROJECT:VIEW:ORGANIZATION'])).toBe('/dashboard');
+  });
+
   /**
-   * A role built in Admin -> Roles lands on the first page it can ACTUALLY use.
-   *
-   * This asserted `/hr` for a workforce grant. It cannot any more and must not: `GET /hr/workforce`
-   * refuses a custom role, so sending one there recreated the original incident in miniature — a
-   * landing page that opens and then fails to load. A role granted only the workforce permissions
-   * now falls through to its own notification inbox, which is a poor home and an honest one; the
-   * moment `HrController` honours the fallback and `/hr` names the permission again, this returns
-   * to `/hr` on its own.
+   * A role built in Admin -> Roles lands on the first page it can ACTUALLY use. A workforce grant
+   * lands on `/hr` again now that `GET /hr/workforce` serves a custom role.
    */
-  it('never lands a custom role on a page whose API would refuse it', () => {
-    expect(defaultRouteFor(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'])).not.toBe('/hr');
+  it('lands a custom workforce role on the console its API now serves', () => {
+    expect(defaultRouteFor(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'])).toBe('/hr');
   });
 
   it('lands a custom role on the first page its grants really open', () => {

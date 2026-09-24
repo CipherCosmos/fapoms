@@ -4,91 +4,34 @@
  * Handles CRUD and lifecycle state transitions for projects and project branches (Part 3 Module 2, Part 5 §3).
  */
 
-import { Injectable, NotFoundException, BadRequestException, ConflictException, OnModuleInit } from '@nestjs/common';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, In, DataSource } from 'typeorm';
+import { Repository, In, DataSource, EntityManager } from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
-import type {
-  BranchImportOutcome,
-  BranchUploadReport,
-  BranchImportProgress,
-  BranchImportPreflight,
-  ImportScope,
-} from '../import/import.contract';
 import { AssessmentEntity } from './assessment.entity';
-import { ClientEntity } from '../client/client.entity';
-import { ZoneEntity } from '../zone/zone.entity';
 import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
-import { BranchService, UpdateBranchDto } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { AssignmentStatus, EventCategory, Priority, ProjectStatus, ProjectBranchStatus, SystemRole, resolveRegion, zoneNameForState, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
-// One implementation of "read a spreadsheet column", shared with the assayer roster upload —
-// the exact-header bug that dropped every row has now been hit by both importers.
-import { parseSheet, rowReader, identifyTemplate, normaliseHeader, BLANK_HEADER, ParsedSheet, RowReader } from '../../core/excel/sheet-reader';
 import { buildWorkbook } from '../reports/excel-export';
-import { BranchEntity } from '../branch/branch.entity';
-import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
-import { needsBetterFix } from '../geo/coordinate-resolution';
-import { GeoPrecisionService } from '../geo/geo-precision.service';
+import { AssayerService } from '../assayer/assayer.service';
+import {
+  announceCancelledAssignments,
+  cancelOpenAssignmentsForClosure,
+  ClosureCancelledAssignment,
+  onSiteRefusalMessage,
+} from '../assignment/closure-cancellation';
+import { DayTravelService } from '../assignment/assignment-day-travel';
+import { ASSIGNED_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-
-/**
- * Geocode a branch address for a bulk import. Never throws — worst case returns a
- * state/country centroid with source='none'.
- *
- * `precise: false` on purpose, and it is the one interesting decision here. The free OSM tiers
- * are rate-limited by their providers to roughly one lookup per second, so resolving a 400-row
- * client file precisely would take seven minutes with the HTTP request held open the whole
- * time. The import therefore takes the fast tiers — pincode and centroid, mostly served from
- * cache — and the precision backfill upgrades those rows afterwards, out of the request path.
- * The tier is recorded either way, so nothing pretends a centroid is a location in the meantime.
- */
-async function getRealCoordinates(
-  address: string, name: string, district: string, state: string,
-): Promise<{ lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null }> {
-  const pinMatch = address.match(/\b\d{6}\b/);
-  const result: GeocodeResult = await geocodeIndiaRobust(
-    address, name, district, state, pinMatch ? pinMatch[0] : null,
-    { precise: false, name },
-  );
-
-  return {
-    lat: result.lat,
-    lng: result.lng,
-    geoSource: result.source,
-    geoAccuracyMeters: Math.round(result.accuracyMeters),
-    geoMatchedName: result.matchedName ?? null,
-  };
-}
-
-// The default zone for a state, from the one shared state→zone map (one per region, complete over
-// India). Only reached when the client has not configured a zone that already claims the state.
-function getStateZone(stateName: string): string {
-  return zoneNameForState(stateName) ?? 'East Zone';
-}
-
-/**
- * The import vocabulary now lives in `modules/import/import.contract.ts`, because it describes a
- * spreadsheet import rather than a project — the client-scoped Branches import speaks it too, and
- * could not while it was declared here (`BranchModule` cannot import `ProjectModule`).
- *
- * Re-exported so the existing `from './project.service'` imports keep resolving.
- */
-export type {
-  BranchImportOutcome,
-  BranchUploadReport,
-  BranchImportProgress,
-  BranchImportPreflight,
-  ImportScope,
-} from '../import/import.contract';
 
 /** Partial edit of a project. Lifecycle moves go through transition(). */
 export type UpdateProjectDto = Partial<CreateProjectDto>;
@@ -112,45 +55,6 @@ export interface CreateProjectDto {
 }
 
 
-/**
- * A 0-10 risk rating derived from the branch's risk category. Ten is the top of the scale the
- * planning map reads (>= 7 = high), and the recommendation engine's "send a senior assayer"
- * rule fires at 7 — so HIGH and CRITICAL trip it, MEDIUM and LOW do not.
- *
- * The category itself is no longer something the import sheet asks for: it is the project's
- * priority (see `uploadBranchesFromExcel`), which the person creating the project already set.
- */
-function riskScoreFromCategory(category: string): number {
-  switch (category) {
-    case 'CRITICAL': return 9;
-    case 'HIGH': return 7;
-    case 'MEDIUM': return 4;
-    case 'LOW': return 2;
-    default: return 2;
-  }
-}
-
-/**
- * Complexity from packet volume — the one per-branch workload signal the sheet actually carries.
- *
- * This used to be a column the operator was asked to fill ("SIMPLE / STANDARD / COMPLEX") and in
- * practice was left blank on every row, so every branch defaulted to STANDARD. Packets is what
- * sizes the audit — the day planner turns it into hours at `minutesPerPacket` — so it is the
- * honest basis for "how involved is this branch", and it moves with each cycle's real numbers
- * instead of sticking at whatever someone typed once.
- *
- * Tiers are read off the real client distribution (16–161 packets; median 58, p75 100) against
- * the 15-minute default: up to 40 packets is about one assayer-day, 41–100 is one to two and a
- * half, past 100 the branch is a multi-day job. No packets recorded means no signal, and the
- * middle tier is the only answer that does not overstate either way.
- */
-function complexityFromPackets(packets: number | null): 'SIMPLE' | 'STANDARD' | 'COMPLEX' {
-  if (packets === null || !Number.isFinite(packets) || packets <= 0) return 'STANDARD';
-  if (packets <= 40) return 'SIMPLE';
-  if (packets <= 100) return 'STANDARD';
-  return 'COMPLEX';
-}
-
 @Injectable()
 export class ProjectService implements OnModuleInit {
   constructor(
@@ -160,49 +64,21 @@ export class ProjectService implements OnModuleInit {
       private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
       @InjectRepository(AssessmentEntity)
       private readonly assessmentRepository: Repository<AssessmentEntity>,
-      @InjectRepository(ClientEntity)
-      private readonly clientRepository: Repository<ClientEntity>,
-      @InjectRepository(ZoneEntity)
-      private readonly zoneRepository: Repository<ZoneEntity>,
-      /**
-       * Used only by the Excel import, to resolve every branch code in the file with one
-       * `In(codes)` query instead of one `BranchQueryService.findOneByCode` per row.
-       * `BranchQueryService` has no batched equivalent and lives in another module's ownership,
-       * so the batched read is issued here rather than by widening its API.
-       */
-      @InjectRepository(BranchEntity)
-      private readonly branchRepository: Repository<BranchEntity>,
       private readonly branchQueryService: BranchQueryService,
-      private readonly branchService: BranchService,
       private readonly auditService: AuditService,
       private readonly workflowEngine: WorkflowEngine,
       private readonly eventPublisher: DomainEventPublisher,
       private readonly projectQueryService: ProjectQueryService,
       private readonly notificationDispatch: NotificationDispatchService,
-      private readonly geoPrecision: GeoPrecisionService,
       @InjectDataSource()
       private readonly dataSource: DataSource,
+      /** The silent "your jobs changed" push, for work a project cancellation cancels. */
+      @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
+      /** Turning location sharing off for an assayer whose last job a cancellation ended. */
+      @Optional() private readonly assayerService?: AssayerService,
+      /** Re-deciding the day's travel when a cancelled job was the one carrying it (E2). */
+      @Optional() private readonly dayTravel?: DayTravelService,
    ) {}
-
-  private async resolveZoneName(stateName: string, clientId?: string): Promise<string> {
-    if (stateName) {
-      const stateUpper = stateName.toUpperCase();
-      const query = this.zoneRepository.createQueryBuilder('zone')
-        .where('zone.isActive = true');
-      if (clientId) {
-        query.andWhere('(zone.clientId = :clientId OR zone.clientId IS NULL)', { clientId });
-      }
-      const zones = await query.getMany();
-      for (const z of zones) {
-        if (z.states && Array.isArray(z.states)) {
-          if (z.states.some((s) => s.toUpperCase() === stateUpper)) {
-            return z.name;
-          }
-        }
-      }
-    }
-    return getStateZone(stateName);
-  }
 
   onModuleInit() {
     // Derived from the one table, not typed out again. The engine gates
@@ -463,6 +339,15 @@ export class ProjectService implements OnModuleInit {
       [userId, id]
     );
 
+    // The (assayer, day) pairs whose live work this removal takes away — read before it goes, so
+    // each day's travel can be re-decided afterwards (travel once per assayer per day, E2).
+    const liveDays: Array<{ assayer_id: string | null; scheduled_date: string | Date | null }> = await this.dataSource.query(
+      `SELECT DISTINCT assayer_id, scheduled_date FROM assignments
+        WHERE project_id = $1 AND is_active = true
+          AND status IN (${sqlStatusList(ASSIGNED_ASSIGNMENT_STATUSES)})`,
+      [id],
+    ).catch(() => []);
+
     // Deactivate associated assignments
     await this.dataSource.query(
       `UPDATE assignments SET is_active = false, updated_by = $1,
@@ -531,6 +416,13 @@ export class ProjectService implements OnModuleInit {
       organizationId: project.organizationId,
       payload: { id, name: project.name, projectNumber: project.projectNumber },
     });
+
+    // The removed jobs may have carried their day's travel; each affected day is re-decided.
+    await this.dayTravel?.rebalanceMany(
+      (Array.isArray(liveDays) ? liveDays : []).map((r) => ({ assayerId: r.assayer_id, day: r.scheduled_date })),
+      userId,
+      `project ${project.name} was removed`,
+    );
   }
 
   async findProjectBranches(
@@ -674,877 +566,6 @@ export class ProjectService implements OnModuleInit {
         columnWidths: [18, 10, 110],
       },
     ]);
-  }
-
-  /**
-   * Parse a branch workbook and refuse the files that are not one.
-   *
-   * Lifted out of `uploadBranchesFromExcel` unchanged so that the synchronous endpoint and the
-   * request that *enqueues* a background import reject a bad file identically, and in the
-   * request. A wrong template or an empty sheet has to fail while the operator is still looking
-   * at the upload dialog — learning it from a job record several minutes later, after the file
-   * has been accepted with a 202, is precisely the regression queueing could introduce.
-   */
-  private parseBranchSheet(fileBuffer: Buffer): ParsedSheet {
-    // Finds the header row rather than assuming row 1 — client branch lists routinely open with
-    // a merged title and a blank line, which otherwise makes every column `__EMPTY` and drops
-    // the whole file. See core/excel/sheet-reader.
-    const sheet = parseSheet(fileBuffer, ['BRANCH', 'BRANCH_NAME', 'STATE']);
-
-    if (sheet.rows.length === 0) {
-      throw new BadRequestException(
-        `The first sheet of this file ("${sheet.sheetName ?? 'none'}") has no data rows. ` +
-          `Download the template, fill in the Branch sheet, and upload that.`,
-      );
-    }
-
-    /**
-     * Refuse the other importer's file outright.
-     *
-     * The mirror of the check on the assayer upload, and the more dangerous direction: an
-     * assayer roster has a name column and an address column, so this importer would not reject
-     * it — it would cheerfully create a "branch" per person, geocode their home, and attach
-     * them to the project. Rejecting on the file's identity catches that before the first write.
-     */
-    const identified = identifyTemplate(sheet);
-    if (identified && identified.id !== 'branch-import') {
-      throw new BadRequestException(
-        `This file is a ${identified.label}, not a branch list. ` +
-          `Upload it under ${identified.where} instead — importing it here would create branches out of the wrong data.`,
-      );
-    }
-
-    return sheet;
-  }
-
-  /**
-   * Validate an upload and measure how much work it is, without doing any of it.
-   *
-   * The routing decision between "run it now" and "queue it" is made from this, so it must be
-   * cheap and must not touch the network: it parses the workbook (milliseconds, even for
-   * thousands of rows) and counts the rows that will each cost a rate-limited geocode.
-   */
-  /**
-   * Turn an import scope into the handful of facts the importer actually reads.
-   *
-   * A branch sheet uploaded on the Branches page and one uploaded on a project differ in exactly
-   * two ways: where the owning client and organisation come from, and whether each row also gets
-   * linked to a project with an assessment. Everything else — parsing, the SOL-ID identity, zone
-   * resolution, geocoding, the skip and imprecision reports — is identical, which is why running
-   * them as two separate importers produced two different answers for the same file.
-   *
-   * Resolving both to this shape lets one implementation serve both, with `projectId === null`
-   * being the only thing the row loop has to branch on.
-   */
-  private async resolveImportTarget(scope: ImportScope): Promise<{
-    projectId: string | null;
-    clientId: string | null;
-    organizationId: string | null;
-    /** Typed as the column's own enum so a project-branch row cannot be created with a free string. */
-    priority: Priority;
-    label: string;
-  }> {
-    if (scope.kind === 'PROJECT') {
-      // Settled in the request, so an upload against a project that does not exist still 404s
-      // immediately rather than being accepted and failing inside a job nobody is watching.
-      const project = await this.findOne(scope.id);
-      return {
-        projectId: project.id,
-        clientId: project.clientId ?? null,
-        organizationId: project.organizationId ?? null,
-        priority: project.priority || Priority.MEDIUM,
-        label: `project ${project.id}`,
-      };
-    }
-
-    const client = await this.clientRepository.findOne({ where: { id: scope.id } });
-    if (!client) {
-      throw new NotFoundException(
-        `Client ${scope.id} was not found, so there is nothing to import these branches into.`,
-      );
-    }
-    return {
-      projectId: null,
-      clientId: client.id,
-      organizationId: client.organizationId ?? null,
-      /**
-       * A client-scoped import has no project to inherit urgency from, so rows land on the
-       * column default. Nothing reads it until the branch is attached to a project, at which
-       * point that project's priority applies.
-       */
-      priority: Priority.MEDIUM,
-      label: `client ${client.id}`,
-    };
-  }
-
-  /**
-   * The distinct regions a branch workbook would write into.
-   *
-   * A file upload is a bulk `POST /branches`, and it was the one door the region ceiling could
-   * not see through: `POST /branches` now refuses a region the caller is not assigned to, and a
-   * spreadsheet naming the same state creates the same branch without anyone asking. Both upload
-   * routes (`POST /projects/:id/branches/upload` and `POST /branches/import/:clientId`) call this
-   * before deciding anything, so an out-of-region row is refused at the door — including on the
-   * queued path, which runs later in a worker that has no principal to check anything against.
-   *
-   * Reads the state column exactly as the importer's own row loop does, through the same
-   * `rowReader` aliases and the same `resolveRegion`, so a row this says is WEST is a row that
-   * would have been written as WEST. Rows with no state are ignored here: the importer already
-   * refuses them by name ("No state for …"), and they resolve to no region, so there is nothing
-   * for a ceiling to compare.
-   */
-  async branchExcelRegions(fileBuffer: Buffer): Promise<string[]> {
-    const sheet = this.parseBranchSheet(fileBuffer);
-    const regions = new Set<string>();
-    for (const row of sheet.rows) {
-      const get = rowReader(row);
-      const name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
-      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code');
-      // The same blank-trailing-row test the importer uses.
-      if (!name && !solId) continue;
-      const region = resolveRegion(get('STATE', 'State', 'StateName'));
-      if (region) regions.add(region);
-    }
-    return [...regions];
-  }
-
-  async preflightBranchExcel(scope: ImportScope, fileBuffer: Buffer): Promise<BranchImportPreflight> {
-    const target = await this.resolveImportTarget(scope);
-    const sheet = this.parseBranchSheet(fileBuffer);
-
-    /**
-     * A row already in the database does not cost a geocode, and the estimate has to know that.
-     *
-     * This counted "rows with no Latitude/Longitude column" — which was a fair proxy while the
-     * template still asked for coordinates. It no longer does (they are derived), so every row
-     * looked like a lookup and every file over 25 rows was deferred to a background job. Measured
-     * on a real re-import of 72 unchanged branches: preflight said "72 need a location looked up",
-     * the job ran zero geocodes and finished in **one second** — after telling the operator to go
-     * and watch a status URL.
-     *
-     * What actually costs a lookup is a branch this client has never seen, or one whose address
-     * moved: `BranchService.update` re-resolves only when the address, district or state changes
-     * (a hand-placed pin survives even then). So the estimate asks the same question the importer
-     * will, with the same one `In(codes)` query the importer already issues per file.
-     */
-    const candidates: Array<{ code: string; address: string; district: string; state: string; hasCoords: boolean }> = [];
-    for (const row of sheet.rows) {
-      const get = rowReader(row);
-      // The same blank-trailing-row test the importer uses, so the estimate counts the rows that
-      // will actually be worked rather than the empty ones Excel leaves at the bottom of a sheet.
-      const name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
-      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code');
-      if (!name && !solId) continue;
-      const lat = parseFloat(get('Latitude', 'Lat'));
-      const lng = parseFloat(get('Longitude', 'Lng', 'Long'));
-      candidates.push({
-        code: solId,
-        address: get('Branch Address', 'Address', 'BranchAddress'),
-        district: get('DISTRICT', 'District', 'DistrictName').toUpperCase(),
-        state: get('STATE', 'State', 'StateName'),
-        // A sheet that still carries coordinates skips the lookup entirely — see the importer.
-        hasCoords: Number.isFinite(lat) && Number.isFinite(lng),
-      });
-    }
-
-    const sols = candidates.map((c) => c.code).filter(Boolean);
-    const known = sols.length
-      ? await this.branchRepository.find({
-          where: {
-            solId: In(sols),
-            isActive: true,
-            ...(target.clientId ? { clientId: target.clientId } : {}),
-          },
-          select: ['solId', 'address', 'district', 'state'],
-        })
-      : [];
-    const knownBySol = new Map(known.map((b) => [b.solId, b]));
-
-    let rowsNeedingGeocode = 0;
-    for (const c of candidates) {
-      if (c.hasCoords) continue;
-      const existing = knownBySol.get(c.code);
-      if (!existing) {
-        rowsNeedingGeocode++; // A new branch: always located from its address.
-        continue;
-      }
-      // Mirrors the patch the importer builds, and `BranchService.update`'s re-resolve test.
-      const moved =
-        (!!c.address && c.address !== existing.address) ||
-        (!!c.district && c.district !== existing.district) ||
-        (!!c.state && c.state !== existing.state);
-      if (moved) rowsNeedingGeocode++;
-    }
-
-    return { totalRows: sheet.rows.length, rowsNeedingGeocode, sheetName: sheet.sheetName };
-  }
-
-  /**
-   * @param onProgress Called as rows are worked, so a queued import can publish how far it has
-   *   got. Absent on the synchronous path, where nothing can observe it mid-flight.
-   */
-  async uploadBranchesFromExcel(
-    scope: ImportScope,
-    fileBuffer: Buffer,
-    userId: string,
-    onProgress?: (progress: BranchImportProgress) => void,
-  ): Promise<BranchUploadReport> {
-    const target = await this.resolveImportTarget(scope);
-
-    // Read client planning preferences for hours-per-packet rate
-    const client = target.clientId
-      ? await this.clientRepository.findOne({ where: { id: target.clientId } })
-      : null;
-    const planningPrefs = client?.planningPreferences || {};
-    const minutesPerPacket = Number(planningPrefs.minutesPerPacket) || 15; // default 15min per packet
-
-    const sheet = this.parseBranchSheet(fileBuffer);
-    const rows = sheet.rows;
-
-    const addedBranches: ProjectBranchEntity[] = [];
-    /**
-     * Rows the importer could not use, and why.
-     *
-     * These were `continue` with no record kept. A file whose header row says `Branch` instead
-     * of `BRANCH_NAME` dropped every single row, and the endpoint still returned 200 with the
-     * project's existing branch list — so the operator was told the upload succeeded while
-     * nothing had been imported. Anything skipped is now named, with its spreadsheet row number.
-     */
-    const skipped: { row: number; solId?: string; reason: string }[] = [];
-    let createdCount = 0;
-    let updatedCount = 0;
-    /** Matched an existing branch and needed no change. See `BranchImportOutcome.unchanged`. */
-    let unchangedCount = 0;
-    /**
-     * Which row first used each SOL ID, so a repeat inside one file can be named.
-     *
-     * The loop upserts by `solId`, so a sheet listing the same SOL ID twice silently applied the
-     * later row over the earlier one — and because the two rows rarely agree on every column, what
-     * survived was a mixture of both: one row's name and address on top of the other's contact and
-     * risk data. The counts said "created 6, updated 1", which reads as an ordinary refresh of a
-     * pre-existing branch rather than "two of your rows collided".
-     */
-    const firstRowForSol = new Map<string, number>();
-    /**
-     * Archived branches this file brought back. Reported alongside `imprecise` rather than being
-     * silent: a branch reappearing in the estate is a change the operator should see attributed to
-     * their upload.
-     */
-    const revived: { row: number; solId?: string; reason: string }[] = [];
-    /**
-     * Every column heading this import actually reads, recorded as it reads them.
-     *
-     * A heading the importer does not recognise is dropped in silence and the run still reports
-     * success. The roster importer proved the cost: a sheet headed `Aadhaar Number` rather than
-     * `Aadhar Card Number` imported all its rows, said "created 6, skipped 0", and discarded every
-     * Aadhaar number. This file carries 3,759 branches, so the same slip loses a column of them.
-     * Collected from the real `get(...)` call sites so it cannot drift from the aliases in use.
-     */
-    const askedFor = new Set<string>();
-    const notes: string[] = [];
-    /**
-     * Rows that imported but landed on a fallback coordinate — a warning list, not a skip list.
-     * Kept separate from `skipped` because these branches DID import; they simply cannot be
-     * planned or checked into until someone corrects where they are.
-     */
-    const imprecise: { row: number; solId?: string; reason: string }[] = [];
-    // The branch ids behind `imprecise`, handed to the precision worker when the import is done.
-    const impreciseBranchIds: string[] = [];
-
-    /**
-     * ## Why this is two passes rather than one
-     *
-     * Everything below the sheet — reading a cell, checking a pincode, canonicalising a region —
-     * is pure. Everything that touches the database or the network is not. The original loop
-     * interleaved them, which meant every read it needed was issued one row at a time: a
-     * `findOneByCode`, a `project_branches` lookup, an `assessments` lookup and two zone queries
-     * per row, so a 2,000-branch file spent 10,000 round trips answering questions that four
-     * queries answer for the whole file. The reads that do not depend on the row's own result are
-     * now hoisted between the passes and served from memory.
-     *
-     * Pass 1 also gives the queued path something the old shape could not: the full set of rows
-     * worth working is known before the first write, so progress can be reported against a real
-     * denominator instead of "rows in the sheet, some of which are blank".
-     */
-    interface PreparedRow {
-      rowNumber: number;
-      /** The remaining columns, read lazily in pass 2 — see rowReader for the alias handling. */
-      get: RowReader;
-      branchName: string;
-      solId: string;
-      district: string;
-      state: string;
-      address: string;
-      pincodeStr: string;
-      packetCount: number;
-      calculatedHours: number | null;
-      suppliedCoords: { lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null } | null;
-      region: string | null;
-    }
-    const prepared: PreparedRow[] = [];
-
-    for (let index = 0; index < rows.length; index++) {
-      const row = rows[index];
-      // The header row itself, plus however many rows preceded it.
-      const rowNumber = index + sheet.headerRow + 1;
-      const get = rowReader(row, askedFor);
-
-      // Every column is read through the alias list rather than one exact header, so the
-      // client's own export, our template, and a hand-edited copy of either all import.
-      const branchName = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
-      // The SOL id is a branch's single identity, read from whichever column the bank used to name
-      // it — "SOL ID", or the plain "BRANCH"/"Branch Code" that holds the same number. Keyed here
-      // exactly as the Branches-page importer keys it, so a file uploaded through both doors matches
-      // the same record instead of inserting a second copy.
-      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo',
-                        'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code');
-      if (!branchName && !solId) {
-        // A wholly blank row — the trailing rows Excel leaves behind. Not worth reporting.
-        continue;
-      }
-      if (!branchName) {
-        skipped.push({ row: rowNumber, solId, reason: 'No branch name in this row.' });
-        continue;
-      }
-      if (!solId) {
-        skipped.push({ row: rowNumber, reason: `No SOL ID for "${branchName}".` });
-        continue;
-      }
-
-      // Same SOL ID twice in one sheet: keep the first occurrence and name the collision, rather
-      // than overwriting it with the later row and reporting the result as a routine "updated".
-      const solKey = solId.trim().toUpperCase();
-      const firstRow = firstRowForSol.get(solKey);
-      if (firstRow !== undefined) {
-        skipped.push({
-          row: rowNumber,
-          solId,
-          reason: `Duplicate of row ${firstRow} (SOL ID ${solId}) — the first row was kept.`,
-        });
-        continue;
-      }
-      firstRowForSol.set(solKey, rowNumber);
-
-      /**
-       * One bad row must not cost the operator the other 399.
-       *
-       * Nothing here was guarded, so a single failure — a malformed cell, a number where a date
-       * was expected — threw straight out of the endpoint as a 500 and the operator was shown a
-       * crash with no way to tell how far it got. Each row now either lands or is reported by
-       * number. Pass 2 carries the same guard for the failures only it can hit.
-       */
-      try {
-        const district = get('DISTRICT', 'District', 'DistrictName').toUpperCase();
-        const state = get('STATE', 'State', 'StateName');
-        const address = get('Branch Address', 'Address', 'BranchAddress');
-        const pincodeStr = get('Pincode', 'Pin', 'Pin Code', 'Postal Code', 'Zip');
-
-        if (!state) {
-          // State drives the region, the zone and the public-holiday calendar. A branch without
-          // one is unplannable, so it is refused loudly rather than imported into limbo.
-          skipped.push({ row: rowNumber, solId, reason: `No state for "${branchName}".` });
-          continue;
-        }
-
-        /**
-         * A pincode has to look like a pincode.
-         *
-         * `ABCDE` was stored verbatim and thereafter looked like a real postcode to anyone
-         * reading the record — and to the geocoder, which quietly ignored it and fell back to the
-         * city centroid. Six digits, first one non-zero, is the Indian format. Blank stays
-         * allowed: plenty of client exports omit it, and the address still geocodes.
-         */
-        if (pincodeStr && !/^[1-9][0-9]{5}$/.test(pincodeStr.trim())) {
-          skipped.push({
-            row: rowNumber,
-            solId,
-            reason: `"${pincodeStr}" is not a valid pincode for "${branchName}" — expected 6 digits.`,
-          });
-          continue;
-        }
-
-        // Read packet count and calculate estimated duration
-        const packetCount = parseInt(get('Packets', 'packet_count', 'Packet Count'), 10);
-        const calculatedHours = !isNaN(packetCount) && packetCount > 0
-          ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
-          : null;
-
-        // The template no longer asks for coordinates — a branch is located from its address —
-        // but a pair that arrives anyway (a client's own export carrying their GPS survey, say)
-        // is exact and is honoured over geocoding. This is the one derived field a sheet may
-        // still override, because a real coordinate beats any lookup.
-        const latRaw = parseFloat(get('Latitude', 'Lat'));
-        const lngRaw = parseFloat(get('Longitude', 'Lng', 'Long'));
-        // Normalised to the same shape a geocode returns, so the two paths cannot diverge in
-        // what they record. A coordinate the client put in their own sheet is authoritative for
-        // that branch, so it is kept as-is and marked accordingly rather than re-derived.
-        const suppliedCoords: { lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null } | null =
-          Number.isFinite(latRaw) && Number.isFinite(lngRaw)
-            ? { lat: latRaw, lng: lngRaw, geoSource: 'geocoder', geoAccuracyMeters: 60, geoMatchedName: 'Supplied in the import sheet' }
-            : null;
-
-        /**
-         * Canonicalised, never the raw state string.
-         *
-         * This wrote `region: state`, so an import filled the column with "Kerala", "MAHARASHTRA"
-         * and so on. Region scoping matches `region IN ('SOUTH', …)`, so every branch that ever
-         * arrived through this importer was invisible to the operator who owns its territory —
-         * and each import silently re-broke the column the normalisation migration had just fixed.
-         */
-        const region = resolveRegion(state);
-
-        prepared.push({
-          rowNumber, get, branchName, solId, district, state, address, pincodeStr,
-          packetCount, calculatedHours, suppliedCoords, region,
-        });
-      } catch (err: any) {
-        skipped.push({
-          row: rowNumber,
-          solId,
-          reason: err?.message || 'Unexpected error importing this row.',
-        });
-      }
-    }
-
-    /**
-     * ## The reads hoisted out of the row loop
-     *
-     * Each of these used to run once per row. They are all answerable for the whole file up
-     * front because none of them depends on what an earlier row did: a branch's existence is a
-     * fact about the database before the import starts, and a branch created *by* this import
-     * cannot also be matched by it — the duplicate-code guard above means each code appears once.
-     */
-
-    /**
-     * Every branch this file might already know about, in one query instead of one per row.
-     *
-     * Scoped to this project's client, exactly as the per-row `findOneByCode` was. Branch codes
-     * are the client's own numbering and collide across clients constantly — every bank has a
-     * branch "1" — so an unscoped lookup attached another client's branch, with its address,
-     * coordinates and region, to this project. Keyed on the code verbatim rather than a
-     * normalised form, again matching what `findOneByCode` did: a sheet saying `br-1` against a
-     * stored `BR-1` created a second branch before this change and must keep doing so, because
-     * silently merging them here would be a behaviour change wearing a performance change's
-     * clothes.
-     */
-    const sols = prepared.map((p) => p.solId).filter(Boolean);
-    const clientScope = target.clientId ? { clientId: target.clientId } : {};
-    /**
-     * Existing branches this file might already know, found by SOL id — the branch's single
-     * identity, per client. One query over the whole file, not one per row.
-     *
-     * **No `isActive` filter.** It had one, and that is how a re-import produced duplicates:
-     * archive a branch, re-upload the client's list, and the archived row was invisible here, so
-     * the importer created a *second* branch with the same client and SOL ID beside it. The
-     * database permits it — `UQ_branches_client_sol_id` is `WHERE is_active = true` — and the
-     * operator ends up with two branches they cannot tell apart, one holding all the history.
-     *
-     * Matching archived rows and reviving them is also what the assayer roster importer already
-     * does, and for the same stated reason: re-importing a list is meant to update the record it
-     * names, not to create a twin because the original was deactivated.
-     */
-    const existingBySol = sols.length
-      ? await this.branchRepository.find({
-          where: { solId: In(sols), ...clientScope },
-        })
-      : [];
-    const branchBySol = new Map(existingBySol.map((b) => [b.solId, b]));
-
-    // Which branches this project already carries, and which already have an assessment. Both
-    // were per-row `findOne`s whose answer is a single query over one project.
-    // Empty for a client-scoped import: there is no project, so no row can already be linked to
-    // one. Skipping the query rather than running it with a null id keeps that explicit.
-    const existingProjectBranches = target.projectId
-      ? await this.projectBranchRepository.find({
-          where: { projectId: target.projectId, isActive: true },
-        })
-      : [];
-    const projectBranchByBranchId = new Map(existingProjectBranches.map((pb) => [pb.branchId, pb]));
-
-    const existingAssessments = target.projectId
-      ? await this.assessmentRepository.find({
-          where: { projectId: target.projectId, isActive: true },
-          select: ['id', 'branchId'],
-        })
-      : [];
-    const branchIdsWithAssessment = new Set(existingAssessments.map((a) => a.branchId));
-
-    /**
-     * One zone resolution per distinct state, not per row.
-     *
-     * `resolveZoneName` loads every zone visible to the client and scans it, and
-     * `findOrCreateZone` then issues its own lookup — so a 2,000-row file in four states ran
-     * 4,000 zone queries to reach four answers. Memoised for the life of this import only, which
-     * is short enough that a zone created concurrently elsewhere is not a concern the cache
-     * introduces.
-     */
-    const zoneByState = new Map<string, ZoneEntity | null>();
-    const resolveZoneForState = async (state: string): Promise<ZoneEntity | null> => {
-      const key = state.toUpperCase();
-      if (zoneByState.has(key)) return zoneByState.get(key) ?? null;
-      const zoneName = await this.resolveZoneName(state, target.clientId ?? undefined);
-      /**
-       * A zone belongs to a client, so a project with no client has no zone to put a branch in.
-       * Previously this passed a `string`-typed field that is nullable in the database, so the
-       * lookup ran with `clientId: null` and quietly created a client-less zone.
-       */
-      const zone = target.clientId
-        ? await this.branchService.findOrCreateZone(zoneName, target.clientId, [key])
-        : null;
-      zoneByState.set(key, zone ?? null);
-      return zone ?? null;
-    };
-
-    /**
-     * Progress is published on a throttle, not per row.
-     *
-     * Each publication is a Redis write; doing one per row would add a round trip to rows that
-     * are otherwise pure database work, and nobody is watching a progress bar closely enough to
-     * need every increment. Every 10 rows, plus a final one, keeps a long import visibly moving.
-     */
-    const publishProgress = (processed: number, force = false) => {
-      if (!onProgress) return;
-      if (!force && processed % 10 !== 0) return;
-      onProgress({
-        processed,
-        total: prepared.length,
-        created: createdCount,
-        updated: updatedCount,
-        unchanged: unchangedCount,
-        linked: addedBranches.length,
-        skipped: skipped.length,
-        imprecise: imprecise.length,
-      });
-    };
-
-    /**
-     * Every branch in this file inherits the project's priority as its risk category. Resolved
-     * once, here, because it is a property of the project and not of any row — and normalised so
-     * an enum value and a stray lowercase string from an older record land on the same answer.
-     */
-    const derivedRiskCategory = target.priority.toUpperCase();
-
-    // ---- Pass 2: the writes, and the geocoding that makes this slow ------------------------
-    for (let position = 0; position < prepared.length; position++) {
-      const {
-        rowNumber, get, branchName, solId, district, state, address, pincodeStr,
-        packetCount, calculatedHours, suppliedCoords, region,
-      } = prepared[position];
-
-      /**
-       * One bad row must not cost the operator the other 399.
-       *
-       * A geography check that cannot verify a district, a geocoder timeout, a constraint
-       * violation — any of these threw straight out of the endpoint as a 500. Rows already
-       * imported stayed in the database, the rest never ran, and the operator was shown a crash
-       * with no way to tell how far it got. Each row now either lands or is reported by number.
-       */
-      try {
-        // Matched by SOL id — the branch's single identity, per client — exactly as the
-        // Branches-page importer matches it.
-        let branch = branchBySol.get(solId) ?? null;
-        if (!branch) {
-          const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
-
-          /**
-           * Say so when we could not really find the place.
-           *
-           * The geocoder is honest with itself — an address it cannot resolve comes back as the
-           * city centroid, the state centroid, or ultimately the geographic centre of India with
-           * `source: 'none'` and `accuracyMeters: 500000`. None of that reached the operator: the
-           * row imported like any other, drew a confident pin on the planning map, and then fed
-           * real-looking distances and travel quotes into assayer matching. It also made check-in
-           * impossible, since the assayer's true position is nowhere near the fallback point.
-           *
-           * Reported rather than skipped: the branch is still wanted, it just needs its location
-           * corrected before anyone plans against it. The assayer import already warns this way.
-           */
-          const landedCoarse = needsBetterFix(coords.geoSource, coords.geoAccuracyMeters);
-          if (landedCoarse) {
-            const km = Math.round(coords.geoAccuracyMeters / 1000);
-            imprecise.push({
-              row: rowNumber,
-              solId,
-              // Honest about the placement AND about what happens next. The import takes the
-              // fast tiers on purpose (see geocodeIndiaRobust); the precise lookup is queued the
-              // moment this import finishes and usually lands within minutes. The operator is
-              // not being asked to do anything — only told where the pin stands right now.
-              reason:
-                coords.geoSource === 'none'
-                  ? `"${branchName}" could not be located from its address yet — placed on a fallback point for now; a precise lookup is queued and runs in the background.`
-                  : `"${branchName}" placed to about ${km} km for now (${coords.geoSource}); a precise lookup is queued and runs in the background.`,
-            });
-          }
-
-          // Memoised per state for the life of this import — see resolveZoneForState.
-          const zone = await resolveZoneForState(state);
-
-          const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
-          const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
-          // Was a random name from a hardcoded list and a random phone number, which
-          // put fabricated contact details in front of an assayer about to visit the
-          // branch. Use what the client supplied; leave blank when they supplied nothing.
-          const managerName = get('Branch Manager', 'Manager', 'Manager Name') || null;
-          const phone = get('Branch Phone', 'Phone', 'Contact Number') || null;
-
-          branch = await this.branchService.registerImportedBranch({
-            solId,
-            name: branchName,
-            address,
-            state,
-            district,
-            // The sheet's own city when it has one. This was hardcoded to the district, so every
-            // imported branch claimed to be in a city named after its district — which is what
-            // the assayer sees on their job card and what the city-tier fee multiplier reads.
-            city: get('CITY', 'City', 'CityName') || district,
-            pincode,
-            branchType,
-            latitude: coords.lat,
-            longitude: coords.lng,
-            location: { type: 'Point', coordinates: [coords.lng, coords.lat] },
-            // Recorded, so a branch sitting on its district's centroid is visibly a placeholder
-            // rather than silently indistinguishable from one pinned at its front door — and so
-            // the precision backfill knows which rows are worth re-resolving.
-            geoSource: coords.geoSource,
-            geoAccuracyMeters: coords.geoAccuracyMeters,
-            geoMatchedName: coords.geoMatchedName,
-            geoResolvedAt: new Date(),
-            organizationId: target.organizationId ?? undefined,
-            clientId: target.clientId ?? undefined,
-            zoneId: zone ? zone.id : null,
-            region,
-            territory: `${district} Area`,
-            managerName,
-            phone,
-            email: get('Branch Email', 'Email') || null,
-            /**
-             * Derived, never read from the sheet.
-             *
-             * Risk Category / Risk Score / Complexity / Estimated Hours used to be optional
-             * columns. In practice the sheet never carried them, so every branch fell through to
-             * the same flat defaults — LOW, 2.0, STANDARD — and the one rule that reads risk
-             * (the planner sends a senior assayer to a branch scoring >= 7) could never fire for
-             * anybody. And when a sheet *did* carry a value, it was whatever someone typed once,
-             * with nothing checking it.
-             *
-             * Risk is the project's priority: the person who created the project already made
-             * that call, on the same LOW/MEDIUM/HIGH/CRITICAL scale, and it is the one place the
-             * stakes of this engagement are actually stated. Complexity is read off Packets, the
-             * only workload figure the sheet has. Hours were already Packets-derived. The
-             * operator can still adjust any of these per branch on the Branches page — that is
-             * the override path, not a column in a bulk upload.
-             */
-            riskCategory: derivedRiskCategory,
-            riskScore: riskScoreFromCategory(derivedRiskCategory),
-            complexity: complexityFromPackets(Number.isFinite(packetCount) ? packetCount : null),
-            estimatedDurationHours: calculatedHours || 6.0,
-            createdBy: userId,
-            updatedBy: userId,
-          }, userId);
-          createdCount++;
-          if (landedCoarse && branch?.id) impreciseBranchIds.push(branch.id);
-        } else {
-          /**
-           * Re-importing a branch corrects it, rather than only touching its hours.
-           *
-           * The template prefills existing branches precisely so a corrected sheet can be sent
-           * back, but the only field this path wrote was `estimatedDurationHours` — a fixed
-           * address, a supplied coordinate pair or a missing region were all read and thrown
-           * away, and the operator had no way to tell that from a successful import.
-           *
-           * Only fields the sheet actually carries are written, so a sparse correction sheet
-           * cannot blank out data it simply did not mention.
-           */
-          const patch: UpdateBranchDto = {};
-          /**
-           * A branch this client's own list still names is not archived — bring it back.
-           *
-           * The prefetch above now matches archived rows precisely so this can happen. Left out,
-           * the alternative was a second branch with the same SOL ID beside the archived one, which
-           * no later import can tell apart. Reported as an imported row like any other, and named
-           * in `revived` so the operator can see that their file resurrected something rather than
-           * discovering it as an unexplained reappearance.
-           */
-          const wasArchived = branch.isActive === false;
-          if (wasArchived) {
-            branch = await this.branchService.restoreArchived(branch.id, userId);
-            revived.push({
-              row: rowNumber,
-              solId,
-              reason: `"${branch.name}" was archived and has been restored, because this file still lists it.`,
-            });
-          }
-          if (branchName && branchName !== branch.name) patch.name = branchName;
-          if (address && address !== branch.address) patch.address = address;
-          if (state && state !== branch.state) patch.state = state;
-          if (district && district !== branch.district) patch.district = district;
-          if (pincodeStr && pincodeStr !== branch.pincode) patch.pincode = pincodeStr;
-          if (suppliedCoords) {
-            if (Number(branch.latitude) !== suppliedCoords.lat) patch.latitude = suppliedCoords.lat;
-            if (Number(branch.longitude) !== suppliedCoords.lng) patch.longitude = suppliedCoords.lng;
-          }
-          // Backfills the branches that predate region canonicalisation, and repairs any whose
-          // state changed. `update` canonicalises again, so a raw state name cannot get back in.
-          if (region && branch.region !== region) patch.region = region;
-          /**
-           * The packet-derived fields follow the packets. Hours already did; complexity now does
-           * too, because both are read off the same number and that number changes every cycle.
-           *
-           * Risk is deliberately NOT re-derived here. It lives on the branch, which is shared
-           * across every project that audits it, and an operator may have escalated it by hand
-           * on the Branches page — a later re-import must not quietly reset that to whatever
-           * this project's priority happens to be. It is set once, at creation.
-           */
-          if (calculatedHours !== null) {
-            // Compared, not assigned blindly. This wrote the hours on every re-import whether or
-            // not they had changed, so `patch` was never empty: an identical sheet re-imported
-            // 72 branches, wrote 72 rows, raised 72 audit events, and reported "updated: 72"
-            // when nothing had actually changed. Complexity was already compared; hours now are
-            // too, so an unchanged re-import touches nothing and says so.
-            if (Number(branch.estimatedDurationHours) !== calculatedHours) {
-              patch.estimatedDurationHours = calculatedHours;
-            }
-            const derivedComplexity = complexityFromPackets(packetCount);
-            if (branch.complexity !== derivedComplexity) patch.complexity = derivedComplexity;
-          }
-
-          if (Object.keys(patch).length > 0) {
-            branch = await this.branchService.update(branch.id, patch, userId);
-            updatedCount++;
-          } else {
-            unchangedCount++;
-          }
-        }
-
-        /**
-         * Linking is the project-only half of an import.
-         *
-         * A client-scoped import loads the branch master and stops: there is no project to attach
-         * to, no assessment to open, and `linked` stays 0. Everything above this point — the
-         * SOL-ID identity, the geocode, the zone, the region — ran identically for both, which is
-         * the whole reason the two importers could be collapsed into one.
-         */
-        if (!target.projectId) continue;
-
-        // Served from the maps loaded before the loop rather than a query per row. A branch this
-        // import just created cannot be in either map, which is the correct answer for it.
-        const pb = projectBranchByBranchId.get(branch.id) ?? null;
-
-        if (!pb) {
-          const created = this.projectBranchRepository.create({
-            projectId: target.projectId,
-            branchId: branch.id,
-            zoneId: branch.zoneId,
-            status: ProjectBranchStatus.IMPORTED,
-            packetCount: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
-            // Inherits the project's priority rather than the column default (MEDIUM for
-            // everything). Assignments take theirs from this row (assignment.service), so
-            // project → branch → assignment is now one line of truth instead of a HIGH project
-            // dispatching MEDIUM work.
-            priority: target.priority,
-            createdBy: userId,
-            updatedBy: userId,
-          });
-          const savedPb = await this.projectBranchRepository.save(created);
-          addedBranches.push(savedPb);
-          // Recorded so that a file listing the same branch under two different codes cannot
-          // create two links to it — the per-row `findOne` this replaces would have seen the
-          // first one, so dropping the write-back here would be a regression, not a speed-up.
-          projectBranchByBranchId.set(branch.id, savedPb);
-
-          if (!branchIdsWithAssessment.has(branch.id)) {
-            const asmt = this.assessmentRepository.create({
-              projectId: target.projectId,
-              branchId: branch.id,
-              createdBy: userId,
-              updatedBy: userId,
-            });
-            await this.assessmentRepository.save(asmt);
-            branchIdsWithAssessment.add(branch.id);
-          }
-        } else if (!isNaN(packetCount) && packetCount > 0) {
-          // Update packet count on existing project-branch
-          pb.packetCount = packetCount;
-          pb.updatedBy = userId;
-          await this.projectBranchRepository.save(pb);
-        }
-      } catch (err: any) {
-        skipped.push({
-          row: rowNumber,
-          solId,
-          reason: err?.message || 'Unexpected error importing this row.',
-        });
-      }
-
-      publishProgress(position + 1);
-    }
-
-    // Forced, so the last partial batch of rows is always reflected before the job completes —
-    // otherwise an import of 2,004 rows would sit at 2,000 in the UI until the result appeared.
-    publishProgress(prepared.length, true);
-
-    /**
-     * Hand the coarsely placed rows to the precision worker now, not "whenever the nightly sweep
-     * gets to them". The import deliberately took the fast geocoding tiers to stay out of the
-     * request path (district centroid ~15 km, state centroid ~100 km — measured on a real client
-     * file: 62 of 72 at 15 km, 10 on the state centroid). Those are placeholders, and the
-     * geocoder's own contract is that the backfill upgrades them afterwards. This is the
-     * "afterwards". Fire-and-forget: a Redis hiccup must not fail an import that has already
-     * landed, and the nightly sweep selects by precision, so nothing is lost if the enqueue is.
-     */
-    /**
-     * Name any column nobody read, so a renamed heading cannot cost a field in silence.
-     *
-     * Only columns carrying data are reported — a spreadsheet's trailing empty columns are normal,
-     * and naming them would bury the one that matters. The column is NAMED, never guessed into a
-     * field: guessing is how the wrong column lands in the right-looking place.
-     */
-    for (const header of sheet.headers) {
-      if (!header || BLANK_HEADER.test(header)) continue;
-      if (askedFor.has(normaliseHeader(header))) continue;
-      const carrying = rows.filter((r) => String(r?.[header] ?? '').trim() !== '').length;
-      if (carrying === 0) continue;
-      notes.push(
-        `Column "${header}" was not recognised, so ${carrying} row(s) of data in it were not imported. `
-        + 'If that column holds something this system stores, rename its heading to the one the '
-        + 'template uses and import again — nothing was guessed.',
-      );
-    }
-
-    void this.geoPrecision.enqueueBackfill('branch', impreciseBranchIds, `import into ${target.label}`);
-
-    return {
-      // The project's resulting branch list, for the endpoint whose `data` field is that list.
-      // A client-scoped import has none; its caller reads the branch master back on its own.
-      notes,
-      branches: target.projectId ? await this.findProjectBranches(target.projectId) : [],
-      totalRows: rows.length,
-      created: createdCount,
-      updated: updatedCount,
-      unchanged: unchangedCount,
-      linked: addedBranches.length,
-      skipped,
-      imprecise,
-      revived,
-    };
-  }
-
-  /**
-   * The same import, minus the branch list.
-   *
-   * What the queue worker calls. See `BranchUploadReport` for why the entity list must not travel
-   * into a job's return value.
-   */
-  async runBranchImport(
-    scope: ImportScope,
-    fileBuffer: Buffer,
-    userId: string,
-    onProgress?: (progress: BranchImportProgress) => void,
-  ): Promise<BranchImportOutcome> {
-    const { branches: _branches, ...outcome } = await this.uploadBranchesFromExcel(
-      scope, fileBuffer, userId, onProgress,
-    );
-    return outcome;
   }
 
   async removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]> {
@@ -1724,32 +745,11 @@ export class ProjectService implements OnModuleInit {
   async cancelProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
 
-    // State-specific assignment integrity checks
-    const assignments: Array<{
-      id: string;
-      assignment_number: string;
-      status: string;
-      project_branch_id: string;
-    }> = await this.dataSource.query(
-      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id
-       FROM assignments a
-       INNER JOIN project_branches pb ON a.project_branch_id = pb.id
-       WHERE pb.project_id = $1 AND a.is_active = true`,
-      [id],
-    ).catch(() => []);
-
-    const inProgress = assignments.find(
-      (a) => a.status === AssignmentStatus.CHECKED_IN || a.status === AssignmentStatus.IN_PROGRESS,
-    );
-    if (inProgress) {
-      throw new ConflictException(
-        `Cannot cancel project "${project.name}": Assignment ${inProgress.assignment_number} is currently ${inProgress.status}. Field audit is actively in progress on site. Operational intervention required before cancelling this project.`,
-      );
-    }
-
     const prev = project.status;
     const next = ProjectStatus.CANCELLED;
-    return this.workflowEngine.executeCommand(
+    let cancelled: ClosureCancelledAssignment[] = [];
+    let projectEvent: { constructor: { name: string } } | null = null;
+    const result = await this.workflowEngine.executeCommand(
       'project',
       project.id,
       'CancelProjectCommand',
@@ -1758,48 +758,58 @@ export class ProjectService implements OnModuleInit {
       userId,
       role,
       [SystemRole.ADMIN, SystemRole.OPERATIONS],
-      async () => {
-        // Safely cancel pending or accepted assignments transactionally with outbox/audit events
-        const cancellable = assignments.filter(
-          (a) => a.status === AssignmentStatus.PENDING || a.status === AssignmentStatus.ACCEPTED,
-        );
-        for (const a of cancellable) {
-          await this.dataSource.query(
-            `UPDATE assignments
-             SET status = 'CANCELLED',
-                 cancel_reason = 'Project cancelled by operations',
-                 updated_by = $1,
-                 entity_version = COALESCE(entity_version, 1) + 1,
-                 updated_at = NOW()
-             WHERE id = $2`,
-            [userId, a.id],
-          );
-          await this.auditService.recordEvent({
-            category: EventCategory.WORKFLOW,
-            eventType: 'ASSIGNMENT_CANCELLED',
-            entityType: 'ASSIGNMENT',
-            entityId: a.id,
-            previousState: a.status,
-            newState: AssignmentStatus.CANCELLED,
-            userId,
-            remarks: `Auto-cancelled due to cancellation of project ${project.name}`,
-          });
-          this.eventPublisher.publish('assignment:status-changed', {
-            eventType: 'assignment:status-changed',
-            assignmentId: a.id,
-            assignmentNumber: a.assignment_number,
-            previousState: a.status,
-            newState: AssignmentStatus.CANCELLED,
-            userId,
-          });
+      async (manager?: EntityManager) => {
+        if (!manager) {
+          // The engine always supplies its transaction; without one this would be the very
+          // outside-the-transaction write this method was fixed to stop doing.
+          throw new Error('CancelProjectCommand must run on the workflow transaction.');
         }
+        /**
+         * On the command's own transaction — the `manager` the workflow engine hands the action,
+         * which also carries the history and audit rows. This block used to say "transactionally"
+         * while every UPDATE went through `this.dataSource.query`, i.e. a separate connection that
+         * committed row by row whatever happened to the command. The open work is locked, the
+         * on-site refusal decided on the locked rows (it used to be read, unlocked, before the
+         * command started), and only rows still PENDING/ACCEPTED are cancelled, with their
+         * calendar entries retired. See `cancelOpenAssignmentsForClosure`.
+         */
+        cancelled = await cancelOpenAssignmentsForClosure(manager, {
+          scope: { projectId: project.id },
+          userId,
+          cancelReason: 'Project cancelled by operations',
+          auditRemarks: `Auto-cancelled due to cancellation of project ${project.name}`,
+          onSiteRefusal: (_a, all) => new ConflictException(
+            onSiteRefusalMessage(`Cannot cancel project "${project.name}"`, all),
+          ),
+          auditService: this.auditService,
+        });
 
-        const event = ProjectStateMachine.cancelProject(project, userId);
-        const saved = await this.projectRepository.save(project);
-        this.eventPublisher.publish(event.constructor.name, event);
-        return saved;
+        projectEvent = ProjectStateMachine.cancelProject(project, userId);
+        return manager.getRepository(ProjectEntity).save(project);
       }
     );
+    // Published once the engine's transaction has committed, not from inside it.
+    const committedEvent = projectEvent as { constructor: { name: string } } | null;
+    if (committedEvent) this.eventPublisher.publish(committedEvent.constructor.name, committedEvent as any);
+
+    // Committed. Tell the people whose work this stopped — never about a rolled-back cancel. The
+    // one announcer every bulk cancel shares; see `announceCancelledAssignments`.
+    await announceCancelledAssignments(cancelled, {
+      notificationDispatch: this.notificationDispatch,
+      eventPublisher: this.eventPublisher,
+      refreshPush: this.refreshPush,
+      disableLiveTrackingWhenWorkEnds: this.assayerService
+        ? (assayerId, uid) => this.assayerService!.disableLiveTrackingWhenWorkEnds(assayerId, uid)
+        : null,
+      dayTravel: this.dayTravel,
+    }, {
+      userId,
+      reason: `Project ${project.name} was stopped by operations`,
+      assayerNotice: 'closure',
+      because: 'the office has stopped this audit project',
+      travelReason: `project ${project.name} was cancelled`,
+    });
+    return result;
   }
 
   async holdProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {

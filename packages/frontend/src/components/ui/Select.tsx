@@ -117,6 +117,7 @@ export const Select: React.FC<{
   name?: string;
   'aria-label'?: string;
   error?: boolean;
+  title?: string;
 }> = ({
   value,
   onChange,
@@ -135,6 +136,7 @@ export const Select: React.FC<{
   id,
   name,
   error = false,
+  title,
   ...aria
 }) => {
   const [open, setOpen] = useState(false);
@@ -347,6 +349,7 @@ export const Select: React.FC<{
     <>
       <div
         className={className}
+        title={title}
         onClick={() => !disabled && setOpen((o) => !o)}
         style={{
           display: 'flex',
@@ -375,6 +378,7 @@ export const Select: React.FC<{
           ref={triggerRef}
           type="button"
           id={id}
+          title={title}
           disabled={disabled}
           onKeyDown={onTriggerKeyDown}
           role="combobox"

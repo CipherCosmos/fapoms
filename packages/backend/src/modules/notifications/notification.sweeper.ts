@@ -9,6 +9,7 @@ import { NotificationEntity } from './notification.entity';
 import { NOTIFICATION_QUEUE } from './notification.constants';
 import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 import { NOTIFICATION_MESSAGE_ENTITY } from './outbound-message.service';
+import { pushDeliveryJobId } from './notification-dispatch.service';
 import { NOTIFICATION_MESSAGE_LEGS, NOTIFICATION_MESSAGE_LEG_LIST } from './notification-message-legs';
 
 /**
@@ -65,6 +66,14 @@ export class NotificationSweeper {
       }
 
       try {
+        // A failed or completed job keeps its id for a while and Bull will not add a second job
+        // under it; a waiting/delayed/active one is already going to deliver this row.
+        const existing = await this.deliveryQueue.getJob(pushDeliveryJobId(n.id));
+        if (existing) {
+          const state = await existing.getState();
+          if (state === 'failed' || state === 'completed') await existing.remove();
+          else continue;
+        }
         await this.deliveryQueue.add(
           'deliver',
           { notificationId: n.id },
@@ -72,7 +81,10 @@ export class NotificationSweeper {
           // NotificationDispatchService uses. Without it every job that exhausted its five
           // attempts stayed in Redis forever, and the sweeper re-queues exactly the rows most
           // likely to be failing — see FAILED_JOB_RETENTION.
-          { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true, removeOnFail: FAILED_JOB_RETENTION },
+          {
+            jobId: pushDeliveryJobId(n.id),
+            attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true, removeOnFail: FAILED_JOB_RETENTION,
+          },
         );
         requeued++;
       } catch (err: any) {

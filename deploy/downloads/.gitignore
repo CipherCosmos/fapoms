@@ -1,0 +1,6 @@
+# Published builds and the journal of what was published live here. The APK is ~107 MB and the
+# journal is per-host, so neither belongs in the repo — but the directory itself must exist and
+# stay tracked, because compose mounts it into caddy and `import` of a missing snippet is a hard
+# Caddy error that takes the proxy down.
+*.apk
+publish-apk.log

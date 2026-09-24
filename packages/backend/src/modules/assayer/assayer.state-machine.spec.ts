@@ -184,12 +184,14 @@ describe('AssayerStateMachine', () => {
    */
   describe('findPathTo — outcome states are destinations, not waypoints', () => {
     it('onboards through the real chain rather than cutting through INACTIVE', () => {
-      expect(AssayerStateMachine.findPathTo('INVITED', 'ACTIVE')).toEqual([
+      // As far as the approval — which is a decision, so the walk stops there (2026-09-23).
+      expect(AssayerStateMachine.findPathTo('INVITED', 'FINAL_APPROVAL')).toEqual([
         'DOCUMENT_VERIFICATION',
         'BACKGROUND_VERIFICATION',
-        'TRAINING',
-        'ACTIVE',
+        'FINAL_APPROVAL',
       ]);
+      // And never around it — not even through INACTIVE.
+      expect(AssayerStateMachine.findPathTo('INVITED', 'ACTIVE')).toBeNull();
     });
 
     it('still reaches an outcome state when that is where you asked to go', () => {

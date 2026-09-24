@@ -49,6 +49,13 @@ export class AssayerDocumentEntity extends BaseEntity {
   @Column({ name: 'hard_copy_location', type: 'varchar', length: 120, nullable: true })
   hardCopyLocation: string | null;
 
+  /**
+   * Who issued it, where that matters and is typed — today the agency behind a background
+   * verification report, which cannot be uploaded without it. Replaced by each new upload.
+   */
+  @Column({ name: 'issued_by', type: 'varchar', length: 200, nullable: true })
+  issuedBy: string | null;
+
   @Column({ name: 'courier_reference', type: 'varchar', length: 200, nullable: true })
   courierReference: string | null;
 
@@ -151,4 +158,13 @@ export class AssayerDocumentEntity extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
+
+  /**
+   * HR's own sentence from "Ask to re-upload" (`RosterRecordsService.requestReupload`) — what the
+   * assayer is asked to fix, shown to them beside the reopened document (`hrNote` in
+   * `GET /assayers/me/capabilities`). It was only ever appended to `remarks` before, where a later
+   * edit could bury it. Cleared when the document gets a new verdict from review.
+   */
+  @Column({ name: 'reupload_note', type: 'text', nullable: true })
+  reuploadNote: string | null;
 }

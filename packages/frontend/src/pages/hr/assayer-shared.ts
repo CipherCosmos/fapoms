@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import {
+import { bankAccountConfirmProblem, type SourceReferral,
   AssayerLifecycleStatus, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS, CRITICAL_ASSAYER_RECORD_FIELDS, missingAssayerRecordFields, nextAssayerLifecycleStates, ONBOARDING_STAGES, ONBOARDING_NEXT_STEP, isOnboardingStage, onboardingNextStep as sharedOnboardingNextStep, looksMasked,
 } from '@fapoms/shared';
 
@@ -58,7 +58,6 @@ export interface Assayer {
   performanceRating: number;
   leaves: { startDate: string; endDate: string }[] | null;
   workingHours: { start: string; end: string } | null;
-  maxDailyWorkload: number;
   maxWeeklyWorkload: number;
 
   /**
@@ -74,12 +73,16 @@ export interface Assayer {
   aadhaarNumber?: string | null;
   bankName?: string | null;
   dateOfBirth?: string | null;
+  /** As the record holds it (`Male`, `Female`, …) — prefills the gender box when verifying a card. */
+  gender?: string | null;
   qualification?: string | null;
   vstsCode?: string | null;
   documentsLink?: string | null;
   hrOwnerName?: string | null;
   engagementType?: string | null;
   unavailableReason?: string | null;
+  /** Who referred them — the source reference. Absent for roles that may not see contact data. */
+  sourceReferral?: SourceReferral | null;
   workDoneBySomeoneElse?: boolean;
 
   /**
@@ -250,6 +253,7 @@ export const STATUS_COLORS: Record<string, string> = {
   [AssayerLifecycleStatus.INVITED]: 'var(--accent)',
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'var(--accent)',
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'var(--accent)',
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: 'var(--warning)',
   [AssayerLifecycleStatus.TRAINING]: 'var(--warning)',
   [AssayerLifecycleStatus.SUSPENDED]: 'var(--danger)',
   [AssayerLifecycleStatus.INACTIVE]: 'var(--text-muted)',
@@ -355,7 +359,7 @@ const TEL_FIELDS = new Set(['phone', 'alternatePhone', 'emergencyContactPhone'])
  * them is a constraint violation, which surfaces as a bare 500. A blank box means "leave it
  * alone", which is the only honest reading available.
  */
-const NO_EMPTY_VALUE = new Set(['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload']);
+const NO_EMPTY_VALUE = new Set(['experienceYears', 'performanceRating', 'maxWeeklyWorkload']);
 
 export const parseListValue = (raw?: string): string[] => {
   if (!raw) return [];
@@ -462,6 +466,21 @@ export function buildAssayerEditBody(
     } else {
       body[field.key] = val;
     }
+  }
+
+  /**
+   * A NEW account number is typed twice, on every form that edits the record.
+   *
+   * The account the pay goes to has no check digit, so a slip still "looks right" and nothing
+   * downstream can tell. Judged only when a real number is being sent — not when the box was
+   * emptied (clearing needs no confirmation) and not for a masked copy (handled above). The second
+   * typing travels as `bankAccountNumberConfirm` in `form` and is never put into the body: it is
+   * not a field, and the API refuses properties it does not know.
+   */
+  const newAccount = form.bankAccountNumber;
+  if (newAccount !== undefined && newAccount.trim() !== '' && !looksMasked(newAccount)) {
+    const mismatch = bankAccountConfirmProblem(newAccount, form.bankAccountNumberConfirm ?? '');
+    if (mismatch) problems.push(mismatch);
   }
 
   return { body, problems };

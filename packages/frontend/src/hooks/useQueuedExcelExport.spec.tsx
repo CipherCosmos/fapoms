@@ -130,4 +130,60 @@ describe('useQueuedExcelExport', () => {
 
     expect(mockRequest).toHaveBeenNthCalledWith(1, '/reports/assayer-roster/jobs', { method: 'POST' });
   });
+
+  it('still delivers the file when the page is left while the export is running', async () => {
+    // Navigating away must not lose an export the person started: the poll is not tied to the
+    // component's lifetime.
+    mockRequest
+      .mockResolvedValueOnce({ jobId: 'job-4', deduplicated: false })
+      .mockResolvedValueOnce({ jobId: 'job-4', state: 'running', progress: { percent: 10, stage: 'Building rows' } })
+      .mockResolvedValueOnce({
+        jobId: 'job-4', state: 'done', progress: { percent: 100, stage: 'Done' },
+        result: { filename: 'billing_4.xlsx', mimeType: 'x', sizeBytes: 1 },
+      })
+      .mockResolvedValueOnce(new Blob(['x']));
+
+    const { unmount } = render(<Harness />);
+    await click();
+    unmount();
+    await act(async () => { jest.advanceTimersByTime(2000); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockRequest).toHaveBeenLastCalledWith('/reports/jobs/job-4/download', { raw: true });
+    expect(savedAnchor?.download).toBe('billing_4.xlsx');
+    expect(savedAnchor?.clicked).toBe(true);
+  });
+
+  it('downloads BOTH of two overlapping exports (the first finishing must not stop the second)', async () => {
+    const done = (id: string, filename: string) => ({
+      jobId: id, state: 'done', progress: { percent: 100, stage: 'Done' }, result: { filename, mimeType: 'x', sizeBytes: 1 },
+    });
+    const statuses: Record<string, unknown[]> = {
+      '/reports/jobs/a': [done('a', 'a.xlsx')],
+      '/reports/jobs/b': [{ jobId: 'b', state: 'running', progress: { percent: 5, stage: '' } }, done('b', 'b.xlsx')],
+    };
+    mockRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith('/reports/a/jobs')) return { jobId: 'a', deduplicated: false };
+      if (path.startsWith('/reports/b/jobs')) return { jobId: 'b', deduplicated: false };
+      if (path.endsWith('/download')) return new Blob(['x']);
+      return statuses[path].shift();
+    });
+    const saved: string[] = [];
+
+    const Two: React.FC = () => {
+      const { download } = useQueuedExcelExport();
+      return (
+        <div>
+          <button onClick={() => { void download('/reports/b/jobs'); void download('/reports/a/jobs'); }}>export</button>
+        </div>
+      );
+    };
+    render(<Two />);
+    await click();
+    saved.push(savedAnchor?.download ?? '');
+    await act(async () => { jest.advanceTimersByTime(2000); await Promise.resolve(); await Promise.resolve(); });
+    saved.push(savedAnchor?.download ?? '');
+
+    expect(saved).toEqual(['a.xlsx', 'b.xlsx']);
+    expect(mockRequest).toHaveBeenCalledWith('/reports/jobs/b/download', { raw: true });
+  });
 });

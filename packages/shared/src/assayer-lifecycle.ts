@@ -1,4 +1,5 @@
 import { AssayerLifecycleStatus } from './enums';
+import { AssayerUnavailableReason } from './assayer-roster-vocabulary';
 
 /**
  * The assayer lifecycle, stated once for the whole platform.
@@ -45,7 +46,21 @@ export const ASSAYER_LIFECYCLE_TRANSITIONS: Record<string, AssayerLifecycleStatu
     AssayerLifecycleStatus.ARCHIVED,
   ],
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [
+    AssayerLifecycleStatus.FINAL_APPROVAL,
+    AssayerLifecycleStatus.INACTIVE,
+  ],
+  /**
+   * The senior's decision (2026-09-23). Every way out is the approver's: approving sends them to
+   * TRAINING or — the owner's call on 2026-09-24, "after approving the approver can also send them to
+   * training or make them active" — straight to ACTIVE; rejecting with a reason parks them INACTIVE
+   * (stamped APPROVAL_REJECTED). The service refuses each move from anywhere but the decision, and
+   * none is offered as a stage button (`nextAssayerLifecycleStates`). Straight to ACTIVE still has to
+   * pass everything activation asks — the background check, identity documents, bank, location.
+   * Somebody who withdraws while awaiting approval is rejected with that as the reason.
+   */
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: [
     AssayerLifecycleStatus.TRAINING,
+    AssayerLifecycleStatus.ACTIVE,
     AssayerLifecycleStatus.INACTIVE,
   ],
   [AssayerLifecycleStatus.TRAINING]: [
@@ -68,6 +83,15 @@ export const ASSAYER_LIFECYCLE_TRANSITIONS: Record<string, AssayerLifecycleStatu
   ],
   [AssayerLifecycleStatus.INACTIVE]: [
     AssayerLifecycleStatus.ACTIVE,
+    /**
+     * Re-opening a background verification that was not passed (2026-09-23). Somebody parked as
+     * BGV_FAILED is re-verified by the agency and, if it comes back clear, carries on to training —
+     * which INACTIVE → ACTIVE would skip. Offered, and allowed, only for that reason: see
+     * `mayReopenBackgroundVerification`. The failed check and its report stay on the record.
+     */
+    AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+    /** Re-opening an approval that was rejected — only for APPROVAL_REJECTED; see `reopenTargetFor`. */
+    AssayerLifecycleStatus.FINAL_APPROVAL,
     AssayerLifecycleStatus.ARCHIVED,
   ],
   /**
@@ -107,6 +131,7 @@ export const ONBOARDING_STAGES: AssayerLifecycleStatus[] = [
   AssayerLifecycleStatus.INVITED,
   AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
   AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+  AssayerLifecycleStatus.FINAL_APPROVAL,
   AssayerLifecycleStatus.TRAINING,
 ];
 
@@ -145,6 +170,7 @@ export const ONBOARDING_NEXT_STEP: Record<string, string> = {
   [AssayerLifecycleStatus.INVITED]: 'invited — start document verification on the HR roster',
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'in document verification — complete it on the HR roster',
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'in background verification — complete it on the HR roster',
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: 'awaiting approval — a senior approves them on the HR roster, on to training or straight to active',
   [AssayerLifecycleStatus.TRAINING]: 'in training — mark training complete on the HR roster to activate',
 };
 
@@ -177,9 +203,79 @@ export function nextOnboardingStep(from?: string | null): AssayerLifecycleStatus
   return nextAssayerLifecycleStates(from).includes(forward) ? forward : null;
 }
 
-export function nextAssayerLifecycleStates(from?: string | null): AssayerLifecycleStatus[] {
+/**
+ * Where a parked person may be taken back to, by why they were parked — or null. Somebody parked
+ * because background verification was not passed may be verified again; somebody rejected at the
+ * final approval may be put up for approval again. Anybody else parked inactive has no such step
+ * to re-open, and walking them back through one would restart an onboarding nobody asked for.
+ */
+export function reopenTargetFor(unavailableReason?: string | null): AssayerLifecycleStatus | null {
+  if (unavailableReason === AssayerUnavailableReason.BGV_FAILED) return AssayerLifecycleStatus.BACKGROUND_VERIFICATION;
+  if (unavailableReason === AssayerUnavailableReason.APPROVAL_REJECTED) return AssayerLifecycleStatus.FINAL_APPROVAL;
+  return null;
+}
+
+/** May this INACTIVE person be taken back into background verification? See `reopenTargetFor`. */
+export function mayReopenBackgroundVerification(from?: string | null, unavailableReason?: string | null): boolean {
+  return from === AssayerLifecycleStatus.INACTIVE
+    && reopenTargetFor(unavailableReason) === AssayerLifecycleStatus.BACKGROUND_VERIFICATION;
+}
+
+/** May this INACTIVE person be put up for final approval again? See `reopenTargetFor`. */
+export function mayReopenFinalApproval(from?: string | null, unavailableReason?: string | null): boolean {
+  return from === AssayerLifecycleStatus.INACTIVE
+    && reopenTargetFor(unavailableReason) === AssayerLifecycleStatus.FINAL_APPROVAL;
+}
+
+/**
+ * The joining stages that come BEFORE the senior's approval — derived from `ONBOARDING_STAGES`'s
+ * own order (everything up to and including FINAL_APPROVAL), so a stage added to the walk lands
+ * on the right side without a second list to update.
+ */
+const PRE_APPROVAL_STAGES: AssayerLifecycleStatus[] = ONBOARDING_STAGES.slice(
+  0,
+  ONBOARDING_STAGES.indexOf(AssayerLifecycleStatus.FINAL_APPROVAL) + 1,
+);
+
+/**
+ * Has this person been approved — passed the FINAL_APPROVAL decision (or, for the pre-2026-09-23
+ * estate, reached a working stage the old walk led to)?
+ *
+ * Read off the lifecycle because that is the one fact every record carries: TRAINING is entered
+ * only by the approver's decision, and every later state (ACTIVE, ON_LEAVE, SUSPENDED, RESIGNED,
+ * TERMINATED, ARCHIVED) comes after it. INACTIVE is the one state reachable from either side, so
+ * it is split by why the person was parked: BGV_FAILED and APPROVAL_REJECTED (`reopenTargetFor`)
+ * are people who never got through; any other INACTIVE reads as approved. A rehire goes back to
+ * INVITED and so reads as not approved again, which is right — they are joining again.
+ */
+export function hasPassedFinalApproval(lifecycleStatus?: string | null, unavailableReason?: string | null): boolean {
+  if (!lifecycleStatus) return false;
+  if ((PRE_APPROVAL_STAGES as string[]).includes(lifecycleStatus)) return false;
+  if (lifecycleStatus === AssayerLifecycleStatus.INACTIVE && reopenTargetFor(unavailableReason)) return false;
+  return true;
+}
+
+/** Stages an INACTIVE person can only re-enter for the matching reason. */
+const REOPEN_ONLY_FROM_INACTIVE: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+  AssayerLifecycleStatus.FINAL_APPROVAL,
+];
+
+/**
+ * The moves to offer as stage buttons. Pass the person's `unavailableReason` so a conditional
+ * re-open edge is offered only to the people it is for. Approval → training is never offered here:
+ * it is the approver's decision, made on the approval itself.
+ */
+export function nextAssayerLifecycleStates(from?: string | null, unavailableReason?: string | null): AssayerLifecycleStatus[] {
   if (!from) return [];
-  return ASSAYER_LIFECYCLE_TRANSITIONS[from] ?? [];
+  const moves = ASSAYER_LIFECYCLE_TRANSITIONS[from] ?? [];
+  // Both ways out of approval are the approver's decision — approve, or reject with the reason.
+  if (from === AssayerLifecycleStatus.FINAL_APPROVAL) return [];
+  if (from === AssayerLifecycleStatus.INACTIVE) {
+    const reopen = reopenTargetFor(unavailableReason);
+    return moves.filter((to) => !REOPEN_ONLY_FROM_INACTIVE.includes(to) || to === reopen);
+  }
+  return moves;
 }
 
 export function canTransitionAssayerLifecycle(from: string, to: string): boolean {
@@ -247,6 +343,12 @@ export function canTransitionAssayerLifecycle(from: string, to: string): boolean
  */
 const NEVER_A_WAYPOINT: AssayerLifecycleStatus[] = [
   AssayerLifecycleStatus.INVITED,
+  /*
+    FINAL_APPROVAL — a senior's decision, not a corridor. A bulk move to TRAINING or ACTIVE would
+    otherwise walk straight through it and "approve" nobody; it is reached, and left, one person at
+    a time, on the approval itself.
+  */
+  AssayerLifecycleStatus.FINAL_APPROVAL,
   AssayerLifecycleStatus.ACTIVE,
   AssayerLifecycleStatus.SUSPENDED,
   AssayerLifecycleStatus.RESIGNED,
@@ -350,25 +452,36 @@ export function assayerLifecycleBlockedBy(from: string, to: string): AssayerLife
    */
   if (assayerLifecyclePath(from, to) !== null) return null;
   const leaving = OUTCOME_DESTINATIONS.includes(to as AssayerLifecycleStatus);
-  const barred = (s: AssayerLifecycleStatus) =>
-    NEVER_A_WAYPOINT.includes(s) || (!leaving && NOT_A_WAYPOINT_INBOUND.includes(s));
+  const inboundOnly = (s: AssayerLifecycleStatus) => !leaving && NOT_A_WAYPOINT_INBOUND.includes(s);
+  const barred = (s: AssayerLifecycleStatus) => NEVER_A_WAYPOINT.includes(s) || inboundOnly(s);
 
-  const queue: Array<{ state: string; path: AssayerLifecycleStatus[] }> = [{ state: from, path: [] }];
-  const seen = new Set<string>([from]);
-
-  while (queue.length > 0) {
-    const { state, path } = queue.shift()!;
-    for (const next of ASSAYER_LIFECYCLE_TRANSITIONS[state] ?? []) {
-      if (seen.has(next)) continue;
-      const nextPath = [...path, next];
-      // The destination itself is never the blocker — it is allowed to be a decision, because
-      // arriving there IS the decision the operator asked for.
-      if (next === to) return nextPath.slice(0, -1).find(barred) ?? null;
-      seen.add(next);
-      queue.push({ state: next, path: nextPath });
+  /*
+    First along the real road: routes that do not cut back in through INACTIVE. INVITED → ACTIVE
+    is blocked by the approval before training — the decision somebody has to take — not by the
+    INACTIVE shortcut, which is shorter and would otherwise be what gets named. Only when no such
+    road exists is the shortcut's barrier the honest answer.
+  */
+  const search = (avoidShortcuts: boolean): AssayerLifecycleStatus | null | undefined => {
+    const queue: Array<{ state: string; path: AssayerLifecycleStatus[] }> = [{ state: from, path: [] }];
+    const seen = new Set<string>([from]);
+    while (queue.length > 0) {
+      const { state, path } = queue.shift()!;
+      for (const next of ASSAYER_LIFECYCLE_TRANSITIONS[state] ?? []) {
+        if (seen.has(next)) continue;
+        const nextPath = [...path, next];
+        // The destination itself is never the blocker — it is allowed to be a decision, because
+        // arriving there IS the decision the operator asked for.
+        if (next === to) return nextPath.slice(0, -1).find(barred) ?? null;
+        if (avoidShortcuts && inboundOnly(next)) continue;
+        seen.add(next);
+        queue.push({ state: next, path: nextPath });
+      }
     }
-  }
-  return null;
+    return undefined;
+  };
+  const onTheRoad = search(true);
+  if (onTheRoad !== undefined) return onTheRoad;
+  return search(false) ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

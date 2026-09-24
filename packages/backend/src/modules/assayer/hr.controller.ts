@@ -2,7 +2,7 @@ import { Controller, Get, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { HrWorkforceService } from './hr-workforce.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
@@ -31,11 +31,15 @@ export class HrController {
    * `@Roles` lists built-in role NAMES, a closed set written in code. A role created in the admin
    * screen is a database row that matches none of them, so it was refused here however many
    * permissions somebody attached to it — the whole HR console answered 403 to a role explicitly
-   * granted `ASSAYER:VIEW`. `RolesGuard` now falls through to this declaration when the name does
-   * not match, which is what makes the role builder mean anything.
+   * granted `ASSAYER:VIEW`. This comment used to say `RolesGuard` falls through to the permission
+   * on its own; it does not — only with `@AllowPermissionFallback()` beside it, which is what was
+   * missing, and why the web app had to stop offering `/hr` to custom roles at all. Now present:
+   * a custom HR or approver role holding assayer:view opens the console (and through it the
+   * approvals queue), as `custom-role-page-parity.spec.ts` pins from both ends.
    *
    * Read-only: this endpoint returns the workforce overview and writes nothing.
    */
+  @AllowPermissionFallback()
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Organisation-level workforce analytics for HR' })
   async workforce(@GlobalScopeFilter() scope?: GlobalScope) {

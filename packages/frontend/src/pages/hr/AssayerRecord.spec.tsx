@@ -113,7 +113,6 @@ const record = (over: Record<string, unknown> = {}) => ({
   lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
   employmentType: 'INTERNAL',
   experienceYears: 4,
-  maxDailyWorkload: 3,
   maxWeeklyWorkload: 15,
   panNumber: 'ABCDE1234F',
   bankAccountNumber: '000111222333',
@@ -799,7 +798,7 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
     renderRecord();
     await waitForDossier();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Move to Training' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send for approval' }));
 
     const dialog = await screen.findByRole('dialog');
     // The message is built from mixed plain text and a highlighted <strong> fragment, so the
@@ -813,14 +812,18 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
     const finding = within(dialog).getByText('Criminal case — Bribery case pending in Nashik sessions court');
     expect(finding.tagName).toBe('STRONG');
     expect(finding).toHaveStyle({ color: 'var(--warning)' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Move to Awaiting Approval/ }));
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Training' }));
+    // Then the note for the approver, and the request.
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Send for approval' })).toBeInTheDocument());
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Send for approval' }));
     await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
     const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
-    expect(JSON.parse(options.body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.TRAINING });
+    expect(JSON.parse(options.body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.FINAL_APPROVAL });
   });
 
-  it('does not interrupt a clear background check', async () => {
+  /** HR's last step is a request to somebody else — with room for a note, and nothing more. */
+  it('sends a clear check up for approval, with an optional note for the approver', async () => {
     serveWithDossier(
       record({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }),
       { currentCheck: { verdict: 'CLEAR', checkedOn: '2026-01-01' } },
@@ -828,10 +831,16 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
     renderRecord();
     await waitForDossier();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Move to Training' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send for approval' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toMatch(/Somebody other than you has to decide it/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send for approval' }));
 
     await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
+    expect(JSON.parse(options.body)).toMatchObject({
+      targetStatus: AssayerLifecycleStatus.FINAL_APPROVAL, reason: 'Sent for approval before training',
+    });
   });
 
   it('says plainly that Active is refused without PAN and bank details, instead of promising it will proceed', async () => {
@@ -938,7 +947,7 @@ describe('AssayerRecord — the joining steps bar', () => {
     serve(record({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }));
     renderRecord();
 
-    await waitFor(() => expect(screen.getByText('Step 3 of 5: Background check')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Step 3 of 6: Background check')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Go to Background/ })).toBeInTheDocument();
     expect(screen.queryByText(/BGV|Pipeline|Doc Check/)).not.toBeInTheDocument();
   });
@@ -947,7 +956,7 @@ describe('AssayerRecord — the joining steps bar', () => {
     serve(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }));
     renderRecord();
 
-    await waitFor(() => expect(screen.getByText('Step 4 of 5: Training')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Step 5 of 6: Training')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /Go to/ })).not.toBeInTheDocument();
   });
 
@@ -962,7 +971,7 @@ describe('AssayerRecord — the joining steps bar', () => {
 
 describe('AssayerRecord — the ID card', () => {
   const terms = {
-    canDownload: false,
+    issued: false,
     blockedBecause: ['they are not Active yet'],
     gaps: [],
     issuedOn: '2026-09-16T00:00:00.000Z',
@@ -972,13 +981,14 @@ describe('AssayerRecord — the ID card', () => {
     assayerCode: 'AS0001',
     department: null,
     location: 'Kochi, Kerala',
+    organisation: 'Sumeru Global',
     signatoryName: null,
     signatoryTitle: null,
     helplinePhone: null,
     officeAddress: null,
   };
 
-  it('opens one window from the header, drawn from what the server says the card prints, and says why it cannot be issued', async () => {
+  it('opens one window from the header, drawn from what the server says, and says why it is not issued', async () => {
     mockRequest.mockImplementation((url: string) => {
       if (url === '/assayers/a-1') return Promise.resolve(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }));
       if (url === '/assayers/a-1/id-card/preview') return Promise.resolve(terms);
@@ -987,23 +997,26 @@ describe('AssayerRecord — the ID card', () => {
     renderRecord();
     await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
 
-    // Not on the Summary itself any more — only in the window.
-    expect(screen.queryByTestId('appraiser-id-card')).not.toBeInTheDocument();
+    // Not on the Summary itself — only in the window.
+    expect(screen.queryByTestId('digital-id-card')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'ID card' }));
 
-    await waitFor(() => expect(screen.getByTestId('appraiser-id-card')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('digital-id-card')).toBeInTheDocument());
     expect(screen.getByTestId('id-card-blocked')).toHaveTextContent('they are not Active yet');
-    expect(screen.queryByRole('button', { name: /Download PDF/ })).not.toBeInTheDocument();
     // Nothing the card cannot back up.
     expect(screen.queryByText(/Verified|Scan ID|Narayanan|Bullion|Authenticated/)).not.toBeInTheDocument();
-    expect(screen.getByText(/No signatory name is set/)).toBeInTheDocument();
+    expect(screen.getByText(/No signatory is set/)).toBeInTheDocument();
   });
 
-  it('offers the download only when the server says the card can be issued', async () => {
+  /**
+   * DIGITAL ONLY (owner, 2026-09-23): nothing to download or print, and the preview is blurred and
+   * watermarked, with no live code — a screenshot of HR's screen is not an ID card.
+   */
+  it('offers no download, even for an issued card, and shows only a blurred, watermarked preview', async () => {
     mockRequest.mockImplementation((url: string) => {
       if (url === '/assayers/a-1') return Promise.resolve(record());
       if (url === '/assayers/a-1/id-card/preview') {
-        return Promise.resolve({ ...terms, canDownload: true, blockedBecause: [], signatoryName: 'A. Signer' });
+        return Promise.resolve({ ...terms, issued: true, blockedBecause: [], signatoryName: 'A. Signer' });
       }
       return Promise.reject(new Error('not served in this test'));
     });
@@ -1011,8 +1024,12 @@ describe('AssayerRecord — the ID card', () => {
     await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'ID card' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /Download PDF/ })).toBeInTheDocument());
-    expect(screen.getByText('A. Signer')).toBeInTheDocument();
+    const card = await screen.findByTestId('digital-id-card');
+    expect(screen.queryByRole('button', { name: /Download|Print/ })).not.toBeInTheDocument();
+    expect(card).toHaveAttribute('aria-label', expect.stringMatching(/blurred, not valid as identification/));
+    expect(card.textContent).toMatch(/PREVIEW · NOT VALID AS ID/);
+    expect(card.textContent).toMatch(/appear only on the assayer.s own app/);
+    expect(screen.getByText(/The ID card is digital only/)).toBeInTheDocument();
     expect(screen.queryByTestId('id-card-blocked')).not.toBeInTheDocument();
   });
 });

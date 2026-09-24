@@ -1,9 +1,10 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Clock, Hourglass } from 'lucide-react';
-import { AssayerInvoiceStatus, InvoiceStatus } from '@fapoms/shared';
+import { AssayerInvoiceStatus, InvoiceStatus, SystemRole } from '@fapoms/shared';
 import { useBillingOverview, useAssayerInvoices, useBillingInvoices, useInvoiceable } from '../../hooks/useBilling';
 import { queryKeys } from '../../hooks/queryKeys';
+import { hasAnyRole, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { getPendingExpenses } from '../../services/expenses';
 import { moneyTotal as money } from '../../utils/money';
 import { LoadFailure, type MonitoredLoad } from '../../components/LoadFailure';
@@ -45,11 +46,19 @@ export const TodoTab: React.FC<{
   const submitted = useAssayerInvoices({ status: AssayerInvoiceStatus.SUBMITTED, page: 1, limit: 1 });
   const withAssayer = useAssayerInvoices({ status: AssayerInvoiceStatus.INVITED, page: 1, limit: 1 });
   const drafts = useBillingInvoices({ status: InvoiceStatus.DRAFT, page: 1, limit: 1 });
+  const readyToSend = useBillingInvoices({ status: InvoiceStatus.HOD_APPROVED, page: 1, limit: 1 });
   const invoiceable = useInvoiceable();
+  /**
+   * Only the roles the server lets review claims (ADMIN, OPERATIONS) ask for them. An auditor or a
+   * custom billing role (a custom HOD role, say) was sent the same request, got a 403, and saw
+   * "could not load the expense claims" on the tab billing opens on.
+   */
+  const canReviewClaims = hasAnyRole(useCurrentRoles(), [SystemRole.ADMIN, SystemRole.OPERATIONS]);
   const claims = useQuery({
     queryKey: queryKeys.billing.pendingExpenses(),
     queryFn: getPendingExpenses,
     staleTime: 30_000,
+    enabled: canReviewClaims,
   });
 
   const data = overview.data;
@@ -71,8 +80,8 @@ export const TodoTab: React.FC<{
   const steps: Step[] = [
     {
       key: 'claims',
-      show: !loadFailed(claims) && (claims.data?.length ?? 0) > 0,
-      failed: loadFailed(claims),
+      show: canReviewClaims && !loadFailed(claims) && (claims.data?.length ?? 0) > 0,
+      failed: canReviewClaims && loadFailed(claims),
       failLabel: 'the expense claims waiting for review',
       failQuery: claims,
       title: `${claims.data?.length ?? 0} expense ${claims.data?.length === 1 ? 'claim' : 'claims'} to approve`,
@@ -105,11 +114,25 @@ export const TodoTab: React.FC<{
       tone: 'var(--accent)',
     },
     {
+      /*
+        Ready to pay = approved by the office AND the HOD (2026-09-24). What is still with the HOD is
+        not this desk's move, so it is its own line, and says so.
+      */
+      key: 'with-hod',
+      show: (payouts.awaitingHodCount ?? 0) > 0,
+      title: `${payouts.awaitingHodCount} ${payouts.awaitingHodCount === 1 ? 'payout is' : 'payouts are'} waiting for HOD approval`,
+      amount: payouts.awaitingHod ?? 0,
+      why: "Approved by the office. They cannot be paid until the HOD gives the final approval.",
+      cta: 'See them',
+      go: () => onGo('pay', { stage: 'AWAITING_HOD' }),
+      tone: 'var(--text-muted)',
+    },
+    {
       key: 'to-pay',
-      show: payouts.approvedCount > 0,
-      title: `${payouts.approvedCount} ${payouts.approvedCount === 1 ? 'payout is' : 'payouts are'} ready to pay`,
-      amount: payouts.approved,
-      why: 'Approved and cleared. Download the bank file, pay it, then come back and record the payment.',
+      show: payouts.approvedCount - (payouts.awaitingHodCount ?? 0) > 0,
+      title: `${payouts.approvedCount - (payouts.awaitingHodCount ?? 0)} ${payouts.approvedCount - (payouts.awaitingHodCount ?? 0) === 1 ? 'payout is' : 'payouts are'} ready to pay`,
+      amount: payouts.approved - (payouts.awaitingHod ?? 0),
+      why: 'Approved by the office and the HOD. Download the bank file, pay it, then come back and record the payment.',
       cta: 'Pay assayers',
       go: () => onGo('pay', { stage: 'TO_PAY' }),
       tone: 'var(--accent)',
@@ -136,10 +159,24 @@ export const TodoTab: React.FC<{
       failLabel: 'the draft invoices',
       failQuery: drafts,
       title: `${drafts.data?.total} ${drafts.data?.total === 1 ? 'invoice is' : 'invoices are'} drafted but not sent`,
-      why: 'A draft is not owed by anybody. Until it is sent it counts for nothing and the client cannot pay it.',
+      why: "A draft is not owed by anybody. Send it for the HOD's final approval; once approved it can go to the client.",
       cta: 'Send invoices',
       go: () => onGo('invoices', { invoices: InvoiceStatus.DRAFT }),
       tone: 'var(--warning)',
+    },
+    {
+      // Approved by the HOD but not yet marked sent. Until it is sent it is not owed by anybody,
+      // and nothing else on this list would mention it.
+      key: 'readyToSend',
+      show: !loadFailed(readyToSend) && (readyToSend.data?.total ?? 0) > 0,
+      failed: loadFailed(readyToSend),
+      failLabel: 'the invoices ready to send',
+      failQuery: readyToSend,
+      title: `${readyToSend.data?.total} ${readyToSend.data?.total === 1 ? 'invoice is' : 'invoices are'} approved by the HOD and ready to send`,
+      why: 'The HOD has given the final approval. Send each to the client and mark it sent — only then is it owed.',
+      cta: 'Send to clients',
+      go: () => onGo('invoices', { invoices: InvoiceStatus.HOD_APPROVED }),
+      tone: 'var(--accent)',
     },
     {
       key: 'overdue',
@@ -257,7 +294,7 @@ const StepRow: React.FC<{ step: Step; n: number }> = ({ step, n }) => {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 3 }}>
           <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.45 }}>{step.why}</span>
-          <button onClick={step.go} className="btn btn-secondary" style={{ whiteSpace: 'nowrap', fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>{step.cta} →</button>
+          <button onClick={step.go} className="btn btn-secondary" title={`Proceed to ${step.title.toLowerCase()}`} style={{ whiteSpace: 'nowrap', fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>{step.cta} →</button>
         </div>
       </div>
     </div>

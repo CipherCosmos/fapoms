@@ -38,6 +38,7 @@ export const DocumentModelLegend: React.FC = () => {
     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
       <button
         onClick={() => setOpen((v) => !v)}
+        title={open ? 'Hide explanations of file types and pipeline stages' : 'Show what each file type and pipeline stage means'}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
           background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 'var(--text-xs)', fontWeight: 600,

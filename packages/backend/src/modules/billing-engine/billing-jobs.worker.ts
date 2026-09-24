@@ -8,7 +8,7 @@ import {
   BookAssignmentJobData,
   ReconcileJobData,
 } from './billing-jobs.contract';
-import { progressReporter } from '../../infrastructure/queue/queued-job';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
 
 /**
  * Why the reconcile runs one at a time.
@@ -31,7 +31,10 @@ const ONE_AT_A_TIME = 1;
 export class BillingJobsWorker {
   private readonly logger = new Logger(BillingJobsWorker.name);
 
-  constructor(private readonly billing: BillingEngineService) {}
+  constructor(
+    private readonly billing: BillingEngineService,
+    private readonly tracker: BackgroundJobTracker,
+  ) {}
 
   /**
    * The named handler MUST match what `BillingJobsService` enqueues — both read
@@ -43,7 +46,23 @@ export class BillingJobsWorker {
     const { requestedBy, since } = job.data;
     this.logger.log(`Billing reconcile ${job.id} started for ${requestedBy}${since ? ` (since ${since})` : ''}.`);
 
-    const result = await this.billing.reconcile(requestedBy, { since: since ?? null }, progressReporter(job));
+    /*
+      Tracked: the row carries progress and ends with the counts, so the run is on the requester's
+      Jobs tray after a refresh. The return value and Bull progress are unchanged for `jobs/:jobId`.
+      Not run as the requester (`runAsJobActor`): the reconcile has always walked the whole book,
+      attributing what it writes to `requestedBy` explicitly, and tracking does not change its reach.
+    */
+    const result = await this.tracker.run(
+      job,
+      (t) => this.billing.reconcile(requestedBy, { since: since ?? null }, t.progress),
+      {
+        describe: (r) => ({
+          summary: `${r.booked} booked, ${r.skipped} already booked`
+            + (r.errors.length ? `, ${r.errors.length} could not be booked.` : '.'),
+          counts: { scanned: r.scanned, booked: r.booked, alreadyBooked: r.skipped, errors: r.errors.length },
+        }),
+      },
+    );
 
     this.logger.log(
       `Billing reconcile ${job.id} finished: scanned ${result.scanned}, booked ${result.booked}, ` +

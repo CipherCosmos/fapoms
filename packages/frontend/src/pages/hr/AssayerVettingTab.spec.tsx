@@ -4,7 +4,7 @@ import { render, screen, waitFor, fireEvent, within, act } from '@testing-librar
 import { ONBOARDING_NEXT_STEP, EmpanelmentStatus } from '@fapoms/shared';
 
 import {
-  AssayerVettingTab, vettingLede, standingStance, STANDING_LABELS,
+  AssayerVettingTab, vettingLede, standingStance, STANDING_LABELS, printedAddressFromRecord, referenceNoticeLine,
 } from './AssayerVettingTab';
 import { api } from '../../services/api';
 import { fromResponse } from '../../services/errors';
@@ -120,7 +120,7 @@ describe('AssayerVettingTab — references', () => {
     // `undefined` would be dropped from the JSON and the server would keep the old number
     // (`dto.phone ?? row.phone`) — the very correction the operator opened this form to make.
     expect(JSON.parse(options.body)).toEqual({
-      fullName: 'Correct Manager', relationship: 'Former manager', phone: null,
+      fullName: 'Correct Manager', relationship: 'Former manager', phone: null, email: null,
     });
   });
 
@@ -168,6 +168,83 @@ describe('AssayerVettingTab — references', () => {
       expect.objectContaining({ method: 'DELETE' }),
     ));
   });
+
+  /**
+   * Whether the referee was told HR may call them — and when a text could not go, why. The live
+   * case: the referee text has no registered DLT template, so only the email went.
+   */
+  it('shows how a referee was told, and names the channel that did not go', async () => {
+    serve(dossier({
+      references: [
+        { id: 'r-5', fullName: 'Told Manager', phone: '+919000000000', email: 't@example.com', checkedAt: null,
+          notifiedAt: '2026-09-23T10:00:00Z', notifiedVia: 'EMAIL',
+          noticeProblem: 'not texted (This text has no DLT template id; add it under SMS templates in Platform Settings.)' },
+      ],
+    }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    await waitFor(() => expect(screen.getByText(/By email, .* — not texted \(This text has no DLT template id/)).toBeInTheDocument());
+    expect(screen.getByText('Tell them again')).toBeInTheDocument();
+  });
+
+  it('tells a referee from the record, and says what actually went', async () => {
+    serve(dossier({
+      references: [{ id: 'r-6', fullName: 'Untold Manager', phone: '+919000000000', email: null, checkedAt: null }],
+    }));
+    const base = mockRequest.getMockImplementation()!;
+    mockRequest.mockImplementation((url: string, opts?: any) => (url === '/assayers/a-1/reference/r-6/notify'
+      ? Promise.resolve({ channels: ['SMS'], problem: 'no email address', alreadyTold: false })
+      : base(url, opts)));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+    await waitFor(() => expect(screen.getByText('Untold Manager')).toBeInTheDocument());
+
+    fireEvent.click(await screen.findByText('Tell them'));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith(
+      '/assayers/a-1/reference/r-6/notify', expect.objectContaining({ method: 'POST' }),
+    ));
+  });
+
+  it('records and shows a referee email where there is one', async () => {
+    serve(dossier({
+      references: [
+        { id: 'r-3', fullName: 'Mailed Manager', relationship: 'Former manager', phone: '+919000000000', email: 'mailed@example.com', checkedAt: null },
+      ],
+    }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+    await waitFor(() => expect(screen.getByText('mailed@example.com')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Change'));
+    const email = screen.getByDisplayValue('mailed@example.com');
+    fireEvent.change(email, { target: { value: 'new@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith(
+      '/assayers/a-1/reference/r-3',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url === '/assayers/a-1/reference/r-3')!;
+    expect(JSON.parse(options.body)).toMatchObject({ email: 'new@example.com' });
+  });
+
+  it('refuses a mistyped referee email before the round trip', async () => {
+    serve(dossier());
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+    await waitFor(() => expect(screen.getByText('Old Manager')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Change'));
+    const dialogEl = await screen.findByRole('dialog');
+    const dialog = within(dialogEl);
+    fireEvent.change(dialog.getByLabelText('Email of the reference'), { target: { value: 'not-an-email' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Save changes' }));
+
+    // Inside the dialog the clerk is looking at — not the page banner behind it.
+    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent('That email does not look right.'));
+    expect(mockRequest).not.toHaveBeenCalledWith(
+      expect.stringContaining('/reference/'),
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
 });
 
 describe('AssayerVettingTab — background checks', () => {
@@ -179,8 +256,296 @@ describe('AssayerVettingTab — background checks', () => {
 
     render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
 
-    await waitFor(() => expect(screen.getByText(/Checks cannot be edited or deleted/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Checks and their reports cannot be edited or deleted/)).toBeInTheDocument());
     expect(screen.getByText(/record a new check/)).toBeInTheDocument();
+  });
+
+  /**
+   * The report is mandatory before a result — the server refuses one without it, so the dialog
+   * says so and takes the upload in place rather than failing after a round trip.
+   */
+  const bgvReport = (files: string[], issuedBy: string | null = files.length > 0 ? 'AuthBridge' : null) => ({
+    id: 'd-bgv', requirement: 'BGV_REPORT', label: 'Background verification report', identity: false,
+    filePaths: files, softCopyReceived: files.length > 0, hardCopyReceived: false, hardCopyLocation: null, issuedBy,
+  });
+  const checkPosts = () => mockRequest.mock.calls.filter(([url, o]: any[]) => url === '/assayers/a-1/background-check' && o?.method === 'POST');
+  /** The address, CIBIL and court checks, all clean — a clear result needs all three (2026-09-24). */
+  const fillParts = (dialog: ReturnType<typeof within>, over: Record<string, string> = {}) => {
+    const values: Record<string, string> = {
+      'How the address was checked': 'PHYSICAL', 'What the address check found': 'VERIFIED',
+      'CIBIL band': 'GOOD', 'What the court check found': 'NO_RECORD', ...over,
+    };
+    for (const [name, value] of Object.entries(values)) fireEvent.change(dialog.getByRole('combobox', { name }), { target: { value } });
+  };
+  const recordPassed = async () => {
+    fireEvent.click(await screen.findByText('Record a check'));
+    const dialog = within(screen.getByRole('dialog'));
+    fillParts(dialog);
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+    return dialog;
+  };
+
+  it('will not record a result before the report is uploaded, and says so in the dialog', async () => {
+    serve(dossier({ onboarding: [bgvReport([])] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    fireEvent.click(await screen.findByText('Record a check'));
+    const dialog = within(screen.getByRole('dialog'));
+    fireEvent.change(dialog.getByLabelText('Background check agency'), { target: { value: 'AuthBridge' } });
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+    expect(dialog.getByText(/Not uploaded yet — required before a result can be recorded/)).toBeInTheDocument();
+    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent(/Upload the background verification report first/));
+    expect(checkPosts()).toHaveLength(0);
+  });
+
+  /** A report file no recorded check was read from yet — what the dossier calls pending. */
+  const pending = (path: string, index: number) => ({ documentId: 'd-bgv', versionId: `v-${index}`, path, uploadedAt: null, index });
+
+  it('records the result once the report is on file', async () => {
+    serve(dossier({ onboarding: [bgvReport(['scans/bgv.pdf'])], bgvReportPending: [pending('scans/bgv.pdf', 0)] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    const dialog = await recordPassed();
+
+    expect(dialog.getByText('Uploaded (1 file) — from AuthBridge')).toBeInTheDocument();
+    await waitFor(() => expect(checkPosts()).toHaveLength(1));
+    // The agency named with the report is the check's agency, without typing it again.
+    expect(JSON.parse(checkPosts()[0][1].body)).toMatchObject({ checkedByName: 'AuthBridge' });
+  });
+
+  /** BGV is run by an outside agency; its report is not taken without the agency's name. */
+  it('offers no upload until the agency is named, then sends the agency with the report', async () => {
+    serve(dossier({ onboarding: [bgvReport([])] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+    fireEvent.click(await screen.findByText('Record a check'));
+    const dialog = within(screen.getByRole('dialog'));
+
+    expect(dialog.getByText('Name the agency above to upload its report.')).toBeInTheDocument();
+
+    fireEvent.change(dialog.getByLabelText('Background check agency'), { target: { value: 'First Advantage' } });
+    const input = screen.getByRole('dialog').querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    fireEvent.change(input, { target: { files: [new File(['%PDF'], 'bgv.pdf', { type: 'application/pdf' })] } });
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith(
+      '/assayers/a-1/document/BGV_REPORT/file', expect.objectContaining({ method: 'POST' }),
+    ));
+    const [, opts] = mockRequest.mock.calls.find(([url]: any[]) => url === '/assayers/a-1/document/BGV_REPORT/file')!;
+    expect((opts.body as FormData).get('issuedBy')).toBe('First Advantage');
+  });
+
+  /**
+   * Re-verifying somebody who did not pass: the report on file is the failed check's, and stays
+   * with it. The new result needs the new report.
+   */
+  it('asks for a new report when the one on file belongs to the check before', async () => {
+    const failed = {
+      id: 'c-1', verdict: 'CRIMINAL_CASE', checkedOn: '2026-09-01', checkedByName: 'AuthBridge',
+      reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'scans/first.pdf', uploadedAt: null }],
+    };
+    serve(dossier({ onboarding: [bgvReport(['scans/first.pdf'])], currentCheck: failed, backgroundChecks: [failed], bgvReportPending: [] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    const dialog = await recordPassed();
+
+    expect(dialog.getByText(/Upload the new report — the one on file belongs to the check recorded before/)).toBeInTheDocument();
+    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent(/Upload the report for this check/));
+    expect(checkPosts()).toHaveLength(0);
+  });
+
+  it('shows each check with the report it was read from — a failed one included', async () => {
+    const pass = {
+      id: 'c-2', verdict: 'CLEAR', checkedOn: '2026-09-20', checkedByName: 'First Advantage',
+      reportFiles: [{ documentId: 'd-bgv', versionId: 'v-2', path: 'scans/second.pdf', uploadedAt: null }],
+    };
+    const failed = {
+      id: 'c-1', verdict: 'CRIMINAL_CASE', checkedOn: '2026-09-01', checkedByName: 'AuthBridge',
+      reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'scans/first.pdf', uploadedAt: null }],
+    };
+    serve(dossier({ onboarding: [bgvReport(['scans/first.pdf', 'scans/second.pdf'])], currentCheck: pass, backgroundChecks: [pass, failed] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    const views = await screen.findAllByRole('button', { name: 'View report of Background verification report' });
+    expect(views).toHaveLength(2);
+    // The failed check's agency is in the history, beside its report.
+    expect(screen.getByText('AuthBridge')).toBeInTheDocument();
+    // Evidence, not paperwork: neither report can be removed from here.
+    expect(screen.queryByRole('button', { name: /Remove report/ })).not.toBeInTheDocument();
+
+    // Each opens the upload it was, not whatever sits at that place on the document now.
+    fireEvent.click(views[1]);
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/document/d-bgv/version/v-1/file', { raw: true }));
+  });
+
+  it('shows a report waiting for its result, which can still be removed by where it sits', async () => {
+    const failed = {
+      id: 'c-1', verdict: 'CRIMINAL_CASE', checkedOn: '2026-09-01',
+      reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'scans/first.pdf', uploadedAt: null }],
+    };
+    serve(dossier({
+      onboarding: [bgvReport(['scans/first.pdf', 'scans/second.pdf'])],
+      currentCheck: failed, backgroundChecks: [failed], bgvReportPending: [pending('scans/second.pdf', 1)],
+    }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    expect(await screen.findByText('Report uploaded — result not recorded yet')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove report of Background verification report' }));
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/document/d-bgv/file/1', { method: 'DELETE' }));
+  });
+
+  /**
+   * WHAT A DESK ACTUALLY DID, 24 SEP 2026.
+   *
+   * Passing a candidate through background verification, they opened "Record a check", found a
+   * row of four chips — background, police, credit, identity — and went round all of them,
+   * uploading a report under three. The result and the date stayed filled in as they moved, so it
+   * read as one form. "Record check" then saved only the chip left selected: the identity
+   * re-check, which was refused for not saying what was re-checked. Nothing was recorded, and the
+   * candidate could not leave the stage.
+   *
+   * The button that opens the dialog decides which check it records. There is nothing to switch.
+   */
+  it('records the background verification from "Record a check", with no way to switch to another check', async () => {
+    serve(dossier({ onboarding: [bgvReport(['scans/bgv.pdf'])], bgvReportPending: [pending('scans/bgv.pdf', 0)] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    fireEvent.click(await screen.findByText('Record a check'));
+    const dialog = within(screen.getByRole('dialog'));
+
+    expect(dialog.getByText('Record the background check')).toBeInTheDocument();
+    expect(dialog.queryByRole('group', { name: 'Which check' })).not.toBeInTheDocument();
+    for (const other of ['Police verification', 'Credit (CIBIL) check', 'Identity documents re-check']) {
+      expect(dialog.queryByRole('button', { name: other })).not.toBeInTheDocument();
+    }
+
+    fillParts(dialog);
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+    await waitFor(() => expect(checkPosts()).toHaveLength(1));
+    expect(JSON.parse(checkPosts()[0][1].body)).toMatchObject({ checkType: 'BGV', verdict: 'CLEAR', checkedByName: 'AuthBridge' });
+  });
+
+  /**
+   * THE THREE PARTS (owner, 2026-09-24): "address check (physical/digital), cibil check, court check
+   * should present before making that done".
+   */
+  describe('the address, CIBIL and court checks', () => {
+    const ready = () => serve(dossier({ onboarding: [bgvReport(['scans/bgv.pdf'])], bgvReportPending: [pending('scans/bgv.pdf', 0)] }));
+
+    it('will not record Clear without all three, and names what is missing in the dialog', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fireEvent.change(dialog.getByRole('combobox', { name: 'CIBIL band' }), { target: { value: 'GOOD' } });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(dialog.getByRole('alert'))
+        .toHaveTextContent('Still to fill in: the address check (physical or digital) and the court check.'));
+      expect(checkPosts()).toHaveLength(0);
+    });
+
+    it('will not record Clear over a court case', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fillParts(dialog, { 'What the court check found': 'CRIMINAL_CASE' });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent(/court check found a criminal case, so the result cannot be clear/));
+      expect(checkPosts()).toHaveLength(0);
+    });
+
+    it('sends all three with the check', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fillParts(dialog, { 'How the address was checked': 'DIGITAL' });
+      fireEvent.change(dialog.getByLabelText('CIBIL score'), { target: { value: '752' } });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(checkPosts()).toHaveLength(1));
+      expect(JSON.parse(checkPosts()[0][1].body)).toMatchObject({
+        addressCheckMethod: 'DIGITAL', addressCheckResult: 'VERIFIED', cibilBand: 'GOOD', cibilScore: 752, courtCheckResult: 'NO_RECORD',
+      });
+    });
+
+    /** Not passing needs no other part — an agency that found a criminal case may stop there. */
+    it('records a result that is not clear with the parts left empty', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CRIMINAL_CASE' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(checkPosts()).toHaveLength(1));
+      const body = JSON.parse(checkPosts()[0][1].body);
+      expect(body.verdict).toBe('CRIMINAL_CASE');
+      expect(body.addressCheckMethod).toBeUndefined();
+    });
+
+    it('shows them on the check, and says so when an older check never had them', async () => {
+      const recorded = {
+        id: 'c-1', verdict: 'CLEAR', checkedOn: '2026-09-24', reportFiles: [],
+        addressCheckMethod: 'PHYSICAL', addressCheckResult: 'VERIFIED', cibilBand: 'GOOD', cibilScore: 747, courtCheckResult: 'NO_RECORD',
+      };
+      const older = { id: 'c-0', verdict: 'CLEAR', checkedOn: '2022-01-01', reportFiles: [], cibilBand: 'AVERAGE' };
+      serve(dossier({ currentCheck: recorded, backgroundChecks: [recorded, older] }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+      expect(await screen.findByTestId('bgv-part-address')).toHaveTextContent('Address verified (physical visit)');
+      expect(screen.getByTestId('bgv-part-cibil')).toHaveTextContent('Good (747)');
+      expect(screen.getByTestId('bgv-part-court')).toHaveTextContent('No case found');
+      expect(screen.getByText('Address check: Not recorded · CIBIL check: Average · Court check: Not recorded')).toBeInTheDocument();
+    });
+
+    it('asks a police re-check for none of them', async () => {
+      const standing = { type: 'POLICE', lastCheckedOn: null, lastVerdict: null, dueOn: '2026-12-31', blockFrom: '2027-01-30', status: 'DUE', because: null };
+      serve(dossier({ compliance: { rechecked: true, hold: null, standings: [standing], blockers: [] } }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Record' }));
+      const dialog = within(screen.getByRole('dialog'));
+      expect(dialog.getByText('Record a police verification')).toBeInTheDocument();
+      expect(dialog.queryByTestId('bgv-parts')).not.toBeInTheDocument();
+    });
+  });
+
+    it('offers somebody who did not pass a way back into background verification', async () => {
+    const failed = { id: 'c-1', verdict: 'CRIMINAL_CASE', checkedOn: '2026-09-01', reportFiles: [] };
+    serve(dossier({ currentCheck: failed, backgroundChecks: [failed] }));
+    const reopen = jest.fn();
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" lifecycleStatus="INACTIVE" onReopenBackgroundVerification={reopen} />);
+
+    expect(await screen.findByText(/Background verification was not passed/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-open background verification' }));
+    expect(reopen).toHaveBeenCalled();
+  });
+
+  it('does not offer it to anybody the record has not given the move to', async () => {
+    serve(dossier());
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" lifecycleStatus="INACTIVE" />);
+    await screen.findByText('Record a check');
+    expect(screen.queryByText('Re-open background verification')).not.toBeInTheDocument();
+  });
+
+  it('asks for an agency before recording a result', async () => {
+    serve(dossier({ onboarding: [bgvReport(['scans/bgv.pdf'], null)], bgvReportPending: [pending('scans/bgv.pdf', 0)] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    const dialog = await recordPassed();
+
+    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent(/Name the agency/));
+    expect(checkPosts()).toHaveLength(0);
   });
 });
 
@@ -197,7 +562,53 @@ describe('AssayerVettingTab — documents', () => {
     ...over,
   });
 
-  it('does not call a spreadsheet tick a scan', async () => {
+  /**
+   * A police certificate and a credit report are the reports behind the periodic re-checks, which
+   * begin once somebody is working. Listing them for every candidate, each with "Upload on the
+   * Background tab", sent the hiring desk looking for a police check that joining has no step for.
+   */
+  describe('the reports behind re-checks', () => {
+    const reports = (files: { police?: string[]; credit?: string[] } = {}) => [
+      paperwork({ id: 'd-bgv', requirement: 'BGV_REPORT', label: 'Background verification report' }),
+      paperwork({ id: 'd-pol', requirement: 'POLICE_CERTIFICATE', label: 'Police verification certificate', filePaths: files.police ?? [] }),
+      paperwork({ id: 'd-cr', requirement: 'CREDIT_REPORT', label: 'Credit (CIBIL) report', filePaths: files.credit ?? [] }),
+    ];
+
+    it('are not listed as joining paperwork for somebody who is not on re-checks yet', async () => {
+      serve(dossier({ onboarding: reports() }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
+
+      // The background verification report IS joining paperwork, and stays.
+      expect(await screen.findByText('Background verification report')).toBeInTheDocument();
+      expect(screen.queryByText('Police verification certificate')).not.toBeInTheDocument();
+      expect(screen.queryByText('Credit (CIBIL) report')).not.toBeInTheDocument();
+      // And the count is of what is listed, not of rows nobody can see.
+      expect(screen.getByText(/0 of 1 have a scan on file/)).toBeInTheDocument();
+    });
+
+    /** Somebody already uploaded one — hiding it would look like it was lost. */
+    it('keeps one that already has a file, and says what it will be used for instead of asking for an upload', async () => {
+      serve(dossier({ onboarding: reports({ police: ['p.jpeg'] }) }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" onGoToChecks={() => undefined} />);
+
+      expect(await screen.findByText('Police verification certificate')).toBeInTheDocument();
+      expect(screen.getByText('Used for their first re-check once they are working')).toBeInTheDocument();
+      expect(screen.queryByText('Credit (CIBIL) report')).not.toBeInTheDocument();
+      // Only the background report still points at the Background tab.
+      expect(screen.getAllByRole('button', { name: 'Upload on the Background tab' })).toHaveLength(1);
+    });
+
+    it('are listed, with the way to upload them, for somebody who is on re-checks', async () => {
+      serve(dossier({ onboarding: reports(), compliance: { rechecked: true, standings: [], hold: null, blockers: [] } }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" onGoToChecks={() => undefined} />);
+
+      expect(await screen.findByText('Police verification certificate')).toBeInTheDocument();
+      expect(screen.getByText('Credit (CIBIL) report')).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Upload on the Background tab' })).toHaveLength(3);
+    });
+  });
+
+    it('does not call a spreadsheet tick a scan', async () => {
     serve(dossier({ onboarding: [paperwork({ softCopyReceived: true })] }));
 
     render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
@@ -276,6 +687,65 @@ describe('AssayerVettingTab — verify and send back without the browser', () =>
     expect(JSON.parse(verifyCall()![1].body)).toMatchObject({ verdict: 'VERIFIED', holderName: 'Ramesh Iyer' });
   });
 
+  /**
+   * The passbook is verified like the identity documents — but against the account the pay goes to.
+   * The account number is typed off the page (never prefilled, or it would compare the record with
+   * itself); the IFSC opens with the record's, to be checked.
+   */
+  describe('the bank passbook', () => {
+    const passbook = (over: Record<string, unknown> = {}) => ({
+      id: 'd-pb', requirement: 'BANK_PASSBOOK', label: 'Bank passbook', identity: false, verifiable: true,
+      filePaths: [], softCopyReceived: true, hardCopyReceived: false, hardCopyLocation: null,
+      documentNumber: '********9012', verificationStatus: 'PENDING',
+      prints: { name: true, dateOfBirth: false, gender: false, guardianName: false, address: false },
+      ...over,
+    });
+
+    it('sits with what is verified, without a number editor of its own', async () => {
+      serve(dossier({ onboarding: [passbook()] }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
+
+      expect(await screen.findByText('Identity and bank')).toBeInTheDocument();
+      expect(screen.getByText('Verify')).toBeInTheDocument();
+      expect(screen.queryByText('Replace number')).not.toBeInTheDocument();
+    });
+
+    it('asks for the account number off the page, and sends it with the IFSC to be compared', async () => {
+      serve(dossier({ onboarding: [passbook()] }));
+      render(
+        <AssayerVettingTab
+          assayerId="a-1" canManage section="documents"
+          person={{ displayName: 'Ramesh Iyer', ifscCode: 'SBIN0001234' }}
+        />,
+      );
+      fireEvent.click(await screen.findByText('Verify'));
+
+      const account = await screen.findByLabelText('Account number, as printed');
+      expect(account).toHaveValue('');
+      expect(screen.getByText(/record's account ends …9012/)).toBeInTheDocument();
+      expect(screen.getByLabelText('IFSC, as printed')).toHaveValue('SBIN0001234');
+      expect(screen.getByLabelText(/Name exactly as printed/)).toHaveValue('Ramesh Iyer');
+
+      fireEvent.change(account, { target: { value: '1234 5678 9012' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Use these details' }));
+
+      const passbookVerify = () => mockRequest.mock.calls.find(([url, opts]: any[]) =>
+        url === '/assayers/document/d-pb/verify' && opts?.method === 'POST');
+      await waitFor(() => expect(passbookVerify()).toBeDefined());
+      expect(JSON.parse(passbookVerify()![1].body)).toMatchObject({
+        verdict: 'VERIFIED', holderName: 'Ramesh Iyer', accountNumber: '1234 5678 9012', ifscCode: 'SBIN0001234',
+      });
+    });
+
+    it('says so when there is no account on the record to check it against', async () => {
+      serve(dossier({ onboarding: [passbook({ documentNumber: null })] }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
+
+      expect(await screen.findByText('No account on the record')).toBeInTheDocument();
+      expect(screen.queryByText('Verify')).not.toBeInTheDocument();
+    });
+  });
+
   it('sends a scan back through the fixed reason list, not a numbered browser prompt', async () => {
     serve(dossier({ onboarding: [identityDoc()] }));
     render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
@@ -288,6 +758,30 @@ describe('AssayerVettingTab — verify and send back without the browser', () =>
 
     await waitFor(() => expect(verifyCall()).toBeDefined());
     expect(JSON.parse(verifyCall()![1].body)).toMatchObject({ verdict: 'REJECTED', rejectionReason: 'ILLEGIBLE' });
+  });
+
+  /**
+   * Review opens at document verification — never while INVITED.
+   *
+   * Verdict buttons that worked at INVITED let the same scans be verified twice: once
+   * off-stage on the record, and again when the stage flow asked for it. The server refuses
+   * it too; these stay disabled so the buttons do not promise what the API will not do.
+   */
+  it('locks Verify and Send back while the person is still invited', async () => {
+    serve(dossier({ onboarding: [identityDoc()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="INVITED" />);
+    const verify = await screen.findByRole('button', { name: /Verify — Start document verification first/i });
+    expect(verify).toBeDisabled();
+    const sendBack = screen.getByRole('button', { name: /Send back — Start document verification first/i });
+    expect(sendBack).toBeDisabled();
+  });
+
+  it('leaves review open once document verification has started', async () => {
+    serve(dossier({ onboarding: [identityDoc()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="DOCUMENT_VERIFICATION" />);
+    const verify = await screen.findByRole('button', { name: 'Verify' });
+    expect(verify).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Send back' })).toBeEnabled();
   });
 });
 
@@ -372,7 +866,7 @@ describe('AssayerVettingTab — one way to do one thing', () => {
     await waitFor(() => expect(screen.getByText('Old Manager')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Record a check'));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Record a background check');
+    expect(screen.getByRole('dialog')).toHaveTextContent('Record the background check');
 
     fireEvent.click(screen.getByText('Add reference'));
     const dialogs = screen.getAllByRole('dialog');
@@ -580,7 +1074,10 @@ describe('AssayerVettingTab — a bank decision that is final', () => {
 describe('AssayerVettingTab — one result per background check', () => {
   it('shows one chip that leads with Passed, Failed or Pending, and names the finding after it', async () => {
     serve(dossier({
-      currentCheck: { id: 'c-2', verdict: 'CIVIL_CASE', checkedOn: '2025-07-01', checkedByName: 'AuthBridge' },
+      currentCheck: {
+        id: 'c-2', verdict: 'CIVIL_CASE', checkedOn: '2025-07-01', checkedByName: 'AuthBridge',
+        reportFiles: [{ documentId: 'd-bgv', versionId: 'v-2', path: 'scans/bgv.pdf', uploadedAt: null }],
+      },
       backgroundChecks: [
         { id: 'c-2', verdict: 'CIVIL_CASE', checkedOn: '2025-07-01' },
         { id: 'c-1', verdict: 'CLEAR', checkedOn: '2025-06-01' },
@@ -600,8 +1097,9 @@ describe('AssayerVettingTab — one result per background check', () => {
     expect(screen.getByText('Background check')).toBeInTheDocument();
     expect(screen.getByText('Background check agency')).toBeInTheDocument();
     expect(screen.getByText('AuthBridge')).toBeInTheDocument();
-    // The report is described once, as the block you can act on — not also as a pointer elsewhere.
-    expect(screen.getByText('Background check report')).toBeInTheDocument();
+    // The report is shown with the check it belongs to — not also as a pointer elsewhere.
+    expect(screen.getAllByText('Report').length).toBeGreaterThanOrEqual(2); // the check's field and the history's column
+    expect(screen.getByRole('button', { name: 'View report of Background verification report' })).toBeInTheDocument();
     expect(screen.queryByText(/Documents →/)).not.toBeInTheDocument();
   });
 
@@ -614,7 +1112,7 @@ describe('AssayerVettingTab — one result per background check', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('Result')).toBeInTheDocument();
     expect(within(dialog).getByText('Background check agency')).toBeInTheDocument();
-    const options = Array.from(within(dialog).getAllByRole('combobox')[0].querySelectorAll('option')).map((o) => o.textContent);
+    const options = Array.from(within(dialog).getByRole('combobox', { name: 'Result' }).querySelectorAll('option')).map((o) => o.textContent);
     expect(options).toEqual(expect.arrayContaining(['Passed', 'Failed — criminal case', 'Pending — not checked yet']));
     expect(within(dialog).queryByText(/BGV|Verifier|Verdict/)).not.toBeInTheDocument();
   });
@@ -894,6 +1392,100 @@ describe('AssayerVettingTab — verifying with the document in front of you', ()
     await waitFor(() => expect(screen.getByText(/read from the original document in front of you/i)).toBeInTheDocument());
     expect(screen.queryByAltText('Scan 1')).not.toBeInTheDocument();
   });
+
+  /**
+   * PREFILLED, NOT BLANK.
+   *
+   * The boxes opened empty, so the reviewer typed the name off the card even when the record
+   * already held the same spelling — slow, and a typo became a "mismatch" to resolve. Boxes the
+   * document never had read off it now open with the record's answer, which the reviewer checks
+   * rather than types; anything the card shows differently gets corrected in the box.
+   */
+  it('prefills the card details from the record, editable where the card differs', async () => {
+    serve(dossier({ onboarding: [identityDoc({ holderName: null, holderDateOfBirth: null })] }));
+    render(
+      <AssayerVettingTab
+        assayerId="a-1"
+        canManage
+        section="documents"
+        person={{ displayName: 'Anil Deshmukh', dateOfBirth: '1985-03-14', address: 'Pune' }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('Verify')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Verify'));
+
+    await waitFor(() => expect(screen.getByText(/Prefilled from their record/i)).toBeInTheDocument());
+    expect(screen.getByLabelText(/Name exactly as printed/)).toHaveValue('Anil Deshmukh');
+  });
+
+  /**
+   * Gender and the whole address, not just the name.
+   *
+   * The first cut prefilled name, date of birth and the street line only, so the reviewer still
+   * typed the gender and the city, state and PIN back in off the card — the typing this was for.
+   */
+  it('prefills gender and the address as one printed line, and marks every box it filled', async () => {
+    serve(dossier({
+      onboarding: [identityDoc({
+        holderName: null, holderDateOfBirth: null,
+        prints: { name: true, dateOfBirth: true, gender: true, guardianName: false, address: true },
+      })],
+    }));
+    render(
+      <AssayerVettingTab
+        assayerId="a-1"
+        canManage
+        section="documents"
+        person={{
+          displayName: 'Anil Deshmukh', dateOfBirth: '1985-03-14', gender: 'Male',
+          address: '14 Shivaji Nagar', city: 'Pune', district: 'Pune', state: 'Maharashtra', pincode: '411005',
+        }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('Verify')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Verify'));
+
+    await waitFor(() => expect(screen.getByLabelText(/Gender/)).toHaveValue('Male'));
+    expect(screen.getByLabelText(/Address/)).toHaveValue('14 Shivaji Nagar, Pune, Maharashtra - 411005');
+    // Four boxes filled from the record, four told so — the reviewer compares exactly these.
+    expect(screen.getAllByText('From their record — check it against the card')).toHaveLength(4);
+  });
+
+  /** What the card was already read as wins over the record, and is not marked as the record's. */
+  it('keeps what was already read off the card, and does not mark it as the record’s', async () => {
+    serve(dossier({ onboarding: [identityDoc({ holderName: 'ANIL R DESHMUKH', holderDateOfBirth: null })] }));
+    render(
+      <AssayerVettingTab
+        assayerId="a-1"
+        canManage
+        section="documents"
+        person={{ displayName: 'Anil Deshmukh', dateOfBirth: '1985-03-14', gender: 'Male' }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('Verify')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Verify'));
+
+    const name = await screen.findByLabelText(/Name exactly as printed/);
+    expect(name).toHaveValue('ANIL R DESHMUKH');
+    expect(name).not.toHaveAttribute('aria-describedby');
+    // Date of birth and gender still came from the record, and say so.
+    expect(screen.getAllByText('From their record — check it against the card')).toHaveLength(2);
+  });
+
+  it('leaves the boxes blank when the record has nothing to offer', async () => {
+    serve(dossier({ onboarding: [identityDoc({ holderName: null, holderDateOfBirth: null })] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
+    await waitFor(() => expect(screen.getByText('Verify')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Verify'));
+
+    await waitFor(() => expect(screen.getByText(/What does the Aadhaar — front say\?/)).toBeInTheDocument());
+    expect(screen.getByLabelText(/Name exactly as printed/)).toHaveValue('');
+    expect(screen.queryByText(/Prefilled from their record/i)).not.toBeInTheDocument();
+  });
 });
 
 describe('AssayerVettingTab — asking only what the document carries', () => {
@@ -1040,5 +1632,101 @@ describe('AssayerVettingTab — fitting inside the onboarding drawer', () => {
     const paperCell = screen.getByText('Letter for commitment on ethical conduct').closest('td') as HTMLElement;
     expect(identityCell.style.whiteSpace).toBe('normal');
     expect(paperCell.style.whiteSpace).toBe('normal');
+  });
+});
+
+describe('printedAddressFromRecord', () => {
+  it('runs the parts together the way a card prints them', () => {
+    expect(printedAddressFromRecord({
+      address: '14 Shivaji Nagar', city: 'Pune', district: 'Pune', state: 'Maharashtra', pincode: '411005',
+    })).toBe('14 Shivaji Nagar, Pune, Maharashtra - 411005');
+  });
+
+  it('does not repeat a part the street line already carries', () => {
+    expect(printedAddressFromRecord({
+      address: 'Flat 2, MG Road, Pune 411001', city: 'Pune', state: 'Maharashtra', pincode: '411001',
+    })).toBe('Flat 2, MG Road, Pune 411001, Maharashtra');
+  });
+
+  it('gives nothing rather than a line of commas when the record is empty', () => {
+    expect(printedAddressFromRecord({ address: '', city: '', state: '' })).toBeNull();
+    expect(printedAddressFromRecord(null)).toBeNull();
+  });
+});
+
+describe('referenceNoticeLine', () => {
+  it('says how they were told', () => {
+    expect(referenceNoticeLine({ notifiedAt: '2026-09-23T10:00:00Z', notifiedVia: 'EMAIL,SMS' })).toMatch(/^By email and text, /);
+  });
+  it('says why nothing went, which is a different fix from not trying', () => {
+    expect(referenceNoticeLine({ noticeProblem: 'no email address; no phone number' })).toBe('Not told — no email address; no phone number');
+    expect(referenceNoticeLine({})).toBe('Not yet');
+  });
+});
+
+
+/**
+ * Owner decision 2026-09-24: verified details cannot be changed by the assayer until HR asks for
+ * them again — and, once someone is approved, their ID-card photo is locked the same way. "Ask to
+ * re-upload" is that one unlock, and its note is what the assayer's phone shows as the reason.
+ */
+describe('AssayerVettingTab — asking again for something already accepted', () => {
+  const doc = (over: Record<string, unknown> = {}) => ({
+    id: 'd-9', requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true,
+    filePaths: ['assayers/a-1/aadhaar-front.jpg'], softCopyReceived: true, hardCopyReceived: false,
+    hardCopyLocation: null, documentNumber: '234567890124', verificationStatus: 'VERIFIED', ...over,
+  });
+  const photo = (over: Record<string, unknown> = {}) => ({
+    id: 'd-p', requirement: 'PHOTOGRAPH', label: 'Photograph', identity: false,
+    filePaths: ['assayers/a-1/photo.jpg'], softCopyReceived: true, hardCopyReceived: false,
+    hardCopyLocation: null, documentNumber: null, verificationStatus: 'PENDING', ...over,
+  });
+  const reuploadCall = () => mockRequest.mock.calls.find(([url]: any[]) => String(url).endsWith('/request-reupload'));
+
+  it('offers it on a verified document, and sends the reason with a note the assayer will read', async () => {
+    serve(dossier({ onboarding: [doc()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="ACTIVE" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask for Aadhaar — front again' }));
+
+    expect(await screen.findByText('Ask for Aadhaar — front again?')).toBeInTheDocument();
+    const confirm = screen.getByRole('button', { name: 'Yes, ask them again' });
+    fireEvent.change(screen.getByLabelText(/Why this document is being sent back/), { target: { value: 'ILLEGIBLE' } });
+    // The note is required and goes to their phone: too short, and the button stays off.
+    fireEvent.change(screen.getByLabelText(/What to tell them/), { target: { value: 'Blurry' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/What to tell them/), { target: { value: 'The number is not readable. Please take it again.' } });
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(reuploadCall()).toBeDefined());
+    expect(reuploadCall()![0]).toBe('/assayers/a-1/document/AADHAAR_FRONT/request-reupload');
+    expect(JSON.parse(reuploadCall()![1].body)).toEqual({
+      reason: 'ILLEGIBLE', note: 'The number is not readable. Please take it again.',
+    });
+  });
+
+  it('is not offered on a document nobody has accepted yet — that is Send back', async () => {
+    serve(dossier({ onboarding: [doc({ verificationStatus: 'PENDING' })] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="ACTIVE" />);
+    await screen.findByText('Send back');
+    expect(screen.queryByRole('button', { name: /again$/ })).not.toBeInTheDocument();
+  });
+
+  it('offers it on the photo once the person is approved, not while they are still joining', async () => {
+    serve(dossier({ onboarding: [photo()] }));
+    const { unmount } = render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="TRAINING" />);
+    expect(await screen.findByRole('button', { name: 'Ask for their photo again' })).toBeInTheDocument();
+    unmount();
+
+    serve(dossier({ onboarding: [photo()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="DOCUMENT_VERIFICATION" />);
+    await screen.findAllByText('Photograph');
+    expect(screen.queryByRole('button', { name: 'Ask for their photo again' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer it again while an earlier request is still waiting on them', async () => {
+    serve(dossier({ onboarding: [photo({ verificationStatus: 'REJECTED' })] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" lifecycleStatus="ACTIVE" />);
+    await screen.findAllByText('Photograph');
+    expect(screen.queryByRole('button', { name: 'Ask for their photo again' })).not.toBeInTheDocument();
   });
 });

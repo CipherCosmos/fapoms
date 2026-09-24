@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
 
-import { OnboardingVerificationDrawer } from './OnboardingVerificationDrawer';
+import { OnboardingVerificationDrawer, planStep } from './OnboardingVerificationDrawer';
 import { api } from '../../services/api';
 
 /**
@@ -81,6 +81,12 @@ const person = (over: Record<string, unknown> = {}) => ({
 const identityDoc = (requirement: string, label: string, verificationStatus: string | null, withScan = true) => ({
   id: `doc-${requirement}`, requirement, label, identity: true, verificationStatus,
   filePaths: withScan ? [`assayers/cand-1/${requirement}.jpg`] : [],
+});
+
+/** The background verification report, uploaded. */
+const bgvReport = () => ({
+  requirement: 'BGV_REPORT', label: 'Background verification report', identity: false,
+  id: 'd-bgv', filePaths: ['scans/bgv.pdf'], verificationStatus: null,
 });
 
 const dossier = (over: Record<string, unknown> = {}) => ({
@@ -181,24 +187,102 @@ describe('Background check step', () => {
 
     expect(await screen.findByTestId('vetting-checks')).toBeInTheDocument();
     expect(await screen.findByText('Background check recorded')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Move to training/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
 
-    current.dossier = dossier({ currentCheck: { verdict: 'CLEAR' } });
+    // The report uploaded, then the clear result recorded against it — both are mandatory, and the
+    // report is the one the CHECK carries (a pass cannot lean on an earlier check's report).
+    current.dossier = dossier({
+      currentCheck: {
+        verdict: 'CLEAR', reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null }],
+        // Its three parts (2026-09-24) — a clear check is recorded with them.
+        addressCheckMethod: 'DIGITAL', addressCheckResult: 'VERIFIED', cibilBand: 'NO_CREDIT_HISTORY', courtCheckResult: 'NO_RECORD',
+      },
+      onboarding: [...dossier().onboarding, bgvReport()],
+    });
     fireEvent.click(screen.getByRole('button', { name: /stub: saved in checks/ }));
 
-    const move = screen.getByRole('button', { name: /Move to training/ });
+    const move = screen.getByRole('button', { name: /Send for approval/ });
     await waitFor(() => expect(move).toBeEnabled());
     fireEvent.click(move);
     await waitFor(() => expect(lifecycleCalls()).toHaveLength(1));
-    expect(JSON.parse(lifecycleCalls()[0][1].body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.TRAINING });
+    // HR's last step is sending them up: a senior approves them before training (2026-09-23).
+    expect(JSON.parse(lifecycleCalls()[0][1].body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.FINAL_APPROVAL });
   });
 
-  it('says an adverse result stops them, and offers to stop their joining with a reason', async () => {
+  /**
+   * A clear check from before the address, CIBIL and court checks were asked for (2026-09-24), or
+   * brought in by the import: the server will not send them up on it, so the list says what is missing.
+   */
+  it('holds them at a clear check that lacks its parts, and names the missing ones', async () => {
+    current.dossier = dossier({
+      currentCheck: {
+        verdict: 'CLEAR', cibilBand: 'GOOD',
+        reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null }],
+      },
+      onboarding: [...dossier().onboarding, bgvReport()],
+    });
+    renderDrawer();
+
+    expect(await screen.findByText('Not on the background check yet: Address check, Court check')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
+  });
+
+  /** Background verification's report is mandatory too: a clear result alone does not let them on. */
+  it('holds them at a clear result until the background verification report is uploaded', async () => {
+    current.dossier = dossier({ currentCheck: { verdict: 'CLEAR' } });
+    renderDrawer();
+
+    expect(await screen.findByText('Background verification report uploaded')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
+  });
+
+  /**
+   * "Report uploaded" means the report is uploaded.
+   *
+   * It used to be ticked only once a result had been recorded against the report, so a desk that
+   * had just uploaded the agency's report saw the line still unticked and went looking for a
+   * second place to upload it. The stage gate is unchanged — the result still has to be recorded,
+   * clear, against a report — this is only whether the checklist tells the truth on the way.
+   */
+  describe('the report line on the checklist', () => {
+    const reportLine = (d: Record<string, unknown>) => planStep(
+      person({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }) as never,
+      dossier(d) as never,
+    ).items.find((i) => i.label === 'Background verification report uploaded')!;
+    const waiting = [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null, index: 0 }];
+
+    it('is ticked as soon as the report is uploaded, before its result is recorded', () => {
+      expect(reportLine({ currentCheck: null, bgvReportPending: waiting }).done).toBe(true);
+    });
+
+    it('is not ticked with nothing uploaded', () => {
+      expect(reportLine({ currentCheck: null, bgvReportPending: [] }).done).toBe(false);
+    });
+
+    /** Coming back after failing, the report on file is the one that failed them. */
+    it('is not ticked by the report an adverse check was read from — passing needs a new one', () => {
+      const failed = { verdict: 'CRIMINAL_CASE', reportFiles: [{ documentId: 'd-bgv', versionId: 'v-0', path: 'old.pdf', uploadedAt: null }] };
+      expect(reportLine({ currentCheck: failed, bgvReportPending: [] }).done).toBe(false);
+      expect(reportLine({ currentCheck: failed, bgvReportPending: waiting }).done).toBe(true);
+    });
+
+    it('still holds the stage until a clear result is recorded against it', () => {
+      const plan = planStep(
+        person({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }) as never,
+        dossier({ currentCheck: null, bgvReportPending: waiting }) as never,
+      );
+      expect(plan.items.filter((i) => i.blocking && !i.done).map((i) => i.label)).toEqual([
+        'Background check recorded', 'Address (physical or digital), CIBIL and court checks recorded', 'Background check result is clear',
+      ]);
+    });
+  });
+
+    it('says an adverse result stops them, and offers to stop their joining with a reason', async () => {
     current.dossier = dossier({ currentCheck: { verdict: 'CRIMINAL_CASE' } });
     renderDrawer();
 
     expect(await screen.findByText('Background check result: Criminal case — they cannot move on')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Move to training/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop their joining' }));
     await waitFor(() => expect(lifecycleCalls()).toHaveLength(1));
@@ -232,6 +316,8 @@ describe('Training step — everything Active needs is fillable in the drawer', 
 
     // Bank details, through the same edit rules as the record page.
     fireEvent.change(screen.getByPlaceholderText('e.g. 50100123456789'), { target: { value: '50100123456789' } });
+    // Typed twice — a new account number is not saved on one typing.
+    fireEvent.change(screen.getByPlaceholderText('Type it again, from the passbook'), { target: { value: '50100123456789' } });
     fireEvent.change(screen.getByPlaceholderText('e.g. HDFC0001234'), { target: { value: 'HDFC0001234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save bank details' }));
     await waitFor(() => expect(request).toHaveBeenCalledWith('/assayers/cand-1', expect.objectContaining({ method: 'PUT' })));

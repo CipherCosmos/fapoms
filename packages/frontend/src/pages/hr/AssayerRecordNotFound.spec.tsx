@@ -35,6 +35,7 @@ import { fromResponse, fromNetwork } from '../../services/errors';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   useCurrentPermissions: () => [],
   canManageAssayers: () => true,

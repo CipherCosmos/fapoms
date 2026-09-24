@@ -5,6 +5,7 @@ import { DocumentEntity } from './document.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { DocumentService } from './document.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
 import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod } from '@fapoms/shared';
 
 /**
@@ -56,6 +57,8 @@ describe('DocumentDispatchWorker', () => {
         { provide: getRepositoryToken(AssignmentEntity), useValue: mockAssignmentRepo },
         { provide: DocumentService, useValue: mockDocumentService },
         { provide: PlatformSettingsService, useValue: mockSettings },
+        // The hourly scan is untracked system work; only a desk's batch goes through the tracker.
+        { provide: BackgroundJobTracker, useValue: { run: jest.fn() } },
       ],
     }).compile();
     worker = module.get(DocumentDispatchWorker);

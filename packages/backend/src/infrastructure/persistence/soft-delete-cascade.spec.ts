@@ -97,10 +97,13 @@ function removeMethodBody(relativePath: string): string {
   const source = fs.readFileSync(path.join(SRC, relativePath), 'utf8');
   const start = source.indexOf('async remove(');
   if (start === -1) return '';
-  // The audit event is always the last thing a remove() does, so it is a reliable terminator
-  // and keeps the slice from running into the next method.
-  const end = source.indexOf('async ', start + 10);
-  return source.slice(start, end === -1 ? source.length : end);
+  // Up to the next method declared at class indent. This used to stop at the next `async ` of
+  // any kind, which cut the body short the moment remove() opened a transaction with an async
+  // callback (BranchService.remove now runs the whole closure on one) — a slice that silently
+  // lost the very UPDATEs this file checks for.
+  const rest = source.slice(start + 10);
+  const next = rest.search(/\n  (?:(?:private|public|protected) )?(?:static )?(?:async )?\w+\s*[(<]/);
+  return source.slice(start, next === -1 ? source.length : start + 10 + next);
 }
 
 describe('soft-delete cascades', () => {

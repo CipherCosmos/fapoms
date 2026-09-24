@@ -6,11 +6,11 @@ import { AppText, Badge, Button, Card, ChipSelector, FieldLabel, Icon, Input, Ta
 import { useT, serverErrorText, type TranslationKey } from '../../i18n';
 import { SelfRegistrationApi } from '../../services/self-registration.service';
 import { FieldNote, GroupHeader, StepFooter } from './parts';
-import { OTP_BEFORE_SEND, otpSentWords } from './otp-delivery';
+import {
+  OTP_BEFORE_SEND, formatCountdown, otpSentWords, resendCooldownSeconds, waitSecondsFromRefusal,
+} from './otp-delivery';
+import { DateOfBirthPicker } from './DateOfBirthPicker';
 import type { StepProps } from './types';
-
-/** Matches the backend's `registration.otpResendCooldownSeconds`; the server enforces the real one. */
-const RESEND_COOLDOWN_SECONDS = 60;
 
 const GENDER_LABELS: Record<typeof REGISTRATION_GENDERS[number], TranslationKey> = {
   Male: 'selfRegistration.form.genderMale',
@@ -18,14 +18,6 @@ const GENDER_LABELS: Record<typeof REGISTRATION_GENDERS[number], TranslationKey>
   Other: 'selfRegistration.form.genderOther',
   'Prefer not to say': 'selfRegistration.form.genderPreferNot',
 };
-
-/** Digits typed as 19900421 become 1990-04-21, so nobody has to find the dash key. */
-function formatDateTyping(raw: string): string {
-  const digits = raw.replace(/\D/g, '').slice(0, 8);
-  if (digits.length <= 4) return digits;
-  if (digits.length <= 6) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
-  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
-}
 
 export interface StepPersonalProps extends StepProps {
   /** The invite's address — where the code is emailed when the server cannot text it. */
@@ -64,17 +56,11 @@ export const StepPersonal: React.FC<StepPersonalProps> = (props) => {
           maxLength={REGISTRATION_FIELD_LIMITS.fullName}
           error={errors.fullName}
         />
-        <Input
-          label={tr('selfRegistration.form.dateOfBirth')}
+        <DateOfBirthPicker
           value={form.dateOfBirth}
-          onChangeText={(v) => setField('dateOfBirth', formatDateTyping(v))}
-          onBlur={() => commitField('dateOfBirth')}
-          placeholder={tr('selfRegistration.form.dateOfBirthPlaceholder')}
-          keyboardType="number-pad"
-          autoCapitalize="none"
-          maxLength={10}
-          hint={tr('selfRegistration.form.dateOfBirthHint')}
           error={errors.dateOfBirth}
+          onComplete={(iso) => pickField('dateOfBirth', iso)}
+          onIncomplete={() => setField('dateOfBirth', '')}
         />
         <Input
           label={tr('selfRegistration.form.email')}
@@ -180,12 +166,15 @@ const PhoneVerification: React.FC<StepPersonalProps> = ({
       const res = await SelfRegistrationApi.requestOtp(token, number);
       if (!res.success) {
         setError(serverErrorText(res.error, 'selfRegistration.otp.sendFailedTitle', res.code));
+        // "Please wait 42 seconds…" — count down from the server's own number.
+        const wait = waitSecondsFromRefusal(res.error);
+        if (wait) setCooldown(wait);
         return;
       }
       setCodeSent(true);
       setSentTo(number);
       setCode('');
-      setCooldown(RESEND_COOLDOWN_SECONDS);
+      setCooldown(resendCooldownSeconds(res.data));
       const words = otpSentWords(res.data, email, tr('selfRegistration.otp.yourEmail'));
       setInfo(tr(words.key, words.vars));
     } finally {
@@ -252,7 +241,7 @@ const PhoneVerification: React.FC<StepPersonalProps> = ({
             keyboardType="phone-pad"
             autoCapitalize="none"
             maxLength={16}
-            hint={checking ? tr('selfRegistration.otp.checking') : tr('selfRegistration.otp.phoneHelper')}
+            hint={checking ? tr('selfRegistration.otp.checking') : undefined}
             error={looksWrong ? tr('selfRegistration.errors.phoneInvalid') : (conflict ?? undefined)}
           />
 
@@ -299,12 +288,17 @@ const PhoneVerification: React.FC<StepPersonalProps> = ({
               <Tappable
                 onPress={() => { void handleSend(); }}
                 disabled={cooldown > 0 || busy || checking || Boolean(conflict)}
-                accessibilityRole="button"
+                accessibilityRole="link"
                 accessibilityLabel={tr('selfRegistration.otp.resendCode')}
+                hitSlop={12}
               >
-                <AppText variant="caption" tone={cooldown > 0 ? 'faint' : 'primary'} style={{ textAlign: 'center' }}>
+                <AppText
+                  variant="small"
+                  tone={cooldown > 0 ? 'faint' : 'primary'}
+                  style={{ textAlign: 'center', fontWeight: '700', paddingVertical: t.space.xs, textDecorationLine: cooldown > 0 ? 'none' : 'underline' }}
+                >
                   {cooldown > 0
-                    ? tr('selfRegistration.otp.resendIn', { seconds: cooldown })
+                    ? tr('selfRegistration.otp.resendIn', { time: formatCountdown(cooldown) })
                     : tr('selfRegistration.otp.resendCode')}
                 </AppText>
               </Tappable>

@@ -1,3 +1,1 @@
-root * /srv/fapoms-downloads
-rewrite * /app.apk
-file_server
+redir * https://expo.dev/artifacts/eas/mnaGDMbLCw0hEXIlxRWfWA9TtW0-7ELkAGFn0JsJiWk.apk temporary

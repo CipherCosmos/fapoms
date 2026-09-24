@@ -1,29 +1,14 @@
 # FAPOMS go-live checklist
 
-Companion to `acceptance-2026-09-10-production-readiness.md` and to the role-by-role certification
-in `final-product-acceptance-2026-09-10.md`, whose verdict is **NOT READY**. Section 0 is why.
-Sections 1 and 2 are product work with owners; the rest is about the environment it will run in,
-which the acceptance campaigns could not reach.
+The environment and product checks to complete before real use. Work top to bottom; each item
+says who it belongs to and what "done" looks like. `scripts/acceptance/verify-deployment.mjs` runs
+§3 against a live deployment.
 
-Work top to bottom. Each item says who it belongs to and what "done" looks like.
-
-## 0. The blocker
-
-| # | Item | Why | Done when |
-|---|---|---|---|
-| 0.0 | **Redoing a reopened audit is never paid for.** Do not go live until this is fixed. | Complete a job, reopen it (a documented action for work done wrong), redo the work and complete it again: the second completion books **no payout and no client line, ever**. The assayer is not paid; the client is not billed. `GET /billing-engine/assignments/:id/money` reports `booked: true` while the only payable is VOIDED, and `reconcile/preview` reports `count: 0` — the repair job runs the same query, so it cannot fix what it cannot see. | Both unique indexes are partial (`assayer_payables` `WHERE status <> 'VOIDED'`, `billing_entries` `WHERE state <> 'CANCELLED'`), the five existence checks in `billing-engine.service.ts` filter on the same states, and `billing-engine.service.spec.ts:415` gains a VOIDED case — today it mocks a live row, so it will keep passing after a correct fix. Then re-run `scratchpad/pa/reopen-redo-money.mjs` and expect 13/13. |
-
-## 1. Two features that must not be switched on yet
-
-The role-by-role campaign found two supported, one-click features that do not work. Neither is a
-risk to weigh; both are defects with an owner. Until they are fixed and re-certified, the product
-is only safe in the configuration it ships in — national accounts, built-in roles.
-
-| # | Do not | Why | Done when |
-|---|---|---|---|
-| 1.0 | **The TDS report leaks PANs — fix before go-live.** This one is not dormant. | `GET /billing-engine/tds-report` returns every payee's PAN in the clear to AUDITOR, a role the record read strips the field from entirely, and writes **no** reveal audit row where the single-field reveal writes one per number. AUDITOR is an ordinary role somebody will hold on day one. | The report masks PAN for any role that sees it masked on the record, or is refused to those roles; and a bulk reveal writes the same audit rows a single reveal does. Re-run `scratchpad/pa/tds-pan.mjs`. |
-| 1.1 | **Do not set `regions` on any account.** | Region scoping refuses reads and largely does not refuse writes. A region-scoped operations account approved a ₹2,250 payout, minted an invoice, adjusted a client line, set a commercial rate and moved a branch out of its own region — in a territory it is refused so much as reading. 19 routes confirmed at runtime with the rows read back. **And the read side leaks too:** `GET /reports/billing` shows such an account 0 client lines on screen and hands it all 13 in the workbook, so closing the write surface alone is not enough. Dormant today only because **no real account is region-scoped**. | The write surface asserts the ceiling its read sibling does, `PUT /branches/:id` checks the region it is *setting* and not only the one it is replacing, and `write-region-parity.spec.ts` derives its route set instead of listing it. |
-| 1.2 | **Do not create a custom role in Admin → Roles.** | A custom role is offered ten navigation entries and nine of the backing APIs refuse it. On `/scheduling` the refusal is drawn as **"0 active schedules"** — a wrong answer, not a broken page. | Each of the 13 measured pages either honours the permission fallback on its backing route or stops offering itself, and a refused fetch renders as a refusal rather than an empty result. |
+**Resolved since this list was first written (2026-09-10/11), kept here only as a pointer:** the
+reopened-and-redone audit that was never paid for (fixed 2026-09-10 — the liveness rule in
+`billing-liveness.ts`), the TDS report showing PANs to roles that see them masked (masked and
+reveal-audited — `tds-report-pan.spec.ts`), and region-scoped accounts and custom roles (both
+closed and runtime-verified 2026-09-11). They no longer block go-live.
 
 ## 2. Before anything reaches production
 

@@ -4,6 +4,7 @@ import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { Pagination } from '../../components/ui';
 // One source for every document word on these screens — see documents/vocabulary.ts.
 import { stageWords } from './vocabulary';
+import { ALL_DOCUMENT_ACTIONS, type DocumentActions } from './document-actions';
 import {
   Send, AlertTriangle, CheckCircle2, Clock, Search, FileText, ChevronRight, ChevronDown,
 } from 'lucide-react';
@@ -108,7 +109,9 @@ export const DocumentControlPanel: React.FC<{
   stage: string;
   onStageChange: (v: string) => void;
   onPageChange: (p: number) => void;
-}> = ({ data, onDispatch, onDownload, busy, search, onSearchChange, stage, onStageChange, onPageChange }) => {
+  /** Which actions the caller's role is served — see document-actions.ts. Omitted: all offered. */
+  actions?: DocumentActions;
+}> = ({ data, onDispatch, onDownload, busy, search, onSearchChange, stage, onStageChange, onPageChange, actions: allow = ALL_DOCUMENT_ACTIONS }) => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -121,7 +124,8 @@ export const DocumentControlPanel: React.FC<{
    */
   const rows = data.documents;
 
-  const selectable = rows.filter((r) => r.status === 'UPLOADED');
+  // Nothing is selectable for a role the dispatch route refuses — the tick boxes only feed Send.
+  const selectable = allow.dispatch ? rows.filter((r) => r.status === 'UPLOADED') : [];
   const toggle = (id: string) =>
     setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
@@ -165,9 +169,11 @@ export const DocumentControlPanel: React.FC<{
                     ? `audit was ${Math.abs(d.daysUntilAudit)} day(s) ago`
                     : 'audit due today'}
                 </span>
-                <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
-                  Send now
-                </button>
+                {allow.dispatch && (
+                  <button onClick={() => onDispatch([d.id])} disabled={busy} title={`Send ${d.fileName} to the assayer now`} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
+                    Send now
+                  </button>
+                )}
               </span>
             </div>
           ))}
@@ -200,6 +206,7 @@ export const DocumentControlPanel: React.FC<{
           <input
             value={search} onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search by branch, client, project or file…"
+            title="Search documents by branch name, client, project, or file name"
             style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
           />
         </div>
@@ -214,6 +221,7 @@ export const DocumentControlPanel: React.FC<{
               for (const r of selectable) { if (allShownTicked) next.delete(r.id); else next.add(r.id); }
               return next;
             })}
+            title={selectable.every((r) => selected.has(r.id)) ? 'Clear bulk selection of documents' : `Select all ${selectable.length} unsent documents shown on this page`}
             className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '7px 12px' }}
           >
             {selectable.every((r) => selected.has(r.id)) ? `Clear the ${selectable.length} shown` : `Select all ${selectable.length} unsent shown`}
@@ -221,7 +229,7 @@ export const DocumentControlPanel: React.FC<{
         )}
         {dispatchableIds.length > 0 && (
           <>
-            <button onClick={dispatchSelected} disabled={busy} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', padding: '7px 13px' }}>
+            <button onClick={dispatchSelected} disabled={busy} className="btn btn-primary" title={`Dispatch ${dispatchableIds.length} document(s) directly to assayers`} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', padding: '7px 13px' }}>
               <Send size={13} /> {busy ? `Sending ${dispatchableIds.length}…` : `Send ${dispatchableIds.length} to assayers`}
             </button>
             {/*
@@ -257,10 +265,10 @@ export const DocumentControlPanel: React.FC<{
           return (
             <div key={d.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', flexWrap: 'wrap' }}>
-                {d.status === 'UPLOADED' && (
-                  <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggle(d.id)} style={{ cursor: 'pointer' }} />
+                {allow.dispatch && d.status === 'UPLOADED' && (
+                  <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggle(d.id)} title={`Select ${d.fileName} to send in bulk`} style={{ cursor: 'pointer' }} />
                 )}
-                <button onClick={() => setExpanded(open ? null : d.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}>
+                <button onClick={() => setExpanded(open ? null : d.id)} title={open ? `Hide paperwork trail for ${d.fileName}` : `Show paperwork trail for ${d.fileName}`} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}>
                   {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                 </button>
                 <FileText size={15} style={{ color: meta.color, flexShrink: 0 }} />
@@ -274,14 +282,16 @@ export const DocumentControlPanel: React.FC<{
                 <span style={{ padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: meta.bg, color: meta.color, fontSize: 'var(--text-2xs)', fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {meta.label}
                 </span>
-                {d.status === 'UPLOADED' && (
-                  <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                {allow.dispatch && d.status === 'UPLOADED' && (
+                  <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" title={`Dispatch ${d.fileName} to assayer`} style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5 }}>
                     <Send size={11} /> Send
                   </button>
                 )}
-                <button onClick={() => onDownload(d.id)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
-                  Download
-                </button>
+                {allow.download && (
+                  <button onClick={() => onDownload(d.id)} className="btn btn-secondary" title={`Download ${d.fileName}`} style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
+                    Download
+                  </button>
+                )}
               </div>
 
               {open && (
@@ -355,11 +365,15 @@ const Trail: React.FC<{ trail: DocRow['trail'] }> = ({ trail }) => {
 };
 
 const Stage: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string; bg: string }> = ({ active, onClick, label, count, color, bg }) => (
-  <button onClick={onClick} style={{
-    padding: '7px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
-    background: active ? bg : 'transparent', color: active ? color : 'var(--text-secondary)',
-    border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,
-  }}>
+  <button
+    onClick={onClick}
+    title={active ? `Currently filtering by ${label} (${count} files). Click to clear filter` : `Filter documents by status: ${label} (${count} files)`}
+    style={{
+      padding: '7px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
+      background: active ? bg : 'transparent', color: active ? color : 'var(--text-secondary)',
+      border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,
+    }}
+  >
     {label}
     <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--text-primary)' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 'var(--text-2xs)', fontWeight: 700 }}>{count}</span>
   </button>

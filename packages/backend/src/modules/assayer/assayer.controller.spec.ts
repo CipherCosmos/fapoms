@@ -4,8 +4,7 @@ import { Reflector } from '@nestjs/core';
 import { ROLES_KEY, PERMISSIONS_KEY, ANY_AUTHENTICATED_KEY } from '../auth/guards';
 import { AssayerController } from './assayer.controller';
 import { AssayerService } from './assayer.service';
-import { RosterImportService } from './roster-import.service';
-import { ImportJobService } from '../import/import-job.service';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
 import { RosterRecordsService } from './roster-records.service';
 import { DataIntegrityService } from './data-integrity.service';
 import { WorkforceBulkJobsService } from './workforce-bulk-jobs.service';
@@ -46,9 +45,8 @@ describe('AssayerController — getProfile', () => {
       controllers: [AssayerController],
       providers: [
         { provide: AssayerService, useValue: assayerService },
-        { provide: RosterImportService, useValue: {} },
         // The controller queues real roster imports; these tests are about profile access.
-        { provide: ImportJobService, useValue: {} },
+        { provide: BackgroundJobsService, useValue: {} },
         { provide: RosterRecordsService, useValue: {} },
         // The identifier-check route's collaborator — these tests are about profile access and
         // never exercise it, but Nest still resolves every constructor dependency at compile time.

@@ -201,6 +201,41 @@ function coordKey(lat: number, lng: number): string {
  */
 const SNAP_SANITY_M = 5000;
 
+/**
+ * How many `/table` requests one `calculateDistances` call keeps in flight, and how many
+ * single-pair re-routes (a mis-snapped cell re-asked on its own) run at once inside one chunk.
+ *
+ * F9 (2026-09-25): both were an unbounded `Promise.all`. A national pool of ~5,000 distinct
+ * points is 51 chunks, all fired at once at a router whose breaker trips on the fifth timeout; and
+ * the demo router's mis-snapping can flag most of a chunk, which then fired ~99 single-pair
+ * requests simultaneously. Bounded, a large pool is a short queue rather than a burst that trips
+ * the breaker and degrades everyone to straight-line estimates.
+ */
+export const TABLE_REQUEST_CONCURRENCY = Math.max(1, Number(process.env.OSRM_TABLE_CONCURRENCY) || 2);
+export const CELL_REROUTE_CONCURRENCY = Math.max(1, Number(process.env.OSRM_REROUTE_CONCURRENCY) || 4);
+
+/**
+ * `Promise.all(items.map(fn))` with at most `limit` calls running at once. Results keep the input
+ * order. A rejection rejects the whole call, as `Promise.all` would.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const width = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: width }, worker));
+  return results;
+}
+
 /** The same rounding, as an OSRM URL fragment (`lng,lat`). */
 function coordUrl(lat: number, lng: number): string {
   return `${Number(lng).toFixed(4)},${Number(lat).toFixed(4)}`;
@@ -638,8 +673,9 @@ export class OSRMRoutingProvider implements RoutingProvider {
 
     let estimated = 0;
     const requestsBefore = this.stats.requests;
-    await Promise.all(
-      chunks.map((chunk) => {
+    // Bounded — see TABLE_REQUEST_CONCURRENCY.
+    await mapWithConcurrency(
+      chunks, TABLE_REQUEST_CONCURRENCY, (chunk) => {
         const points = chunk.map((key) => byPoint.get(key)!);
         const fallback = async () => {
           for (let i = 0; i < chunk.length; i++) {
@@ -672,8 +708,9 @@ export class OSRMRoutingProvider implements RoutingProvider {
            * single-pair request instead, which snaps honestly.
            */
           const snapWaypoints: Array<{ distance?: number }> | undefined = data?.destinations;
-          await Promise.all(
-            chunk.map(async (key, i) => {
+          // Bounded — see CELL_REROUTE_CONCURRENCY: each flagged cell may become its own request.
+          await mapWithConcurrency(
+            chunk, CELL_REROUTE_CONCURRENCY, async (key, i) => {
               const distance = distances[i + 1];
               const duration = durations[i + 1];
               if (typeof distance === 'number' && typeof duration === 'number') {
@@ -712,10 +749,10 @@ export class OSRMRoutingProvider implements RoutingProvider {
                 resolved.set(key, this.estimate(origin, points[i], mode));
                 estimated += 1;
               }
-            }),
+            },
           );
         }, fallback);
-      }),
+      },
     );
 
     for (const [key, entry] of byPoint) {

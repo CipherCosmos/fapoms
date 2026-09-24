@@ -611,6 +611,11 @@ export class UserService {
     });
     // The principal cache holds the old state; a password change must not wait on it to expire.
     await this.cache.del(rbacPrincipalCacheKey(user.id)).catch(() => undefined);
+    // A reset link is how somebody gets back in after "I think my account was used by someone
+    // else". Any session already open on the old password — including a stolen refresh token —
+    // must end here, exactly as it does on an admin reset (see resetPassword and the
+    // 'user:password-changed' handler in AuthService, which calls revokeAllSessions).
+    this.eventPublisher.publish('user:password-changed', { userId: user.id });
     return saved;
   }
 

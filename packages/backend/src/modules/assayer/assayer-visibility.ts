@@ -26,6 +26,8 @@ import { withCode } from '../../infrastructure/http/api-error';
 const IDENTITY_FIELDS = [
   'panNumber', 'aadhaarNumber', 'dateOfBirth',
   'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+  // A third party's name, mobile and email — the person who referred them. Same need-to-know.
+  'sourceReferral',
   'governmentDocuments',
   /**
    * The name established from an identity document, and when.

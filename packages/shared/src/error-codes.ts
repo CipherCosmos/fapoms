@@ -105,6 +105,61 @@ export const ASSIGNMENT_ERROR_CODES = {
   OVERRIDE_REASON_REQUIRED: 'OVERRIDE_REASON_REQUIRED',
   /** No reason will get past this one — see `NOT_OVERRIDABLE_BECAUSE` for what to tell them. */
   RULE_NOT_OVERRIDABLE: 'RULE_NOT_OVERRIDABLE',
+  /**
+   * The assayer is held from new work on compliance grounds — a re-check overdue past its grace
+   * period, or an adverse re-check awaiting a senior (see `periodic-checks.ts`). Not overridable by
+   * a reason: the remedy is recording the check, or the senior's decision, on their record.
+   */
+  ASSAYER_COMPLIANCE_BLOCKED: 'ASSAYER_COMPLIANCE_BLOCKED',
+  /**
+   * The assignment's status does not allow the move asked for (`ASSIGNMENT_TRANSITIONS` in
+   * `state-machines.ts`) — accepting an offer that has already been declined, say. The message
+   * keeps its original wording ("Invalid transition path from 'X' to 'Y'"); this names it so the
+   * field app's capability list and the route that refuses can share one code.
+   */
+  INVALID_ASSIGNMENT_TRANSITION: 'INVALID_ASSIGNMENT_TRANSITION',
+  /**
+   * The job's date falls inside the assayer's recorded leave, so the offer cannot be accepted — by
+   * the assayer or by the desk on their behalf (owner decision 2026-09-24). Accepting, while on
+   * leave today, a job for another date is fine; this is about the JOB's date.
+   */
+  ASSAYER_ON_LEAVE: 'ASSAYER_ON_LEAVE',
+  /**
+   * The desk named a date while accepting, and that date is not workable — a holiday or non-working
+   * day for the client, or outside the project's dates. (Leave has its own code, `ASSAYER_ON_LEAVE`.)
+   */
+  ACCEPT_DATE_UNAVAILABLE: 'ACCEPT_DATE_UNAVAILABLE',
+  /**
+   * Reassigning a job the assayer has already checked in to. Once somebody has arrived the visit is
+   * theirs; the office cancels it instead (owner decision 2026-09-24).
+   */
+  REASSIGN_AFTER_CHECK_IN: 'REASSIGN_AFTER_CHECK_IN',
+  /**
+   * A new assignment was asked for on a branch whose offer is still open with an assayer. Moving
+   * that offer is a reassignment (`POST /assignments/:id/reassign`), which tells the assayer who
+   * loses it; creating over it used to move it silently.
+   */
+  BRANCH_HAS_LIVE_OFFER: 'BRANCH_HAS_LIVE_OFFER',
+  /**
+   * A new offer was asked for on a branch whose open offer is ALREADY with this same assayer, and
+   * the desk did not say they agreed on the call. Nothing is created; the offer waits for their
+   * answer. With `acceptOnBehalf` (Call & Assign) the acceptance is applied to that offer instead.
+   */
+  OFFER_ALREADY_WITH_ASSAYER: 'OFFER_ALREADY_WITH_ASSAYER',
+  /**
+   * Reopen refused: the branch's papers have gone to the client — the validation case is
+   * SUBMITTED, or the branch is CLOSED (what submission moves it to). A redo of papers the client
+   * already holds is a conversation with the client, not a reopen.
+   */
+  REOPEN_PAPERS_WITH_CLIENT: 'REOPEN_PAPERS_WITH_CLIENT',
+  /** Staff checking an assayer in from the office must say why (owner decision 2026-09-24). */
+  OFFICE_CHECK_IN_REASON_REQUIRED: 'OFFICE_CHECK_IN_REASON_REQUIRED',
+  /**
+   * A new date for a job that can no longer be moved: only an offer or an accepted job nobody has
+   * checked in to can be rescheduled. Once the assayer has arrived the visit is happening on that
+   * day; a finished, declined or cancelled job has no visit left to move (2026-09-24).
+   */
+  RESCHEDULE_NOT_ALLOWED: 'RESCHEDULE_NOT_ALLOWED',
 } as const;
 
 export const ASSAYER_ERROR_CODES = {
@@ -188,6 +243,75 @@ export const ASSAYER_ERROR_CODES = {
    * gate exists to prevent.
    */
   LOCATION_MISSING: 'LOCATION_MISSING',
+  /**
+   * The assayer tried to replace a document HR has already verified.
+   *
+   * Owner decision: verified details cannot be changed from the assayer's side until HR asks for
+   * it. HR "asks" by taking the document off VERIFIED — sending it back (REJECTED), or any of the
+   * staff edits that withdraw a verification — after which the assayer's upload goes through as
+   * before. Staff uploads are never refused by this.
+   */
+  DOCUMENT_VERIFIED_LOCKED: 'DOCUMENT_VERIFIED_LOCKED',
+  /**
+   * The assayer tried to replace their own photograph after being approved. Owner decision: the
+   * photo is locked once approved, and only HR unlocks it ("Ask to re-upload"). Staff uploads are
+   * never refused by this.
+   */
+  PHOTOGRAPH_LOCKED: 'PHOTOGRAPH_LOCKED',
+  /**
+   * A leave period covers a day on which the assayer holds accepted work (ACCEPTED, CHECKED_IN or
+   * IN_PROGRESS). The message names the date(s) and branch; the remedy is to have that work
+   * reassigned or rescheduled first.
+   */
+  LEAVE_OVERLAPS_ASSIGNED_WORK: 'LEAVE_OVERLAPS_ASSIGNED_WORK',
+} as const;
+
+// ---------------------------------------------------------------------------
+// Check-in and check-out
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a check-in or check-out was refused.
+ *
+ * These travel in the `error` field of an HTTP 200 `{ success: false, error, message }` body — not
+ * as an HTTP error — because installed builds of the assayer app read that shape. They were bare
+ * string literals in `AssignmentService.recordCheckIn`/`recordCheckOut`; they live here now so the
+ * app and the server name them from one list. The wire values are unchanged.
+ *
+ * Three refusals on the same routes already had a home and keep it: `ASSIGNMENT_CANCELLED`
+ * (`OTHER_CONFLICT_ERROR_CODES`), `STALE_ASSIGNMENT_VERSION` and `INVALID_ASSIGNMENT_VERSION`
+ * (`CONCURRENCY_ERROR_CODES`).
+ */
+export const ATTENDANCE_ERROR_CODES = {
+  /** The caller is neither the assigned assayer nor staff allowed to record attendance for them. */
+  NOT_YOUR_ASSIGNMENT: 'NOT_YOUR_ASSIGNMENT',
+  /** The assignment is already completed. */
+  ASSIGNMENT_COMPLETED: 'ASSIGNMENT_COMPLETED',
+  /** No assignment with that id. */
+  ASSIGNMENT_NOT_FOUND: 'ASSIGNMENT_NOT_FOUND',
+  /** The assignment is not in a state that can be checked into (usually: not yet accepted). */
+  INVALID_STATE_FOR_CHECK_IN: 'INVALID_STATE_FOR_CHECK_IN',
+  /** The assayer is suspended, inactive or otherwise not ACTIVE, so may not start field work. */
+  ASSAYER_NOT_ACTIVE: 'ASSAYER_NOT_ACTIVE',
+  /** The client's sync token is behind the server's. Refresh the schedule. */
+  CONFLICT_ASSIGNMENT_MODIFIED: 'CONFLICT_ASSIGNMENT_MODIFIED',
+  /** Check-in attempted on a day other than the scheduled one (IST). */
+  NOT_SCHEDULED_TODAY: 'NOT_SCHEDULED_TODAY',
+  /** The device's position is outside the check-in geofence around the branch. */
+  TOO_FAR_FROM_BRANCH: 'TOO_FAR_FROM_BRANCH',
+  /** Check-out attempted with no check-in on record. */
+  NOT_CHECKED_IN: 'NOT_CHECKED_IN',
+  /**
+   * Capability only (SUBMIT_RETURN): the assayer arrived and has not checked out, so an uploaded
+   * return would be stored but would not close the job. Check out first.
+   */
+  NOT_CHECKED_OUT: 'NOT_CHECKED_OUT',
+  /**
+   * Capability only (SUBMIT_RETURN): no check-in is on record (e.g. a job reopened for its papers
+   * that was closed without a visit), so the return cannot close it from the phone — completing it
+   * needs a stated reason, which only the office can give.
+   */
+  COMPLETION_BY_OFFICE: 'COMPLETION_BY_OFFICE',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -266,6 +390,69 @@ export const OTHER_CONFLICT_ERROR_CODES = {
   UPLOAD_CHECKSUM_MISMATCH: 'UPLOAD_CHECKSUM_MISMATCH',
   /** This document version already carries a different reviewer's verdict. */
   DOCUMENT_ALREADY_REVIEWED: 'DOCUMENT_ALREADY_REVIEWED',
+  /**
+   * Field paperwork refused because the assignment has reached the end of its life (completed,
+   * declined or cancelled — `isAssignmentTerminal`). If a return genuinely needs replacing, the
+   * assignment is reopened by operations first.
+   *
+   * Also the refusal for escalating (marking urgent) a closed assignment: there is no work left
+   * for anybody to hurry, and the assayer would be told to "open it now" about a job that is gone.
+   */
+  ASSIGNMENT_CLOSED: 'ASSIGNMENT_CLOSED',
+  /**
+   * A new expense claim refused because the assignment's fee payout has already been approved or
+   * paid — the "Ready to pay" and "Paid" payout stages.
+   */
+  EXPENSE_PAYOUT_ALREADY_APPROVED: 'EXPENSE_PAYOUT_ALREADY_APPROVED',
+  /**
+   * A new expense claim refused because the job's fee payout is already on an assayer bill — in any
+   * bill state, including one still waiting for the assayer to confirm. Claims are made before
+   * billing.
+   */
+  EXPENSE_JOB_ALREADY_BILLED: 'EXPENSE_JOB_ALREADY_BILLED',
+  /**
+   * A new expense claim refused because the visit is not under way yet — the assignment has not
+   * been checked into (or was declined or cancelled). Claims open at check-in.
+   */
+  EXPENSE_VISIT_NOT_STARTED: 'EXPENSE_VISIT_NOT_STARTED',
+  /**
+   * Approving an expense claim refused: its assignment has been cancelled. A senior may approve
+   * anyway with a written reason (`evaluateExpenseApproval`, `ExpenseService.review`).
+   */
+  EXPENSE_APPROVAL_ASSIGNMENT_CANCELLED: 'EXPENSE_APPROVAL_ASSIGNMENT_CANCELLED',
+  /**
+   * Approving an expense claim refused: the assayer who made it no longer holds the assignment
+   * (reassigned away). A senior may approve anyway with a written reason.
+   */
+  EXPENSE_APPROVAL_ASSAYER_REASSIGNED: 'EXPENSE_APPROVAL_ASSAYER_REASSIGNED',
+  /**
+   * Approving an expense claim refused: the job's fee payout is on an assayer bill that has been
+   * sent (SUBMITTED, APPROVED or PAID). A senior may approve anyway with a written reason.
+   */
+  EXPENSE_APPROVAL_JOB_ON_SENT_BILL: 'EXPENSE_APPROVAL_JOB_ON_SENT_BILL',
+  /**
+   * A reason was written to approve a refused expense claim anyway, but the caller is not a senior
+   * (`EXPENSE_APPROVAL_OVERRIDE_ROLES` in `expense-approval.ts`). The refusal stands; a senior has to approve it.
+   */
+  EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED: 'EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED',
+  /**
+   * Money refused because the HOD's final approval (2026-09-24) has not been given yet: paying a
+   * payout, putting it in a bank file, or marking a client invoice sent. The office's approval is
+   * not enough on its own.
+   */
+  AWAITING_HOD_APPROVAL: 'AWAITING_HOD_APPROVAL',
+  /**
+   * A payout approval (office or HOD) refused because the bank account it would be paid to — the
+   * same account number and IFSC — is also on another assayer's record (2026-09-24 audit, owner's
+   * decision). One of the two records has to be corrected first.
+   */
+  PAYOUT_DESTINATION_SHARED: 'PAYOUT_DESTINATION_SHARED',
+  /**
+   * An office approval of an assayer bill refused because re-deciding its lines' TDS (a PAN now on
+   * file, or the s.194J threshold position moved) changed the bill's net total. The bill was sent
+   * back to the assayer as a new revision to confirm the new amount; nothing was approved.
+   */
+  BILL_TAX_RECALCULATED: 'BILL_TAX_RECALCULATED',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -318,6 +505,7 @@ export const API_ERROR_CODES = {
   ...AUTH_ERROR_CODES,
   ...ASSAYER_ERROR_CODES,
   ...ASSIGNMENT_ERROR_CODES,
+  ...ATTENDANCE_ERROR_CODES,
   ...CONCURRENCY_ERROR_CODES,
   ...IDEMPOTENCY_ERROR_CODES,
   ...WRITE_VERIFICATION_ERROR_CODES,

@@ -16,6 +16,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { FeedbackActor } from './feedback-thread.service';
+import { acceptFeedbackAttachments, PostedFeedbackAttachment } from './feedback-attachment-policy';
 import { FEEDBACK_INTELLIGENCE, FeedbackIntelligence } from './feedback-intelligence';
 import { UserEntity } from '../user/user.entity';
 
@@ -35,7 +36,7 @@ export interface CreateFeedbackDto {
   /** The part of the product the item is about, e.g. 'planning' — usually the page they filed from. */
   area?: string;
   appContext?: Record<string, unknown>;
-  attachments?: { url: string; fileName: string; fileType: string; storageKey?: string; size?: number }[];
+  attachments?: PostedFeedbackAttachment[];
 }
 
 export interface TriageFeedbackDto {
@@ -100,6 +101,8 @@ export class FeedbackService {
   async create(dto: CreateFeedbackDto, reporter: FeedbackActor): Promise<FeedbackThreadEntity> {
     if (!dto.body?.trim()) throw new BadRequestException('A support request needs a description.');
     if (!reporter.userId && !reporter.assayerId) throw new BadRequestException('A reporter identity is required.');
+    // Checked before anything is written: a refused file must not leave a thread with no report.
+    const attachments = acceptFeedbackAttachments(dto.attachments, reporter);
 
     const title = (dto.title?.trim() || this.deriveTitle(dto.body)).slice(0, 200);
     const signal = { title, body: dto.body, area: dto.area ?? null };
@@ -158,7 +161,7 @@ export class FeedbackService {
         authorAssayerId: reporter.assayerId,
         authorName: reporter.name,
         body: dto.body.trim(),
-        attachments: (dto.attachments ?? []).length ? dto.attachments! : null,
+        attachments,
         createdBy: reporterId,
         updatedBy: reporterId,
       }),

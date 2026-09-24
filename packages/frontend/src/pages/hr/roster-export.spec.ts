@@ -62,7 +62,6 @@ const person = (over: Partial<RosterPerson>): RosterPerson => ({
   performanceRating: 3,
   leaves: null,
   workingHours: null,
-  maxDailyWorkload: 3,
   maxWeeklyWorkload: 15,
   ...over,
 });

@@ -1,4 +1,15 @@
 export const queryKeys = {
+  /**
+   * Background jobs (`/jobs`) — the header's Jobs tray, and any page watching its own kind of upload
+   * (`useBackgroundJob`). Kept current by `job:updated` pushes patched straight into these lists
+   * (`applyJobUpdate`), not by refetching, so a job writing progress every second costs no requests.
+   */
+  jobs: {
+    all: ['jobs'] as const,
+    tray: ['jobs', 'tray'] as const,
+    forScope: (kind: string, scopeType?: string | null, scopeId?: string | null) =>
+      ['jobs', 'scope', kind, scopeType ?? '', scopeId ?? ''] as const,
+  },
   dashboard: {
     all: ['dashboard'] as const,
     metrics: ['dashboard', 'metrics'] as const,
@@ -28,6 +39,11 @@ export const queryKeys = {
     fieldIssues: ['assignments', 'field-issues'] as const,
     detail: (id: string) => ['assignments', 'detail', id] as const,
     timeline: (id: string) => ['assignments', 'timeline', id] as const,
+    /**
+     * One assayer's own work (`GET /assignments/assayer/:id?scope=`) — the record's "Work & pay"
+     * tab. Under the `['assignments']` prefix so the assignment socket events refresh it too.
+     */
+    byAssayer: (assayerId: string, scope: 'active' | 'history') => ['assignments', 'by-assayer', assayerId, scope] as const,
   },
   /**
    * Screens that answer "what needs a decision right now", keyed outside `assignments` because
@@ -123,9 +139,11 @@ export const queryKeys = {
       // re-sliced under a different policy would show an empanelment-relaxed answer as if it
       // were the strict one, which is the opposite of what the toggle promises.
       ignoreClientPolicy = false, ignoreDistancePolicy = false,
+      // The project decides which project's skills apply and which cycle counts for rotation.
+      projectId: string | null = null,
     ) =>
       ['planning', 'recommendations', branchId, date, includeUnavailable, Math.round(radiusKm),
-        ignoreClientPolicy, ignoreDistancePolicy] as const,
+        ignoreClientPolicy, ignoreDistancePolicy, projectId] as const,
     /** Prefix: "have we already phoned this person about this branch?", for any branch. */
     lastContactAll: ['planning', 'last-contact'] as const,
     lastContact: (projectBranchId: string) => ['planning', 'last-contact', projectBranchId] as const,
@@ -196,6 +214,14 @@ export const queryKeys = {
      * filter, so one key covers the page's whole read.
      */
     interviews: ['hr', 'interviews'] as const,
+    /** Working assayers whose re-checks are due, overdue or held — `/hr/rechecks`. */
+    rechecks: ['hr', 'rechecks'] as const,
+    /**
+     * Joiners awaiting the approval before training — `/hr/approvals`, and the count beside it in
+     * the sidebar and the HR tab strip. One key, so the page and both counts share one response
+     * and cannot disagree.
+     */
+    approvals: ['hr', 'approvals'] as const,
     /** Prefix: every applications query regardless of status filter. */
     applicationsAll: ['hr', 'applications'] as const,
     /**
@@ -253,5 +279,9 @@ export const queryKeys = {
     pendingExpenses: () => ['billing', 'pendingExpenses'] as const,
     assignmentMoney: (assignmentId: string) => ['billing', 'assignmentMoney', assignmentId] as const,
     reconcilePreview: (since?: string) => ['billing', 'reconcilePreview', since ?? 'ALL'] as const,
+    /** The HOD's queue — under `billing` so every billing write (and socket event) refreshes it. */
+    finalApproval: () => ['billing', 'finalApproval'] as const,
+    /** Bank-account warnings for the payouts an approve/pay dialog is about to act on (audit F2/F3). */
+    destinationChecks: (payableIds: string[]) => ['billing', 'destinationChecks', ...payableIds] as const,
   },
 };

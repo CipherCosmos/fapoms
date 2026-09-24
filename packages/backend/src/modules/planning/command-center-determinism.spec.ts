@@ -73,9 +73,9 @@ describe('CommandCenterService — determinism against row order', () => {
   ];
 
   const ASSAYERS = [
-    { id: 'a1', display_name: 'One', assayer_code: 'A1', district: 'PUNE', state: 'Maharashtra', latitude: '19.1', longitude: '72.8', max_daily_workload: 3, base_fee: '1000.00', open_assignments: '0' },
-    { id: 'a2', display_name: 'Two', assayer_code: 'A2', district: 'KOCHI', state: 'Kerala', latitude: '9.9', longitude: '76.2', max_daily_workload: 3, base_fee: '2000.00', open_assignments: '0' },
-    { id: 'a3', display_name: 'Three', assayer_code: 'A3', district: 'PUNE', state: 'Maharashtra', latitude: '19.2', longitude: '72.9', max_daily_workload: 3, base_fee: '3000.00', open_assignments: '1' },
+    { id: 'a1', display_name: 'One', assayer_code: 'A1', district: 'PUNE', state: 'Maharashtra', latitude: '19.1', longitude: '72.8', base_fee: '1000.00', open_assignments: '0' },
+    { id: 'a2', display_name: 'Two', assayer_code: 'A2', district: 'KOCHI', state: 'Kerala', latitude: '9.9', longitude: '76.2', base_fee: '2000.00', open_assignments: '0' },
+    { id: 'a3', display_name: 'Three', assayer_code: 'A3', district: 'PUNE', state: 'Maharashtra', latitude: '19.2', longitude: '72.9', base_fee: '3000.00', open_assignments: '1' },
   ];
 
   /** Runs the service against the fixture, optionally with every row array reversed. */

@@ -237,6 +237,30 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # The India map. Every map in the web and mobile apps draws from this, through the backend's
+  # cached /geo/tiles route (tile-proxy.service.ts) — never from a public tile server, whose
+  # OpenStreetMap tiles show India's borders as administered on the ground rather than as the
+  # Survey of India depicts them (see deploy/maps/). Internal only: nothing publishes its port.
+  #
+  # Needs its data once per host, BEFORE the first `up`: `deploy/maps/fetch-map-data.sh`
+  # (~6 GB into MAP_DATA_DIR, default ~/fapoms-maps). Without it the service restarts and each
+  # map square answers 502, which the maps already show as blank — nothing else is affected.
+  india-tiles:
+    image: docker.io/maptiler/tileserver-gl:v5.6.0
+    restart: unless-stopped
+    command: ["--config", "/data/config.json"]
+    volumes:
+      # `z`: the homeserver runs SELinux enforcing, which refuses a container reads on host paths
+      # that are not labelled for it (the Caddyfile mount below does the same).
+      - ${MAP_DATA_DIR:-${HOME}/fapoms-maps}:/data:z
+      - ./maps/styles:/data/styles:ro,z
+      - ./maps/config.json:/data/config.json:ro,z
+    mem_limit: ${MAP_TILES_MEM_LIMIT:-768m}
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Road router. ONE of these serves the whole application: the backend prices travel from it,
   # and the planning map draws its road lines from it through POST /geo/route rather than
   # calling a public router from the browser (which was a second implementation, uncached, and

@@ -53,6 +53,8 @@ describe('assignments cancelled by a departure', () => {
    * the way out. The live run found it; this shape is what stops it coming back.
    */
   let cancelledRows: any[];
+  /** What `lockOnSiteAssignments` finds on site. Empty unless a case says otherwise. */
+  let onSiteRows: any[];
   const returning = () => [cancelledRows, cancelledRows.length];
   /** Every `recordEvent` call, in order, with the manager it was given. */
   let events: Array<{ dto: any; scope: any }>;
@@ -97,6 +99,8 @@ describe('assignments cancelled by a departure', () => {
     if (/FROM assayers\b/i.test(sql) && /FOR UPDATE/i.test(sql)) {
       return [{ lifecycle_status: lockedState, version: 1 }];
     }
+    // The on-site lock (lockOnSiteAssignments): what is checked in / in progress right now.
+    if (/FOR UPDATE OF a/i.test(sql) && /status = ANY\(\$2\)/.test(sql)) return onSiteRows;
     if (/UPDATE\s+assignments\b/i.test(sql)) return returning();
     if (/UPDATE\s+assayer_client_empanelments\b/i.test(sql)) return [[], 0];
     return [];
@@ -115,6 +119,8 @@ describe('assignments cancelled by a departure', () => {
   };
   const mockUow = { run: jest.fn((work: any) => work(mockUowManager)) };
 
+  const mockDispatch = { emitSafe: jest.fn() };
+  const mockPublisher = { publish: jest.fn() };
   const mockAuditService = {
     recordEvent: jest.fn(async (dto: any, scope: any) => { events.push({ dto, scope }); return { id: 'ae-1' }; }),
     recordEventSafe: jest.fn(async (dto: any, scope: any) => { events.push({ dto, scope }); }),
@@ -122,6 +128,7 @@ describe('assignments cancelled by a departure', () => {
 
   beforeEach(async () => {
     cancelledRows = [];
+    onSiteRows = [];
     events = [];
     lockedState = AssayerLifecycleStatus.ACTIVE;
     jest.clearAllMocks();
@@ -137,7 +144,7 @@ describe('assignments cancelled by a departure', () => {
         { provide: getRepositoryToken(AssayerRemarkEntity), useValue: inert },
         { provide: getRepositoryToken(AssayerActivityEntity), useValue: mockActivityRepo },
         { provide: AuditService, useValue: mockAuditService },
-        { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
+        { provide: DomainEventPublisher, useValue: mockPublisher },
         {
           provide: WorkflowEngine,
           useValue: {
@@ -148,7 +155,7 @@ describe('assignments cancelled by a departure', () => {
             executeCommand: jest.fn(async (_k, _i, _c, _f, _t, _u, _r, _rs, action: any) => action(mockUowManager)),
           },
         },
-        { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: NotificationDispatchService, useValue: mockDispatch },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
         { provide: UnitOfWork, useValue: mockUow },
@@ -306,10 +313,8 @@ describe('assignments cancelled by a departure', () => {
       // UPDATE entirely — not mutated, and therefore correctly not audited either.
       const params = (call as any)[1] as unknown[];
       const openSet = params[4] as string[];
-      expect(openSet).toEqual([
-        AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED,
-        AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS,
-      ]);
+      // PENDING/ACCEPTED only (owner decision 2026-09-24): on-site work refuses the departure.
+      expect(openSet).toEqual([AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED]);
       for (const historical of [AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED]) {
         expect(openSet).not.toContain(historical);
       }
@@ -423,6 +428,61 @@ describe('assignments cancelled by a departure', () => {
         expect(assignmentEvents()).toHaveLength(1);
         expect(assignmentEvents()[0].dto.metadata.lifecycleTarget).toBe(target);
       }
+    });
+  });
+
+  // ── B1 (2026-09-24): on-site work refuses; committed cancels are announced ────────────────
+  describe('on site, and after commit', () => {
+    const onSite = [
+      { id: 'asg-9', assignment_number: 'ASG-0009', status: AssignmentStatus.CHECKED_IN, branch_name: 'Thrissur Main' },
+      { id: 'asg-8', assignment_number: 'ASG-0008', status: AssignmentStatus.IN_PROGRESS, branch_name: 'Kochi' },
+    ];
+
+    it('refuses a departure while any job is on site, listing every one, and cancels nothing', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(person());
+      onSiteRows = onSite;
+      cancelledRows = [row()];
+
+      await expect(service.acceptResignation('as-1', 'u-9', 'Relocating to Kochi.'))
+        .rejects.toThrow(/ASG-0009 \(Thrissur Main\) is currently CHECKED_IN; ASG-0008 \(Kochi\) is currently IN_PROGRESS/);
+      expect(mockDataSource.query.mock.calls.some(([sql]: any) => /UPDATE\s+assignments\b/i.test(sql))).toBe(false);
+      expect(mockDispatch.emitSafe).not.toHaveBeenCalled();
+    });
+
+    it('refuses a deletion while any job is on site', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(person());
+      onSiteRows = [onSite[0]];
+      cancelledRows = [row()];
+
+      await expect(service.remove('as-1', 'u-9', 'Duplicate record created in error.'))
+        .rejects.toThrow(/Cannot delete this assayer while a job is on site: ASG-0009/);
+      expect(mockDataSource.query.mock.calls.some(([sql]: any) => /UPDATE\s+assignments\b/i.test(sql))).toBe(false);
+    });
+
+    it('tells the desk and publishes the status change (with assayerId) once a departure commits', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(person());
+      cancelledRows = [row({ created_by: 'desk-1', branch_name: 'Thrissur Main' })];
+
+      await service.acceptResignation('as-1', 'u-9', 'Relocating to Kochi.');
+
+      const notices = mockDispatch.emitSafe.mock.calls.map((c) => c[0]);
+      const desk = notices.filter((n) => n.type === 'ASSIGNMENT_CANCELLED_DESK');
+      expect(desk).toHaveLength(1);
+      expect(desk[0]).toMatchObject({ entityId: 'asg-1', ownerUserId: 'desk-1', payload: { branchName: 'Thrissur Main', assayerName: 'Priya Nair' } });
+      // The one who left is not sent "your job is cancelled".
+      expect(notices.some((n) => n.type === 'ASSIGNMENT_CANCELLED' || n.type === 'ASSIGNMENT_CANCELLED_BY_CLOSURE')).toBe(false);
+      expect(mockPublisher.publish).toHaveBeenCalledWith('assignment:status-changed', expect.objectContaining({
+        assignmentId: 'asg-1', newState: AssignmentStatus.CANCELLED, assayerId: 'as-1',
+      }));
+    });
+
+    it('announces a deletion\'s cancellations too', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(person());
+      cancelledRows = [row()];
+
+      await service.remove('as-1', 'u-9', 'Duplicate record created in error.');
+
+      expect(mockDispatch.emitSafe.mock.calls.map((c) => c[0].type)).toContain('ASSIGNMENT_CANCELLED_DESK');
     });
   });
 });

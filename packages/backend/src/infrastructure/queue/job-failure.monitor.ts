@@ -4,6 +4,7 @@ import { getQueueToken } from '@nestjs/bull';
 import type { Job, Queue } from 'bull';
 import { MetricsService } from '../observability/metrics.service';
 import { ALL_QUEUE_NAMES } from './worker-concurrency';
+import { errorAlerter, type ErrorAlerter } from '../observability/error-alerter';
 
 // Derived from WORKER_CONCURRENCY (via ALL_QUEUE_NAMES), so a queue added there is watched here
 // automatically instead of needing a second hand-maintained list.
@@ -36,6 +37,8 @@ export function isExhausted(attemptsMade: number | undefined, maxAttempts: numbe
 @Injectable()
 export class JobFailureMonitor implements OnModuleInit {
   private readonly logger = new Logger('JobFailureMonitor');
+  /** Where a dead letter is reported (grouped per queue and job name, rate-limited). Replaceable in tests. */
+  alerter: Pick<ErrorAlerter, 'report'> = errorAlerter;
 
   constructor(
     private readonly moduleRef: ModuleRef,
@@ -60,6 +63,9 @@ export class JobFailureMonitor implements OnModuleInit {
         this.logger.error(
           `[dead-letter] queue=${name} job=${job?.name} id=${job?.id} attempts=${job?.attemptsMade} error=${err?.message}`,
         );
+        // A log line and a counter nobody watches are where this used to stop. Never the message:
+        // it can carry record data (see ErrorAlerter).
+        this.alerter.report({ method: 'QUEUE', route: `/${name}/${job?.name ?? 'unknown'}`, errorName: 'DeadLetter' });
       });
 
       queue.on('error', (err: Error) => {

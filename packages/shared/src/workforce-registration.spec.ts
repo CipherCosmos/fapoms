@@ -144,8 +144,10 @@ describe('mergedRegistrationView', () => {
 
 describe('employment terms are the desk‘s, not the candidate‘s', () => {
   it('keeps the terms a reviewer sets at approval', () => {
-    expect(pickEmploymentTermFields({ joiningDate: '2026-10-01', maxDailyWorkload: 3 }))
-      .toEqual({ joiningDate: '2026-10-01', maxDailyWorkload: 3 });
+    expect(pickEmploymentTermFields({ joiningDate: '2026-10-01', maxWeeklyWorkload: 12 }))
+      .toEqual({ joiningDate: '2026-10-01', maxWeeklyWorkload: 12 });
+    // "Most jobs per day" was removed (owner decision 2026-09-25) — no longer a term the desk sets.
+    expect(pickEmploymentTermFields({ maxDailyWorkload: 3 })).toEqual({});
   });
 
   it('refuses anything else, including record fields the candidate already answered', () => {

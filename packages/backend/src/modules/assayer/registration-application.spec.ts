@@ -4,12 +4,14 @@ import {
 } from '@nestjs/common';
 import {
   ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource, ASSAYER_ERROR_CODES,
+  AssayerLifecycleStatus, AssayerUnavailableReason, ONBOARDING_DOCUMENT_LABELS,
 } from '@fapoms/shared';
 
 import {
   RegistrationApplicationService, documentsRequestedFor, maskedMobile, maskedEmail,
 } from './registration-application.service';
 import { __resetPincodeCache } from '../geo/pincode-lookup.helper';
+import { clearIfscCache } from '../geo/ifsc-lookup.helper';
 import { OpenWithoutInterviewDto } from './hr-applications.controller';
 import { runWithRequestContext } from '../../core/context/request-context';
 import { __resetKeyCacheForTests } from '../../infrastructure/security/field-encryption';
@@ -35,6 +37,13 @@ import { SMS_TEMPLATE_REGISTRY } from '../../infrastructure/notifications/sms-te
 const RAW_TOKEN = 'a'.repeat(64);
 /** What the service stores for RAW_TOKEN — sha256 hex, the same `hashCode` the MFA codes use. */
 const TOKEN_HASH = require('crypto').createHash('sha256').update(RAW_TOKEN).digest('hex');
+/**
+ * A session key a successful code minted for this browser — see REGISTRATION_SESSION_HEADER. Only
+ * its hash is kept, beside the token's; `unlocked()` seeds the cache as `verifyOtp` would.
+ */
+const SESSION_KEY = 'k'.repeat(43);
+const SESSION_CACHE_KEY = `regotp:session:${TOKEN_HASH}:${require('crypto').createHash('sha256').update(SESSION_KEY).digest('hex')}`;
+const unlocked = (extra: Record<string, any> = {}) => ({ [SESSION_CACHE_KEY]: { channel: 'SMS', at: 0 }, ...extra });
 
 type Row = Record<string, any>;
 
@@ -90,15 +99,30 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
     remove: jest.fn(async (v: unknown) => v),
     create: jest.fn((v: Row) => ({ ...v })),
     save: jest.fn(async (v: Row) => ({ ...v, id: 'doc-1' })),
+    // A complete application's scans: the face approval needs, and the passbook submit needs.
     find: jest.fn(async () => ([
       { requirement: OnboardingDocument.PHOTOGRAPH, filePaths: ['uploads/face.jpg'] },
+      { requirement: OnboardingDocument.BANK_PASSBOOK, filePaths: ['uploads/passbook.jpg'] },
     ] as Row[])),
   };
   const assayerService = {
-    create: jest.fn(async (_dto: Row, _userId?: string, _org?: string | null, _roles?: string[]) =>
+    create: jest.fn(async (_dto: Row, _userId?: string, _org?: string | null, _roles?: string[]): Promise<Row> =>
       ({ id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni' })),
+    /**
+     * The hiring-review handoff: a hired candidate starts at document verification, not invited.
+     * A no-op by default — the default `create` above returns no lifecycle status, so the
+     * promotion's guarded hop skips and these tests keep asserting what they are about.
+     */
+    verifyDocuments: jest.fn(async (id: string) => ({ id })),
+    /**
+     * Approving now mints and sends the credential (see `promote`). Stubbed as delivered by both
+     * channels so these tests keep asserting what they are about — which gaps the profile and the
+     * terms produce — rather than picking up the "app access could not be sent" follow-up gap.
+     */
+    issueAndDeliverAppAccess: jest.fn(async () => ({ channels: ['EMAIL', 'SMS'] as ('EMAIL' | 'SMS')[], emailId: 'em-cred', smsId: 'sms-cred' })),
+    setSourceReferral: jest.fn(async (_id: string, raw: unknown) => raw),
   };
-  const rosterRecords = { attachFile: jest.fn(async () => ({})) };
+  const rosterRecords = { attachFile: jest.fn(async () => ({})), notifyUntoldReferees: jest.fn(async () => undefined) };
   const auditService = { recordEventSafe: jest.fn(async () => undefined) };
   const notificationDispatch = { emitSafe: jest.fn(async () => undefined) };
   /**
@@ -317,16 +341,41 @@ describe('the registration link after the form is submitted', () => {
     },
   );
 
-  it('still gives the candidate their whole form while it is theirs to fill in', async () => {
-    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT) });
-    const view = await service.hydrate(RAW_TOKEN);
+  it('still gives the candidate their whole form while it is theirs to fill in — once they have proven the code', async () => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT), cache: unlocked() });
+    const view = await service.hydrate(RAW_TOKEN, SESSION_KEY);
     expect(JSON.stringify(view)).toContain('ABCDE1234F');
+    expect(view).toMatchObject({ sessionVerified: true, sensitiveLocked: false });
+  });
+
+  /**
+   * THE LINK ALONE IS NOT ENOUGH. A link leaks — browser history, a forwarded message, a proxy log.
+   * Before this browser proves the contact with a code, the saved identity numbers and scans stay
+   * out, and the page is told what is on file so it can ask for the code.
+   */
+  it.each([
+    ['no session key', undefined],
+    ['a made-up session key', 'z'.repeat(43)],
+  ])('withholds identity numbers and scans from a link with %s', async (_label, key) => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT), cache: unlocked() });
+    const view = await service.hydrate(RAW_TOKEN, key as any);
+    const text = JSON.stringify(view);
+    for (const secret of ['ABCDE1234F', '234567890124', '50100123456789', 'uploads/1-pan.jpg']) {
+      expect(text).not.toContain(secret);
+    }
+    expect(view).toMatchObject({ sessionVerified: false, sensitiveLocked: true });
+    expect(view.sensitiveOnFile.fields).toEqual(expect.arrayContaining(['panNumber']));
+  });
+
+  it('refuses a saved scan through the link until the code has been proven', async () => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT) });
+    await expect(service.documentFileKeyForToken(RAW_TOKEN, 'PHOTOGRAPH' as any, 0)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   /** Sent back for more information, it is the candidate's form again. */
   it('gives the form back when HR asks for more information', async () => {
-    const { service } = makeService({ application: withProfile(ApplicationStatus.AWAITING_INFO) });
-    const view = await service.hydrate(RAW_TOKEN);
+    const { service } = makeService({ application: withProfile(ApplicationStatus.AWAITING_INFO), cache: unlocked() });
+    const view = await service.hydrate(RAW_TOKEN, SESSION_KEY);
     expect(JSON.stringify(view)).toContain('ABCDE1234F');
   });
 
@@ -334,6 +383,249 @@ describe('the registration link after the form is submitted', () => {
     const { service } = makeService({ application: withProfile(ApplicationStatus.APPROVED) });
     await expect(service.documentFileKeyForToken(RAW_TOKEN, 'PAN_CARD' as never, 0))
       .rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+/**
+ * WHAT THE LINK SAYS AFTER APPROVAL — the candidate's road on to their first job.
+ *
+ * The page stopped at "Approved" while documents, a background check, a final approval and perhaps
+ * training still lay ahead, and HR could ask for a document again with nothing there to say so.
+ * The link now says where they are and what is asked. It is unauthenticated, so the second half of
+ * this block matters more than the first: it pins what the link must NOT say.
+ */
+describe('the registration link after approval', () => {
+  const approved = () => ({
+    id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.APPROVED, tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+    tokenConsumedAt: new Date(), employmentCategory: 'FREELANCER', organizationId: 'org-1',
+    promotedAssayerId: 'assayer-1',
+  });
+
+  /**
+   * The person as the database could hand them back, and then some. The service asks for two
+   * columns; this double answers with everything, so a service that copied the row through would
+   * show it here rather than getting away with it because a real `select` happened to trim it.
+   */
+  const person = (lifecycleStatus: AssayerLifecycleStatus, extra: Record<string, unknown> = {}) => ({
+    id: 'assayer-1', lifecycleStatus, assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni',
+    panNumber: 'ABCDE1234F', ...extra,
+  });
+
+  const open = async (who: Row | null, gates: Row[] = []) => {
+    const ctx = makeService({ application: approved() }) as any;
+    ctx.assayers.findOne.mockResolvedValue(who);
+    ctx.rosterRecords.selfDocumentGates = jest.fn(async () => gates);
+    const view = await ctx.service.hydrate(RAW_TOKEN);
+    return { ...ctx, view };
+  };
+
+  it('says which step the record is at, in the candidate\'s terms', async () => {
+    const { view } = await open(person(AssayerLifecycleStatus.BACKGROUND_VERIFICATION));
+    expect(view.journey).toEqual({ stage: 'BACKGROUND', paused: false, asks: [] });
+  });
+
+  it('names what HR has asked them to send again, in HR\'s words', async () => {
+    const { view, rosterRecords } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION), [
+      { requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: '  The number is cut off at the bottom, please retake.  ' },
+      { requirement: OnboardingDocument.AADHAAR_FRONT, mode: 'locked', code: 'DOCUMENT_VERIFIED_LOCKED', reason: 'HR has verified this.' },
+      { requirement: OnboardingDocument.PHOTOGRAPH, mode: 'direct' },
+      { requirement: OnboardingDocument.BANK_PASSBOOK, mode: 'reopened', hrNote: null },
+    ]);
+
+    expect(view.journey.asks).toEqual([
+      { requirement: 'PAN_CARD', label: ONBOARDING_DOCUMENT_LABELS.PAN_CARD, note: 'The number is cut off at the bottom, please retake.' },
+      { requirement: 'BANK_PASSBOOK', label: ONBOARDING_DOCUMENT_LABELS.BANK_PASSBOOK, note: null },
+    ]);
+    // The same rule the phone app is told (`GET /assayers/me/capabilities`), for this person.
+    expect(rosterRecords.selfDocumentGates).toHaveBeenCalledWith('assayer-1', expect.arrayContaining([
+      OnboardingDocument.PHOTOGRAPH, OnboardingDocument.PAN_CARD, OnboardingDocument.BANK_PASSBOOK,
+    ]));
+  });
+
+  it('shows nothing past approval for an application that was never approved', async () => {
+    for (const status of [ApplicationStatus.PENDING_VALIDATION, ApplicationStatus.REJECTED, ApplicationStatus.DRAFT]) {
+      const ctx = makeService({ application: { ...approved(), status } }) as any;
+      const view = await ctx.service.hydrate(RAW_TOKEN);
+      expect(view.journey).toBeNull();
+      expect(ctx.assayers.findOne).not.toHaveBeenCalled();
+    }
+  });
+
+  /** A status page that will not open is worse than one that only says "Approved". */
+  it('still opens when the record cannot be read', async () => {
+    const ctx = makeService({ application: approved() }) as any;
+    ctx.assayers.findOne.mockResolvedValue(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION));
+    ctx.rosterRecords.selfDocumentGates = jest.fn(async () => { throw new Error('connection reset'); });
+    const view = await ctx.service.hydrate(RAW_TOKEN);
+    expect(view.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(view.journey).toBeNull();
+  });
+
+  describe('what it must not say', () => {
+    /**
+     * A failed background check and a refused approval are HR's to explain, by phone. Whoever
+     * holds the link — a forwarded message, a shared phone, a proxy log — must learn nothing from
+     * it, so the two, and every other way of being parked, answer byte for byte the same.
+     */
+    it('answers identically for a failed background check, a refused approval and any other pause', async () => {
+      const answers = [];
+      for (const [lifecycle, reason] of [
+        [AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.BGV_FAILED],
+        [AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.APPROVAL_REJECTED],
+        [AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.NOT_INTERESTED],
+        [AssayerLifecycleStatus.SUSPENDED, null],
+      ] as const) {
+        const { view } = await open(person(lifecycle, { unavailableReason: reason }), [
+          { requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: 'Retake it.' },
+        ]);
+        answers.push(JSON.stringify(view.journey));
+      }
+      expect(new Set(answers)).toEqual(new Set([JSON.stringify({ stage: null, paused: true, asks: [] })]));
+    });
+
+    it('leaks no verdict, finding, agency, approver, reason or raw lifecycle through the page', async () => {
+      const { view } = await open(person(AssayerLifecycleStatus.INACTIVE, {
+        unavailableReason: AssayerUnavailableReason.BGV_FAILED,
+        backgroundCheckVerdict: 'CRIMINAL_CASE',
+        bgvAgency: 'Sentinel Verifications Pvt Ltd',
+        bgvFindings: 'Two criminal cases pending in Pune.',
+        approvedByName: 'Shivam Kumar',
+        approvalComment: 'Not suitable for the branch network.',
+        remarks: 'Internal: do not re-engage.',
+      }));
+      const text = JSON.stringify(view);
+      for (const secret of [
+        'BGV_FAILED', 'INACTIVE', 'CRIMINAL_CASE', 'Sentinel', 'criminal cases', 'Shivam', 'Not suitable',
+        'do not re-engage', 'ABCDE1234F', 'AS0009',
+      ]) {
+        expect(text).not.toContain(secret);
+      }
+    });
+
+    /** The step goes out as the candidate's word for it, not as the lifecycle value. */
+    it('sends the step, never the lifecycle value itself', async () => {
+      const { view } = await open(person(AssayerLifecycleStatus.FINAL_APPROVAL));
+      expect(Object.keys(view.journey).sort()).toEqual(['asks', 'paused', 'stage']);
+      expect(view.journey.stage).toBe('APPROVAL');
+      expect(JSON.stringify(view)).not.toContain('FINAL_APPROVAL');
+    });
+
+    /**
+     * Of a sent-back document, the link carries its key, its name and the sentence written for the
+     * candidate. Nothing else the gate or the row holds — codes, file keys, the reviewer's remarks.
+     */
+    it('says only which document and what to do about it', async () => {
+      const { view } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION), [{
+        requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: 'Retake it in daylight.',
+        code: 'SOMETHING_INTERNAL', reason: 'internal reason', filePaths: ['uploads/pan.jpg'], remarks: 'reviewer remark',
+      }]);
+      expect(view.journey.asks).toEqual([{ requirement: 'PAN_CARD', label: ONBOARDING_DOCUMENT_LABELS.PAN_CARD, note: 'Retake it in daylight.' }]);
+    });
+
+    /**
+     * The company's own paperwork about a person is never asked for through the link — above all
+     * the background-verification report and the re-checks filed like it. The service asks only
+     * about documents the candidate holds, so such a row cannot reach the page even if one were
+     * ever marked as sent back.
+     */
+    it('never asks about the background report or any other company paperwork', async () => {
+      const { rosterRecords } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION));
+      const asked: string[] = rosterRecords.selfDocumentGates.mock.calls[0][1];
+      for (const internal of [
+        OnboardingDocument.BGV_REPORT, OnboardingDocument.POLICE_CERTIFICATE, OnboardingDocument.CREDIT_REPORT,
+        OnboardingDocument.REFERENCE_CHECK, OnboardingDocument.GOVERNANCE_AUDIT, OnboardingDocument.APPOINTMENT_LETTER,
+      ]) {
+        expect(asked).not.toContain(internal);
+      }
+    });
+
+    /** Read-only: answering an ask stays behind the assayer's own sign-in, in the app. */
+    it('changes nothing on the record by being opened', async () => {
+      const { assayers, rosterRecords } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION), [
+        { requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: 'Retake it.' },
+      ]);
+      expect(assayers.update).not.toHaveBeenCalled();
+      expect(rosterRecords.attachFile).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * AN EXPIRED LINK STILL SAYS HOW THE CANDIDATE IS GETTING ON (owner, 2026-09-24: "status-only after
+ * expiry").
+ *
+ * The link lives 72 hours; joining takes longer, so the steps after approval were mostly behind
+ * "this link has expired". Past its expiry the link now shows progress and nothing else. What must
+ * never follow from that: anything of what the candidate gave coming back through an old link, or
+ * the old link changing anything.
+ */
+describe('a registration link after it has expired', () => {
+  const expired = (over: Record<string, unknown> = {}) => ({
+    id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.APPROVED, tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() - 60_000),
+    tokenConsumedAt: new Date('2026-09-20T10:00:00Z'), employmentCategory: 'FREELANCER', organizationId: 'org-1',
+    promotedAssayerId: 'assayer-1', panNumber: 'ABCDE1234F', extendedProfile: { fields: { bankAccountNumber: '123456789012' } },
+    ...over,
+  });
+  const open = async (application: Row, lifecycleStatus = AssayerLifecycleStatus.BACKGROUND_VERIFICATION) => {
+    // A verified number, so a refused write is refused for the expired link and not for want of a code.
+    const ctx = makeService({ application, cache: { [`regotp:verified:${TOKEN_HASH}`]: { phone: '9822014455' } } }) as any;
+    ctx.assayers.findOne.mockResolvedValue({ id: 'assayer-1', lifecycleStatus });
+    ctx.rosterRecords.selfDocumentGates = jest.fn(async () => []);
+    return { ...ctx, view: await ctx.service.hydrate(RAW_TOKEN) };
+  };
+
+  it('still shows an approved candidate where they have got to', async () => {
+    const { view } = await open(expired());
+    expect(view.statusOnly).toBe(true);
+    expect(view.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(view.journey).toEqual({ stage: 'BACKGROUND', paused: false, asks: [] });
+  });
+
+  it('gives nothing of what they gave — no name, no contact details, no answers, no scans, no consent text', async () => {
+    const { view } = await open(expired());
+    expect(Object.keys(view.application).sort()).toEqual(['id', 'status']);
+    expect(view.documents).toEqual([]);
+    expect(view.consentNotice).toBeNull();
+    const text = JSON.stringify(view);
+    for (const secret of ['Ramesh', 'candidate@example.com', '9822014455', '4455', 'ABCDE1234F', '123456789012']) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it('says what HR sent the form back for, when it was waiting on them', async () => {
+    const { view } = await open(expired({
+      status: ApplicationStatus.AWAITING_INFO,
+      infoRequests: [{ kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'The photo is blurred — retake it.' }],
+    }));
+    expect(view.statusOnly).toBe(true);
+    expect(view.infoRequests).toEqual([expect.objectContaining({ label: 'PAN card', message: 'The photo is blurred — retake it.' })]);
+  });
+
+  it('shows a submitted form as submitted', async () => {
+    const { view } = await open(expired({ status: ApplicationStatus.PENDING_VALIDATION, promotedAssayerId: null }));
+    expect(view).toMatchObject({ statusOnly: true, application: { status: ApplicationStatus.PENDING_VALIDATION }, journey: null });
+  });
+
+  /** A read that writes is a read somebody can use to move a record; this one writes nothing. */
+  it('writes nothing when it is opened', async () => {
+    const { applications } = await open(expired({ tokenConsumedAt: null }));
+    expect(applications.save).not.toHaveBeenCalled();
+  });
+
+  it('still refuses every change made through it, exactly as before', async () => {
+    const { service } = await open(expired({ status: ApplicationStatus.AWAITING_INFO }));
+    await expect(service.updateDraft(RAW_TOKEN, { fullName: 'Someone Else' } as never)).rejects.toThrow(/expired/);
+    await expect(service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/expired/);
+    await expect(service.submit(RAW_TOKEN)).rejects.toThrow(/expired/);
+    await expect(service.withdrawConsent(RAW_TOKEN, 'changed my mind')).rejects.toThrow(/expired/);
+  });
+
+  it('is served in full, form and all, while it has not expired — nothing changes for a live link', async () => {
+    const { view } = await open(expired({ status: ApplicationStatus.AWAITING_INFO, tokenExpiresAt: new Date(Date.now() + 3_600_000) }));
+    expect(view.statusOnly).toBe(false);
+    expect(view.application.fullName).toBe('Ramesh Kulkarni');
   });
 });
 
@@ -420,7 +712,7 @@ describe('pre-account OTP', () => {
       });
       // The texted code is the one the cache holds for this phone — verifying with it works.
       const code = ctx.phone.receive.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
-      await expect(ctx.service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
+      await expect(ctx.service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toMatchObject({ channel: 'SMS' });
     });
 
     /** A gateway that refuses one text must not strand the candidate when their mailbox works. */
@@ -536,8 +828,8 @@ describe('pre-account OTP', () => {
     await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000000')).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.verifyOtp(RAW_TOKEN, '9999999999', code)).rejects.toBeInstanceOf(BadRequestException);
 
-    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
-    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455' });
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toMatchObject({ channel: 'EMAIL' });
+    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455', channel: 'EMAIL' });
   });
 
   it('caps how many codes one phone number may receive across tokens to prevent SMS bombing', async () => {
@@ -576,9 +868,15 @@ describe('pre-account OTP', () => {
     const code = mailbox.send.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
 
     // Verification succeeds
-    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
+    const result = await service.verifyOtp(RAW_TOKEN, '9822014455', code);
+    expect(result).toMatchObject({ channel: 'EMAIL', sessionExpiresInSeconds: expect.any(Number) });
+    expect(result.sessionKey.length).toBeGreaterThanOrEqual(32);
     expect(cacheData[`regotp:code:${TOKEN_HASH}`]).toBeUndefined();
-    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455' });
+    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455', channel: 'EMAIL' });
+    // Only the key's hash is stored; the key itself unlocks this browser's saved answers.
+    expect(JSON.stringify(cacheData)).not.toContain(result.sessionKey);
+    const view = await service.hydrate(RAW_TOKEN, result.sessionKey);
+    expect(view.sessionVerified).toBe(true);
 
     // Attempting to reuse the exact same code again fails immediately
     await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).rejects.toThrow(/That code has expired or has not been requested/i);
@@ -655,6 +953,10 @@ describe('submitting', () => {
     status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH,
     tokenExpiresAt: new Date(Date.now() + 3_600_000),
     employmentCategory: EmploymentCategory.PROPRIETOR, consentAcceptedAt: new Date(),
+    // A candidate who reaches submit named somebody who can be rung — the form requires it.
+    extendedProfile: {
+      references: [{ fullName: 'Meera Rao', phone: '9822014455', relationship: 'Former manager' }],
+    },
     ...extra,
   });
 
@@ -663,6 +965,148 @@ describe('submitting', () => {
       const { service } = makeService({ application: ready(missing), cache: verified() });
       await expect(service.submit(RAW_TOKEN)).rejects.toBeInstanceOf(BadRequestException);
     }
+  });
+
+  it('refuses without anybody to vouch for them — a name with no number is not a reference', async () => {
+    for (const references of [
+      undefined,
+      [],
+      [{ fullName: 'Meera Rao' }],
+      [{ fullName: 'Meera Rao', phone: '123' }],
+    ]) {
+      const profile = references === undefined ? null : { references };
+      const { service } = makeService({
+        application: ready({ extendedProfile: profile }),
+        cache: verified(),
+      });
+      await expect(service.submit(RAW_TOKEN)).rejects.toThrow(/reference/i);
+    }
+  });
+
+  /**
+   * The passbook is the evidence of the account a payout goes to; a candidate cannot file without
+   * one. Judged on what is attached — a row with a file — not on a form's tick.
+   */
+  it('refuses without a passbook scan, and says a cheque or statement will do', async () => {
+    for (const docs of [
+      [{ requirement: OnboardingDocument.PHOTOGRAPH, filePaths: ['uploads/face.jpg'] }],
+      [{ requirement: OnboardingDocument.BANK_PASSBOOK, filePaths: [] }],
+    ]) {
+      const ctx = makeService({ application: ready(), cache: verified() });
+      (ctx.applicationDocuments.find as jest.Mock).mockResolvedValue(docs);
+      await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/Upload Bank passbook before submitting.*cancelled cheque/i);
+      expect(ctx.application!.status).toBe(ApplicationStatus.DRAFT);
+    }
+  });
+
+  it('asks every candidate for the passbook, whichever way they practise', async () => {
+    for (const category of [null, EmploymentCategory.FREELANCER, EmploymentCategory.PROPRIETOR]) {
+      expect(documentsRequestedFor(category)).toContain(OnboardingDocument.BANK_PASSBOOK);
+    }
+  });
+
+  /** The account number's shape, at the door every application answer comes through. */
+  it('stores an account number as its digits, and refuses one that cannot be an account', async () => {
+    const { service, application } = makeService({ cache: verified() });
+    await service.updateDraft(RAW_TOKEN, { record: { bankAccountNumber: '1234 5678-9012' } } as never);
+    expect(((application!.extendedProfile as Row).fields as Row).bankAccountNumber).toBe('123456789012');
+
+    for (const bad of ['12345', 'ABCD12345678', '1234567890123456789']) {
+      await expect(service.updateDraft(RAW_TOKEN, { record: { bankAccountNumber: bad } } as never))
+        .rejects.toThrow(/9 to 18 digits/);
+    }
+  });
+
+  it('stores references trimmed and capped when the draft is saved', async () => {
+    const { service, application } = makeService({ cache: verified() });
+    await service.updateDraft(RAW_TOKEN, {
+      references: [
+        { fullName: '  Meera Rao ', phone: '98 220 14455', relationship: 'Former manager', email: 'Meera@Example.com' },
+        { fullName: '', phone: '' },
+      ],
+    } as never);
+
+    expect((application!.extendedProfile as Row).references).toEqual([
+      { fullName: 'Meera Rao', phone: '9822014455', relationship: 'Former manager', email: 'meera@example.com' },
+    ]);
+  });
+
+  it('refuses a fourth reference on the draft rather than silently dropping it', async () => {
+    const { service } = makeService({ cache: verified() });
+    const four = [1, 2, 3, 4].map((n) => ({ fullName: `Ref ${n}`, phone: '9822014455' }));
+    await expect(service.updateDraft(RAW_TOKEN, { references: four } as never))
+      .rejects.toThrow(/Only 3 references/);
+  });
+
+  /**
+   * HR's field asks leave the to-do list when the field is actually corrected.
+   *
+   * Document asks cleared themselves on a fresh scan; field asks never did, so "Date of birth —
+   * please correct" stayed on the candidate's link and on HR's "waiting on candidate" list after it
+   * had been fixed.
+   */
+  describe('what HR asked to have corrected', () => {
+    const asked = (extra: Row = {}) => ready({
+      status: ApplicationStatus.AWAITING_INFO,
+      dateOfBirth: new Date('1985-03-14T00:00:00Z'),
+      extendedProfile: {
+        references: [{ fullName: 'Meera Rao', phone: '9822014455' }],
+        fields: { ifscCode: 'SBIN0000001' },
+      },
+      infoRequests: [
+        { kind: 'field', key: 'dateOfBirth', label: 'Date of birth', message: 'Does not match the PAN.' },
+        { kind: 'field', key: 'ifscCode', label: 'IFSC code', message: 'Does not match the passbook.' },
+        { kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'Retake in better light.' },
+      ],
+      ...extra,
+    });
+    const keys = (app: Row | null) => ((app?.infoRequests ?? []) as Row[]).map((i) => `${i.kind}:${i.key}`);
+
+    it('drops an ask once its field actually changes', async () => {
+      const { service, application } = makeService({ application: asked(), cache: verified() });
+
+      await service.updateDraft(RAW_TOKEN, { dateOfBirth: '1986-01-02' } as never);
+      expect(keys(application)).toEqual(['field:ifscCode', 'document:PAN_CARD']);
+
+      await service.updateDraft(RAW_TOKEN, { record: { ifscCode: 'SBIN0001234' } } as never);
+      expect(keys(application)).toEqual(['document:PAN_CARD']);
+    });
+
+    /**
+     * The form saves every box on blur. Tabbing past the date of birth sends the same day back —
+     * as a string, against a stored Date — and must not count as having fixed it.
+     */
+    it('keeps an ask when the same value is merely saved again', async () => {
+      const { service, application } = makeService({ application: asked(), cache: verified() });
+
+      await service.updateDraft(RAW_TOKEN, { dateOfBirth: '1985-03-14', record: { ifscCode: 'SBIN0000001' } } as never);
+
+      expect(keys(application)).toEqual(['field:dateOfBirth', 'field:ifscCode', 'document:PAN_CARD']);
+    });
+
+    /**
+     * Resubmitting is the candidate's answer to every field ask; HR reads the whole form again. A
+     * document whose sent-back scan was never replaced is still genuinely owed, so it stays.
+     */
+    it('settles the field asks on resubmission and keeps a document still owed', async () => {
+      const { service, application } = makeService({ application: asked(), cache: verified() });
+
+      await service.submit(RAW_TOKEN);
+
+      expect(application!.status).toBe(ApplicationStatus.PENDING_VALIDATION);
+      expect(keys(application)).toEqual(['document:PAN_CARD']);
+    });
+
+    it('clears the list entirely when nothing is left owed', async () => {
+      const { service, application } = makeService({
+        application: asked({ infoRequests: [{ kind: 'field', key: 'ifscCode', label: 'IFSC code', message: 'x' }] }),
+        cache: verified(),
+      });
+
+      await service.submit(RAW_TOKEN);
+
+      expect(application!.infoRequests).toBeNull();
+    });
   });
 
   it('moves to Pending Validation and tells the HR desk there is something to review', async () => {
@@ -682,6 +1126,25 @@ describe('submitting', () => {
         }),
       }),
     );
+  });
+
+  it('keys the HR notice per submission, so a resubmission after an ask notifies again', async () => {
+    const first = makeService({ application: ready(), cache: verified() });
+    await first.service.submit(RAW_TOKEN);
+    const firstKey = (first.notificationDispatch!.emitSafe.mock.calls as any[])
+      .find((c: any[]) => c[0].type === 'ASSAYER_APPLICATION_SUBMITTED')![0].dedupeKey;
+
+    const again = makeService({
+      application: ready({ status: ApplicationStatus.AWAITING_INFO, reviewedAt: new Date('2026-09-20T10:00:00Z') }),
+      cache: verified(),
+    });
+    await again.service.submit(RAW_TOKEN);
+    const againKey = (again.notificationDispatch!.emitSafe.mock.calls as any[])
+      .find((c: any[]) => c[0].type === 'ASSAYER_APPLICATION_SUBMITTED')![0].dedupeKey;
+
+    expect(firstKey).toMatch(/:first$/);
+    expect(againKey).toContain('2026-09-20T10:00:00.000Z');
+    expect(againKey).not.toBe(firstKey);
   });
 
   it('queues a confirmation email to the candidate when email is present', async () => {
@@ -763,19 +1226,19 @@ describe('HR review', () => {
   });
 
   /**
-   * HR's note is the whole point of this email. It used to be written only into the call site's own
-   * copy of the letter, which the template renderer then replaced — so the candidate got a fresh
-   * link and no word of what was wanted.
+   * HR's asks are the whole point of this email. They travel as an item list the candidate's SAME
+   * link renders as a to-do list — never as a fresh link, because minting one would kill the link
+   * the candidate already holds at exactly the moment they are asked to use it.
    */
-  it('tells the candidate what HR asked for, in the invite that carries the fresh link', async () => {
+  it('tells the candidate what HR asked for, without minting a new link', async () => {
     const { service, emailService, mailbox } = makeService({ application: submitted() });
     await service.requestMoreInfo('app-1', 'user-1', 'Attach the shop entity proof.');
 
     expect(emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'REGISTRATION_INVITE',
+      kind: 'APPLICATION_INFO_REQUESTED',
       content: {
-        template: 'registration-invite',
-        data: expect.objectContaining({ intro: expect.stringContaining('Attach the shop entity proof.') }),
+        template: 'application-info-requested',
+        data: expect.objectContaining({ itemsText: expect.stringContaining('Attach the shop entity proof.') }),
       },
     }));
     expect(mailbox.send).toHaveBeenCalledWith(
@@ -783,20 +1246,105 @@ describe('HR review', () => {
     );
   });
 
-  it('rotates the link when asking for more information, so the old one stops working', async () => {
-    // Only the hash was ever stored, so "resend the same link" is not a thing this can do — and
-    // rotating is the better answer anyway. What must not happen is the OLD link still opening.
+  it('keeps the SAME link working when asking for more information', async () => {
+    // The link the candidate holds (or has open in a tab) must survive the request: only the
+    // hash was ever stored, so "send them the same link" is not a thing this can do — keeping
+    // the stored hash untouched while extending its window is.
     const { service, application } = makeService({ application: submitted() });
     await service.requestMoreInfo('app-1', 'user-1', 'Attach the shop entity proof.');
 
     expect(application!.status).toBe(ApplicationStatus.AWAITING_INFO);
-    expect(application!.tokenHash).not.toBe(TOKEN_HASH);
-    expect(application!.tokenConsumedAt).toBeNull();
+    expect(application!.tokenHash).toBe(TOKEN_HASH);
+    expect(new Date(application!.tokenExpiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('stores ticked documents and fields as the candidate to-do list', async () => {
+    const { service, application, applicationDocuments } = makeService({ application: submitted() });
+    await service.requestMoreInfo('app-1', 'user-1', {
+      notes: 'Two things to fix.',
+      documents: [{ requirement: OnboardingDocument.PAN_CARD, reason: 'ILLEGIBLE' }],
+      fields: [{ key: 'ifscCode', message: 'Does not match the passbook.' }],
+    });
+
+    const saved = application!;
+    expect(saved.status).toBe(ApplicationStatus.AWAITING_INFO);
+    expect(saved.infoRequests).toEqual([
+      expect.objectContaining({ kind: 'document', key: 'PAN_CARD', message: expect.stringContaining('better light') }),
+      expect.objectContaining({ kind: 'field', key: 'ifscCode', label: 'IFSC code' }),
+    ]);
+    // The flagged document row carries the verdict for the review queue to read back.
+    const rows = applicationDocuments.save.mock.calls.map((c: any[]) => c[0]);
+    expect(rows).toContainEqual(expect.objectContaining({
+      requirement: 'PAN_CARD', reviewStatus: 'NEEDS_RESUBMIT', rejectionReason: 'ILLEGIBLE',
+    }));
+  });
+
+  it('refuses a structured request that names nothing the candidate can fix', async () => {
+    const { service } = makeService({ application: submitted() });
+    await expect(service.requestMoreInfo('app-1', 'user-1', {
+      documents: [{ requirement: 'BIRTH_CERTIFICATE' as any }],
+    })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.requestMoreInfo('app-1', 'user-1', {
+      fields: [{ key: 'assayerCode', message: 'fix it' }],
+    })).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('refuses a request for more information with nothing asked for', async () => {
     const { service } = makeService({ application: submitted() });
     await expect(service.requestMoreInfo('app-1', 'user-1', '')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('sends back one document without rejecting the application', async () => {
+    const { service, application } = makeService({ application: submitted() });
+    const row = await service.reviewApplicationDocument(
+      'app-1', OnboardingDocument.PAN_CARD, 'NEEDS_RESUBMIT',
+      { reason: 'ILLEGIBLE', note: '' }, 'user-1',
+    );
+
+    expect(row.reviewStatus).toBe('NEEDS_RESUBMIT');
+    expect(row.rejectionReason).toBe('ILLEGIBLE');
+    expect(application!.status).toBe(ApplicationStatus.AWAITING_INFO);
+    // Same link: the stored hash is untouched, only its window is extended.
+    expect(application!.tokenHash).toBe(TOKEN_HASH);
+    expect(application!.infoRequests).toEqual([
+      expect.objectContaining({ kind: 'document', key: 'PAN_CARD' }),
+    ]);
+  });
+
+  it('refuses to approve a document nobody attached', async () => {
+    const { service, applicationDocuments } = makeService({ application: submitted() });
+    applicationDocuments.findOne.mockResolvedValueOnce(null);
+    await expect(service.reviewApplicationDocument(
+      'app-1', OnboardingDocument.PAN_CARD, 'APPROVED', {}, 'user-1',
+    )).rejects.toThrow(/no scan/i);
+  });
+
+  it('a resubmitted scan clears its own send-back', async () => {
+    const sentBack = {
+      applicationId: 'app-1',
+      requirement: OnboardingDocument.PAN_CARD,
+      filePaths: ['uploads/blurry.png'],
+      reviewStatus: 'NEEDS_RESUBMIT',
+      rejectionReason: 'ILLEGIBLE',
+      rejectionNote: null,
+    };
+    const ctx = makeService({
+      application: {
+        ...submitted(),
+        status: ApplicationStatus.AWAITING_INFO,
+        infoRequests: [{ kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'Retake.' }],
+      },
+      cache: { [`regotp:verified:${TOKEN_HASH}`]: { phone: '9822014455' } },
+    });
+    (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(sentBack);
+
+    await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, {
+      originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 10,
+    });
+
+    const savedRow = ctx.applicationDocuments.save.mock.calls[ctx.applicationDocuments.save.mock.calls.length - 1][0];
+    expect(savedRow.reviewStatus).toBe('PENDING');
+    expect(savedRow.rejectionReason).toBeNull();
   });
 
   describe('resending a lost link', () => {
@@ -901,6 +1449,33 @@ describe('promotion to a real assayer', () => {
 
     expect(application!.status).toBe(ApplicationStatus.APPROVED);
     expect(application!.promotedAssayerId).toBe('assayer-1');
+  });
+
+  it('lands a hired candidate at document verification, not invited', async () => {
+    // INVITED means "on the roster, nothing reviewed yet" — untrue of somebody HR just
+    // reviewed, asked, and approved. Landing there asked the desk to verify the same scans
+    // twice: once off-stage to leave INVITED, once in the stage flow.
+    const ctx = makeService({ application: approved() });
+    ctx.assayerService.create.mockResolvedValueOnce({
+      id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni',
+      lifecycleStatus: 'INVITED',
+    });
+    await ctx.service.approve('app-1', 'user-1', ['ADMIN']);
+
+    expect(ctx.assayerService.verifyDocuments).toHaveBeenCalledWith('assayer-1', 'user-1');
+  });
+
+  it('does not re-take the handoff hop when a retried promotion finds the person moved on', async () => {
+    // Same idempotency key, second attempt: `create` answers with the existing person, already
+    // past INVITED. Re-taking the hop would fail on a transition that already happened.
+    const ctx = makeService({ application: approved() });
+    ctx.assayerService.create.mockResolvedValueOnce({
+      id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni',
+      lifecycleStatus: 'DOCUMENT_VERIFICATION',
+    });
+    await ctx.service.approve('app-1', 'user-1', ['ADMIN']);
+
+    expect(ctx.assayerService.verifyDocuments).not.toHaveBeenCalled();
   });
 
   it('carries the candidate-only fields across, and keeps free text out of columns that have none', async () => {
@@ -1205,6 +1780,166 @@ describe('the extended profile the wizard collects', () => {
 });
 
 /**
+ * Referees hear when the candidate is hired — the moment they become references FOR somebody on
+ * the record, which is where HR's call to them is recorded.
+ */
+describe('an approved candidate’s referees are told', () => {
+  const candidate = () => ({
+    id: 'app-x', mobile: '9822014455', fullName: 'Full Payload', state: 'Maharashtra',
+    status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+    source: ApplicationSource.HR_DESK, createdBy: 'hr-maker', email: 'candidate@example.com',
+  });
+
+  it('tells them once the person exists, after the approval letter, by the reviewer', async () => {
+    const order: string[] = [];
+    const ctx = makeService({ application: candidate() });
+    ctx.emailService.queue.mockImplementation(async (r: Row) => {
+      order.push(`email:${r.kind}`);
+      return { id: 'e', status: 'QUEUED', to: r.to };
+    });
+    (ctx.rosterRecords as any).notifyUntoldReferees = jest.fn(async () => { order.push('referees'); });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect((ctx.rosterRecords as any).notifyUntoldReferees).toHaveBeenCalledWith('assayer-1', 'hr-checker');
+    // The candidate learns they are hired before their referees learn they may be rung.
+    expect(order.indexOf('email:APPLICATION_APPROVED')).toBeLessThan(order.indexOf('referees'));
+  });
+
+  it('does not fail the hire when the referees cannot be told', async () => {
+    const ctx = makeService({ application: candidate() });
+    (ctx.rosterRecords as any).notifyUntoldReferees = jest.fn(async () => { throw new Error('outbox down'); });
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(result.assayer.id).toBe('assayer-1');
+  });
+});
+
+/**
+ * THE KEY IS HANDED OVER AT THE MOMENT OF HIRING.
+ *
+ * Approval promoted a candidate to `INVITED` — a stage `ONBOARDING_SIGN_IN` deliberately lets sign
+ * in — and then mailed them a button reading "Sign in to FAPOMS". The account behind it had
+ * `passwordHash = NULL`, and `AuthService.login` answers that with the same bare `Invalid
+ * credentials` a mistyped password gets, so the person could not tell "nobody gave me a password"
+ * from "I typed it wrong". The only two ways a credential had ever been minted were an HR officer
+ * reading one aloud off the record screen and the 500-at-a-time bulk tool; neither was reachable
+ * from this flow, and nothing told HR somebody was waiting.
+ */
+describe('an approved candidate is given a way in', () => {
+  const candidate = (over: Row = {}) => ({
+    id: 'app-x', mobile: '9822014455', fullName: 'Full Payload', state: 'Maharashtra',
+    status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+    source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+    email: 'candidate@example.com',
+    ...over,
+  });
+
+  it('issues and sends a credential through the one path the bulk tool uses', async () => {
+    const ctx = makeService({ application: candidate() });
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    const issue = (ctx.assayerService as any).issueAndDeliverAppAccess;
+    expect(issue).toHaveBeenCalledTimes(1);
+    // The person who was just created, and the reviewer as the actor — not the candidate.
+    expect(issue.mock.calls[0][0]).toMatchObject({ id: 'assayer-1', assayerCode: 'AS0009' });
+    expect(issue.mock.calls[0][1]).toBe('hr-checker');
+    expect(result.gaps).toEqual([]);
+  });
+
+  /** Minted after the person exists, or there is no account to attach a password to. */
+  it('issues only once the assayer record has been created', async () => {
+    const order: string[] = [];
+    const ctx = makeService({ application: candidate() });
+    (ctx.assayerService as any).create = jest.fn(async () => {
+      order.push('create');
+      return { id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni' };
+    });
+    (ctx.assayerService as any).issueAndDeliverAppAccess = jest.fn(async () => {
+      order.push('issue');
+      return { channels: ['EMAIL'] };
+    });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(order).toEqual(['create', 'issue']);
+  });
+
+  /**
+   * A hiring decision must not be refused because a mail server is down. The person is hired
+   * either way — the unsent credential becomes a named follow-up for the desk instead.
+   */
+  it('does not fail the approval when the credential cannot be sent, and names it as a gap', async () => {
+    const ctx = makeService({ application: candidate() });
+    (ctx.assayerService as any).issueAndDeliverAppAccess = jest.fn(async () => {
+      throw new Error('smtp unreachable');
+    });
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(result.assayer.id).toBe('assayer-1');
+    expect(result.gaps).toEqual([expect.stringContaining('app access')]);
+  });
+
+  /** Issued, but reaching nobody, is the same follow-up: silence is what has to be visible. */
+  it('names the gap when the credential was minted but no channel carried it', async () => {
+    const ctx = makeService({ application: candidate() });
+    (ctx.assayerService as any).issueAndDeliverAppAccess = jest.fn(async () => ({ channels: [] }));
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(result.gaps).toEqual([expect.stringContaining('app access')]);
+    // …and the desk reads it on the approval audit row, where the other gaps are.
+    const approved = (ctx.auditService.recordEventSafe as jest.Mock).mock.calls
+      .map(([e]: [Row]) => e)
+      .find((e: Row) => e.eventType === 'ASSAYER_APPLICATION_APPROVED');
+    expect(String(approved!.remarks)).toMatch(/app access/);
+  });
+
+  /**
+   * The letter sends them to the app, not to a web login they have no surface on and no password
+   * for. `loginUrl` is gone from this template's data entirely: leaving it would put the old
+   * button back the moment an administrator's published version still referenced it.
+   */
+  it('points the approval letter at the app download and never at a sign-in', async () => {
+    const ctx = makeService({ application: candidate() });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    const approval = ctx.emailService.queue.mock.calls.find(([r]) => r.kind === 'APPLICATION_APPROVED');
+    const data = (approval![0].content as { data: Row }).data;
+    expect(data.appDownloadUrl).toMatch(/\/download\/app\.apk$/);
+    expect(data).not.toHaveProperty('loginUrl');
+
+    const letter = ctx.mailbox.send.mock.calls.at(-1)![0];
+    expect(letter.text).toContain('/download/app.apk');
+    expect(letter.text).not.toMatch(/sign in to fapoms/i);
+  });
+
+  /** So the reader knows a second message is coming and does not go hunting for a password. */
+  it('tells them their sign-in details arrive separately', async () => {
+    const ctx = makeService({ application: candidate() });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    const letter = ctx.mailbox.send.mock.calls.at(-1)![0];
+    expect(letter.text).toMatch(/separate message/i);
+  });
+
+  /** No address is not a reason to withhold the credential: the SMS leg still carries it. */
+  it('still issues a credential for a candidate with no email address', async () => {
+    const ctx = makeService({ application: candidate({ email: null }) });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect((ctx.assayerService as any).issueAndDeliverAppAccess).toHaveBeenCalledTimes(1);
+    expect(ctx.emailService.queue.mock.calls.filter(([r]) => r.kind === 'APPLICATION_APPROVED')).toHaveLength(0);
+  });
+});
+
+/**
  * One registration, whoever is typing.
  *
  * These cover the thing the pipeline previously could not do: carry the WHOLE person. A candidate
@@ -1293,11 +2028,24 @@ describe('the application carries the whole person', () => {
  * — for the first critical field there is.
  */
 describe('the candidate owns their own phone number', () => {
-  const withPending = (phone: string, code: string) => ({
+  const withPending = (phone: string, code: string, channel: 'SMS' | 'EMAIL' = 'SMS') => ({
     [`regotp:code:${TOKEN_HASH}`]: {
       hash: require('crypto').createHash('sha256').update(code).digest('hex'),
       phone,
+      channel,
     },
+  });
+
+  /**
+   * An EMAILED code proves the mailbox, not the number typed beside it — so HR's number is not
+   * replaced by it "as verified", and the audit line says the mobile is unproven.
+   */
+  it('does not overwrite the number on file when the code went by email', async () => {
+    const ctx = makeService({ cache: withPending('9812345678', '123456', 'EMAIL') });
+    const result = await ctx.service.verifyOtp(RAW_TOKEN, '9812345678', '123456');
+    expect(result.channel).toBe('EMAIL');
+    expect(ctx.application!.mobile).toBe('9822014455');
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'REGISTRATION_EMAIL_VERIFIED' }));
   });
 
   it('writes the confirmed number onto the application', async () => {
@@ -1330,9 +2078,9 @@ describe('the candidate owns their own phone number', () => {
     expect(ctx.application!.mobile).toBe('9822014455');
   });
 
-  it('lets them correct it before verifying, too', async () => {
-    const ctx = makeService();
-    await ctx.service.updateDraft(RAW_TOKEN, { mobile: '9800000001' } as never);
+  it('lets them correct it before verifying, too (a browser that has unlocked the link)', async () => {
+    const ctx = makeService({ cache: unlocked() });
+    await ctx.service.updateDraft(RAW_TOKEN, { mobile: '9800000001' } as never, SESSION_KEY);
     expect(ctx.applications.save.mock.calls.at(-1)![0].mobile).toBe('9800000001');
   });
 
@@ -1353,9 +2101,9 @@ describe('the candidate owns their own phone number', () => {
   });
 
   it('rejects updateDraft when mobile is changed to a conflicting number', async () => {
-    const ctx = makeService();
+    const ctx = makeService({ cache: unlocked() });
     ctx.assayers.findOne.mockResolvedValueOnce({ assayerCode: 'AS002', displayName: 'Another Assayer' } as never);
-    await expect(ctx.service.updateDraft(RAW_TOKEN, { mobile: '9899999999' } as never)).rejects.toThrow(
+    await expect(ctx.service.updateDraft(RAW_TOKEN, { mobile: '9899999999' } as never, SESSION_KEY)).rejects.toThrow(
       /already in use by somebody on our roster/i,
     );
   });
@@ -1515,11 +2263,11 @@ describe('the desk completes the person as it approves', () => {
     (ctx.assayerService as any).update = jest.fn(async () => ({}));
 
     await ctx.service.approve('app-1', 'hr-1', ['ADMIN'], 'org-1', {
-      terms: { joiningDate: '2026-10-01', maxDailyWorkload: 3 },
+      terms: { joiningDate: '2026-10-01', maxWeeklyWorkload: 12 },
     });
 
     expect((ctx.assayerService as any).update).toHaveBeenCalledWith(
-      'assayer-1', { joiningDate: '2026-10-01', maxDailyWorkload: 3 }, 'hr-1',
+      'assayer-1', { joiningDate: '2026-10-01', maxWeeklyWorkload: 12 }, 'hr-1',
     );
   });
 
@@ -1603,16 +2351,35 @@ describe('the desk completes the person as it approves', () => {
   it('gives the reviewer what the interviewer wrote', async () => {
     const ctx = makeService({ application: { ...ready(), interviewId: 'iv-1' } });
     const when = new Date('2026-09-02T10:00:00.000Z');
+    const paper = { storageKey: 'uploads/test.pdf', fileName: 'test.pdf' };
     ctx.interviews.findOne.mockResolvedValue({
-      mobile: '9822014455', outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
-      interviewedAt: when, interviewedByName: 'Meera Rao',
+      id: 'iv-1', mobile: '9822014455', outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
+      interviewedAt: when, interviewedByName: 'Meera Rao', attachments: [paper], previousInterviewId: null,
     } as never);
 
     const detail = await ctx.service.getApplication('app-1');
 
     expect(detail.interview).toEqual({
-      outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
+      id: 'iv-1', outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
       interviewedAt: when, interviewedByName: 'Meera Rao',
+      // The test papers the pass rested on, for the person deciding the application.
+      attachments: [paper], earlier: null,
+    });
+  });
+
+  /** Passed only when interviewed again: the reviewer sees the attempt that did not, papers and all. */
+  it('shows the earlier interview that did not pass, when they passed on a second one', async () => {
+    const ctx = makeService({ application: { ...ready(), interviewId: 'iv-2' } });
+    const first = new Date('2026-09-01T10:00:00.000Z');
+    const second = new Date('2026-09-20T10:00:00.000Z');
+    (ctx.interviews.findOne as jest.Mock).mockImplementation(async ({ where }: any) => (where.id === 'iv-2'
+      ? { id: 'iv-2', mobile: '9822014455', outcome: 'PASS', notes: null, interviewedAt: second, interviewedByName: 'Meera Rao', attachments: [], previousInterviewId: 'iv-1' }
+      : { id: 'iv-1', mobile: '9822014455', outcome: 'FAIL', notes: 'Unsure on the acid test.', interviewedAt: first, interviewedByName: 'Meera Rao', attachments: [{ storageKey: 'k', fileName: 'first.pdf' }] }) as never);
+
+    const detail = await ctx.service.getApplication('app-1');
+
+    expect(detail.interview?.earlier).toMatchObject({
+      id: 'iv-1', outcome: 'FAIL', notes: 'Unsure on the acid test.', attachments: [{ fileName: 'first.pdf' }],
     });
   });
 
@@ -1682,7 +2449,8 @@ describe('approving is safe to repeat', () => {
     finishCreating();
     await expect(first).resolves.toMatchObject({ assayer: { id: 'assayer-1' } });
     expect(ctx.assayerService.create).toHaveBeenCalledTimes(1);
-    expect(ctx.rosterRecords.attachFile).toHaveBeenCalledTimes(1);
+    // Once per scan the application holds (the photograph and the passbook) — filed once, not twice.
+    expect(ctx.rosterRecords.attachFile).toHaveBeenCalledTimes(2);
     expect(ctx.emailService.queue).toHaveBeenCalledTimes(1);
   });
 
@@ -1980,9 +2748,17 @@ describe('the desk filling in an application', () => {
 
     expect(saved.fullName).toBe('Ramesh Kulkarni');
     expect(saved.city).toBe('Pune');
-    expect((saved.extendedProfile as any).fields).toMatchObject({
-      panNumber: 'ABCDE1234F', bankName: 'State Bank',
-    });
+    // Answered with the same masked view GET /hr/applications/:id gives — never the number, and
+    // never the sealed ciphertext ("enc:v1:…") that used to land in the PAN box.
+    const fields = (saved.extendedProfile as any).fields;
+    expect(fields).toMatchObject({ bankName: 'State Bank' });
+    expect(fields.panNumber).toMatch(/234F$/);
+    expect(fields.panNumber).not.toContain('ABCDE1234F');
+    expect(fields.panNumber.startsWith('enc:')).toBe(false);
+    expect(saved).not.toHaveProperty('tokenHash');
+    // …while what went to the database is the real value, not the mask the desk was shown.
+    const stored = ctx.applications.save.mock.calls.at(-1)![0];
+    expect((stored.extendedProfile as any).fields.panNumber).not.toMatch(/^\*/);
   });
 
   it('refuses a field registration may not set, rather than storing it quietly', async () => {
@@ -1992,7 +2768,7 @@ describe('the desk filling in an application', () => {
     const saved = await ctx.service.updateStaffDraft('app-1', {
       record: { panNumber: 'ABCDE1234F', lifecycleStatus: 'ACTIVE', qualificationScore: 100 },
     }, 'hr-maker');
-    expect((saved.extendedProfile as any).fields).toEqual({ panNumber: 'ABCDE1234F' });
+    expect(Object.keys((saved.extendedProfile as any).fields)).toEqual(['panNumber']);
   });
 
   it('checks a PAN at the moment it is typed, the same as the candidate’s form does', async () => {
@@ -2010,13 +2786,15 @@ describe('the desk filling in an application', () => {
     const ctx = makeService({ application: draft() });
     const saved = await ctx.service.updateStaffDraft('app-1', {
       commercial: { baseFee: 900, currency: 'INR' },
-      references: [{ fullName: 'A Referee', phone: '9811100022' }],
+      references: [{ fullName: 'A Referee', phone: '9811100022', email: 'Ref@Example.com' }],
       empanelments: [{ clientId: 'client-1', status: 'EMPANELLED' }],
     }, 'hr-maker');
 
     const profile = saved.extendedProfile as any;
     expect(profile.commercial).toMatchObject({ baseFee: 900 });
-    expect(profile.references).toHaveLength(1);
+    expect(profile.references).toEqual([
+      { fullName: 'A Referee', phone: '9811100022', email: 'ref@example.com' },
+    ]);
     expect(profile.empanelments[0].clientId).toBe('client-1');
   });
 
@@ -2081,7 +2859,10 @@ describe('the desk filling in an application', () => {
 describe('candidate lookups (pincode → address, IFSC → bank)', () => {
   // The directory answer is cached process-wide (it costs ~3.6s and pincodes do not move), so a
   // suite that stubs `fetch` has to start from an empty one or it tests the previous test's answer.
-  beforeEach(() => __resetPincodeCache());
+  beforeEach(() => {
+    __resetPincodeCache();
+    clearIfscCache();
+  });
 
   /**
    * The directory is read through the invite token, not a session — so the token
@@ -2569,11 +3350,11 @@ describe('the identity numbers a candidate types', () => {
   });
 
   it('gives the candidate their own numbers back, so a resumed form still shows them', async () => {
-    const ctx = makeService({ cache: verified() });
-    await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never);
+    const ctx = makeService({ cache: unlocked(verified()) });
+    await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never, SESSION_KEY);
     ctx.application!.extendedProfile = { fields: storedFields(ctx) };
 
-    const view = await ctx.service.hydrate(RAW_TOKEN);
+    const view = await ctx.service.hydrate(RAW_TOKEN, SESSION_KEY);
     expect((view.application.extendedProfile as any).fields.panNumber).toBe('ABCDE1234F');
   });
 
@@ -2582,8 +3363,8 @@ describe('the identity numbers a candidate types', () => {
    * same boxes the candidate is typing into.
    */
   it('answers a draft save with the number, not the ciphertext that was stored', async () => {
-    const ctx = makeService({ cache: verified() });
-    const saved = await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never);
+    const ctx = makeService({ cache: unlocked(verified()) });
+    const saved = await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never, SESSION_KEY);
 
     expect((saved.extendedProfile as any).fields.panNumber).toBe('ABCDE1234F');
     // ...while what actually went to the database stayed sealed.
@@ -2691,6 +3472,10 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
     status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH,
     tokenExpiresAt: new Date(Date.now() + 3_600_000), tokenConsumedAt: null,
     employmentCategory: 'FREELANCER', consentAcceptedAt: new Date(), organizationId: 'org-1',
+    // Submit demands somebody ringable; these tests are about the checks after that gate.
+    extendedProfile: {
+      references: [{ fullName: 'Meera Rao', phone: '9822014455' }],
+    },
     ...over,
   });
 
@@ -2708,7 +3493,7 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
 
   it('reads the date of birth out of the form answers too, not only the column', async () => {
     const ctx = makeService({
-      application: ready({ extendedProfile: { fields: { dateOfBirth: seventeenYearsAgo() } } }),
+      application: ready({ extendedProfile: { fields: { dateOfBirth: seventeenYearsAgo() }, references: [{ fullName: 'Meera Rao', phone: '9822014455' }], } }),
       cache: verified(),
     });
     await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/at least 18/);
@@ -2723,7 +3508,7 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
 
   it('refuses a PAN that already belongs to somebody on the roster, naming nobody', async () => {
     const ctx = makeService({
-      application: ready({ dateOfBirth: '1990-06-15', extendedProfile: { fields: { panNumber: 'ABCDE1234F' } } }),
+      application: ready({ dateOfBirth: '1990-06-15', extendedProfile: { fields: { panNumber: 'ABCDE1234F' }, references: [{ fullName: 'Meera Rao', phone: '9822014455' }], } }),
       cache: verified(),
     });
     // Only the PAN lookup finds anybody: a blanket match would trip the phone check first and
@@ -2742,7 +3527,7 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
       application: ready({
         dateOfBirth: '1990-06-15',
         promotedAssayerId: 'assayer-from-this-application',
-        extendedProfile: { fields: { panNumber: 'ABCDE1234F' } },
+        extendedProfile: { fields: { panNumber: 'ABCDE1234F' }, references: [{ fullName: 'Meera Rao', phone: '9822014455' }], },
       }),
       cache: verified(),
     });
@@ -2760,5 +3545,355 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
     ));
 
     await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/email address is already registered/);
+  });
+});
+
+/**
+ * WHO REFERRED THEM — the source reference (owner, 2026-09-23). HR records it at intake; the
+ * candidate may fill it on their form when HR left it blank; approval keeps it on the person.
+ */
+describe('the source referral on an application', () => {
+  const ravi = { type: 'ASSAYER', name: 'Ravi Kumar', mobile: '9876543210', email: 'ravi@example.in' };
+  const draftWith = (sourceReferral?: Record<string, unknown>) => ({
+    id: 'app-1', mobile: '9822014455', fullName: 'Ramesh Kulkarni', status: ApplicationStatus.DRAFT,
+    organizationId: 'org-1', tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+    consentAcceptedAt: new Date(), consentVersion: CURRENT_CONSENT_NOTICE.version,
+    extendedProfile: sourceReferral ? { sourceReferral } : null,
+  });
+
+  it('lets the candidate name who referred them when HR has not', async () => {
+    const { service, application } = makeService({ application: draftWith() as never, cache: verified() });
+    await service.updateDraft(RAW_TOKEN, { sourceReferral: ravi } as never);
+    expect((application!.extendedProfile as Row).sourceReferral).toEqual({ ...ravi, recordedBy: 'CANDIDATE' });
+  });
+
+  it('does not let the candidate change what HR recorded', async () => {
+    const { service, application } = makeService({ application: draftWith({ ...ravi, recordedBy: 'HR' }) as never, cache: verified() });
+    await expect(service.updateDraft(RAW_TOKEN, { sourceReferral: { ...ravi, name: 'Someone Else' } } as never))
+      .rejects.toThrow(/HR has recorded who referred you/);
+    expect(((application!.extendedProfile as Row).sourceReferral as Row).name).toBe('Ravi Kumar');
+  });
+
+  it('refuses an entry nobody could reach, with the shared rule\'s words', async () => {
+    const { service } = makeService({ application: draftWith() as never, cache: verified() });
+    await expect(service.updateDraft(RAW_TOKEN, { sourceReferral: { ...ravi, mobile: '', email: '' } } as never))
+      .rejects.toThrow(/mobile or an email for Ravi Kumar/);
+  });
+
+  it('lets the desk record or correct it, as HR', async () => {
+    const ctx = makeService({ application: draftWith({ ...ravi, recordedBy: 'CANDIDATE' }) as never });
+    const saved = await ctx.service.updateStaffDraft('app-1', { sourceReferral: { ...ravi, type: 'STAFF' } } as never, 'hr-1');
+    expect((saved.extendedProfile as Row).sourceReferral).toMatchObject({ type: 'STAFF', recordedBy: 'HR' });
+  });
+
+  it('carries HR\'s intake entry onto the application an interview opens', async () => {
+    const { service, applications } = makeService();
+    const referral = { ...ravi, recordedBy: 'HR' } as never;
+    await service.createInviteRecord({ mobile: '9822014455', fullName: 'Ramesh Kulkarni', sourceReferral: referral });
+    expect(applications.create).toHaveBeenCalledWith(expect.objectContaining({ extendedProfile: { sourceReferral: referral } }));
+  });
+
+  it('keeps it on the person at approval, as whoever recorded it', async () => {
+    const ctx = makeService({
+      application: {
+        ...draftWith({ ...ravi, recordedBy: 'CANDIDATE' }),
+        status: ApplicationStatus.PENDING_VALIDATION, email: 'c@example.com', state: 'Maharashtra', city: 'Pune',
+        employmentCategory: EmploymentCategory.PROPRIETOR,
+      } as never,
+    });
+    await ctx.service.approve('app-1', 'user-1', ['ADMIN']);
+    expect(ctx.assayerService.setSourceReferral).toHaveBeenCalledWith(
+      'assayer-1', expect.objectContaining({ name: 'Ravi Kumar' }), 'user-1', 'CANDIDATE',
+    );
+  });
+});
+
+/**
+ * THE "REPLACE" BUTTON REPLACES, AND A WRONG FILE CAN BE TAKEN OFF.
+ *
+ * Both forms offered "Replace" on an attached scan, and the server appended whatever it was sent:
+ * a candidate fixing a blurred PAN card left the blurred one on the application too, and HR read
+ * "(2 files)" with no way to know which was meant. Nor could the candidate remove a wrong file at
+ * all — only HR could have, and HR could not either.
+ */
+describe('a candidate correcting the files on a requirement', () => {
+  const scan = { originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 10 };
+  const rowWith = (filePaths: string[], extra: Row = {}) => ({
+    id: 'doc-1', applicationId: 'app-1', requirement: OnboardingDocument.PAN_CARD, filePaths,
+    reviewStatus: 'PENDING', rejectionReason: null, rejectionNote: null, ...extra,
+  });
+  const lastSaved = (ctx: ReturnType<typeof makeService>) =>
+    ctx.applicationDocuments.save.mock.calls[ctx.applicationDocuments.save.mock.calls.length - 1][0] as Row;
+  const auditTypes = (ctx: ReturnType<typeof makeService>) =>
+    (ctx.auditService.recordEventSafe.mock.calls as unknown as Array<[Row]>).map(([e]) => e.eventType);
+
+  describe('replacing', () => {
+    it('puts the new file in place of every earlier one, and deletes those from storage', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/blurry.png', 'uploads/other.png']));
+
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      expect(row.filePaths).toEqual(['uploads/scan.png']);
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('uploads/blurry.png');
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('uploads/other.png');
+      expect(ctx.storage.deleteFile).not.toHaveBeenCalledWith('uploads/scan.png');
+      expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_REPLACED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: 'app-1',
+        metadata: expect.objectContaining({ requirement: OnboardingDocument.PAN_CARD, filesReplaced: 2 }),
+      }));
+    });
+
+    it('deletes the displaced files only after the row stops pointing at them', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/blurry.png']));
+      const order: string[] = [];
+      ctx.applicationDocuments.save.mockImplementation(async (v: Row) => { order.push(`save:${v.filePaths.join(',')}`); return { ...v, id: 'doc-1' }; });
+      ctx.storage.deleteFile.mockImplementation(async (...args: unknown[]) => { order.push(`delete:${String(args[0])}`); });
+
+      await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      expect(order.indexOf('save:uploads/scan.png')).toBeLessThan(order.indexOf('delete:uploads/blurry.png'));
+    });
+
+    it('still succeeds when storage cannot delete the old file — the orphan sweep has it', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/blurry.png']));
+      ctx.storage.deleteFile.mockRejectedValueOnce(new Error('bucket unreachable') as never);
+
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      expect(row.filePaths).toEqual(['uploads/scan.png']);
+      expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_REPLACED',
+        metadata: expect.objectContaining({ storageDeleteFailures: 1 }),
+      }));
+    });
+
+    it('without the flag still appends — the "add a page" case — and deletes nothing', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/front.png']));
+
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan);
+
+      expect(row.filePaths).toEqual(['uploads/front.png', 'uploads/scan.png']);
+      expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      expect(auditTypes(ctx)).not.toContain('ASSAYER_APPLICATION_DOCUMENT_REPLACED');
+    });
+
+    it('on a requirement with nothing on it yet is simply the first file, with nothing to audit as replaced', async () => {
+      const ctx = makeService();
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+      expect(row.filePaths).toEqual(['uploads/scan.png']);
+      expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      expect(auditTypes(ctx)).not.toContain('ASSAYER_APPLICATION_DOCUMENT_REPLACED');
+    });
+
+    it('answers a send-back the way a fresh upload does: back to pending, the ask dropped', async () => {
+      const ctx = makeService({
+        application: {
+          ...baseApplication(),
+          status: ApplicationStatus.AWAITING_INFO,
+          infoRequests: [{ kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'Retake.' }],
+        },
+      });
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['uploads/blurry.png'], { reviewStatus: 'NEEDS_RESUBMIT', rejectionReason: 'ILLEGIBLE', rejectionNote: 'Blurred' }),
+      );
+
+      await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      const saved = lastSaved(ctx);
+      expect(saved.filePaths).toEqual(['uploads/scan.png']);
+      expect(saved.reviewStatus).toBe('PENDING');
+      expect(saved.rejectionReason).toBeNull();
+      expect(saved.rejectionNote).toBeNull();
+    });
+
+    it('sends a document HR had approved back to pending — the new file is one HR has not seen', async () => {
+      const ctx = makeService({ application: { ...baseApplication(), status: ApplicationStatus.AWAITING_INFO } });
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['uploads/approved.png'], { reviewStatus: 'APPROVED', reviewedBy: 'hr-1', reviewedAt: new Date() }),
+      );
+
+      await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      const saved = lastSaved(ctx);
+      expect(saved.filePaths).toEqual(['uploads/scan.png']);
+      expect(saved.reviewStatus).toBe('PENDING');
+      expect(saved.reviewedBy).toBeNull();
+    });
+
+    it('is refused once the application is with HR, and without consent — the upload gates', async () => {
+      for (const over of [
+        { status: ApplicationStatus.PENDING_VALIDATION },
+        { consentAcceptedAt: null },
+        { consentWithdrawnAt: new Date() },
+      ]) {
+        const ctx = makeService({ application: { ...baseApplication(), ...over } });
+        (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValue(rowWith(['uploads/blurry.png']));
+        await expect(ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true }))
+          .rejects.toBeInstanceOf(BadRequestException);
+        expect(ctx.storage.saveFile).not.toHaveBeenCalled();
+        expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  describe('removing one file', () => {
+    it('takes that file off, keeps the rest in order, deletes it from storage and audits it', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['k0', 'k1', 'k2']));
+
+      const row = await ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 1);
+
+      expect(row.filePaths).toEqual(['k0', 'k2']);
+      expect(row.requirement).toBe(OnboardingDocument.PAN_CARD);
+      expect(ctx.storage.deleteFile).toHaveBeenCalledTimes(1);
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('k1');
+      expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_REMOVED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: 'app-1',
+        metadata: expect.objectContaining({ requirement: OnboardingDocument.PAN_CARD, index: 1, filesRemaining: 2 }),
+      }));
+    });
+
+    it('answers an emptied requirement as a row with no files, keeping HR\'s send-back on it', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['k0'], { reviewStatus: 'NEEDS_RESUBMIT', rejectionReason: 'ILLEGIBLE' }),
+      );
+
+      const row = await ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0);
+
+      expect(row.filePaths).toEqual([]);
+      expect(row.requirement).toBe(OnboardingDocument.PAN_CARD);
+      // Taking the wrong file off is not answering the send-back.
+      expect(row.reviewStatus).toBe('NEEDS_RESUBMIT');
+      expect(ctx.applicationDocuments.remove).not.toHaveBeenCalled();
+    });
+
+    it('withdraws an approval when a file is taken off — it no longer describes what is attached', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['k0', 'k1'], { reviewStatus: 'APPROVED', reviewedBy: 'hr-1', reviewedAt: new Date() }),
+      );
+
+      const row = await ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0);
+
+      expect(row.filePaths).toEqual(['k1']);
+      expect(row.reviewStatus).toBe('PENDING');
+      expect(row.reviewedBy).toBeNull();
+    });
+
+    it('404s an index past either end, and a requirement with nothing attached', async () => {
+      for (const index of [-1, 3, 99, 1.5]) {
+        const ctx = makeService();
+        (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['k0', 'k1', 'k2']));
+        await expect(ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, index))
+          .rejects.toBeInstanceOf(NotFoundException);
+        expect(ctx.applicationDocuments.save).not.toHaveBeenCalled();
+        expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      }
+      const none = makeService();
+      await expect(none.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0))
+        .rejects.toBeInstanceOf(NotFoundException);
+      const unknown = makeService();
+      await expect(unknown.service.removeDocumentFile(RAW_TOKEN, 'NOT_A_DOCUMENT' as OnboardingDocument, 0))
+        .rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('is refused on a submitted application, without consent, after withdrawal, and on a dead link', async () => {
+      for (const over of [
+        { status: ApplicationStatus.PENDING_VALIDATION },
+        { status: ApplicationStatus.APPROVED },
+        { consentAcceptedAt: null },
+        { consentWithdrawnAt: new Date() },
+        { tokenExpiresAt: new Date(Date.now() - 1000) },
+      ]) {
+        const ctx = makeService({ application: { ...baseApplication(), ...over } });
+        (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValue(rowWith(['k0']));
+        await expect(ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0))
+          .rejects.toBeInstanceOf(BadRequestException);
+        expect(ctx.applicationDocuments.save).not.toHaveBeenCalled();
+        expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+        expect(auditTypes(ctx)).not.toContain('ASSAYER_APPLICATION_DOCUMENT_REMOVED');
+      }
+    });
+
+    it('is allowed again when HR sent the application back for more information', async () => {
+      const ctx = makeService({ application: { ...baseApplication(), status: ApplicationStatus.AWAITING_INFO } });
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['k0', 'k1']));
+      await expect(ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0))
+        .resolves.toEqual(expect.objectContaining({ filePaths: ['k1'] }));
+    });
+  });
+});
+
+/**
+ * Both forms refuse to submit without the ID photograph; the server did not, so an application
+ * with no face on it reached HR and was refused only at approval — the ID card cannot be issued
+ * without one. The server now says so at submit, in the passbook refusal's words.
+ */
+describe('submitting without a photograph', () => {
+  const ready = () => ({
+    id: 'app-1', mobile: '9822014455', email: 'c@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH,
+    tokenExpiresAt: new Date(Date.now() + 3_600_000),
+    employmentCategory: EmploymentCategory.FREELANCER, consentAcceptedAt: new Date(),
+    extendedProfile: { references: [{ fullName: 'Meera Rao', phone: '9822014455', relationship: 'Former manager' }] },
+  });
+
+  it('is refused, whether there is no photo row or an emptied one', async () => {
+    for (const photo of [[], [{ requirement: OnboardingDocument.PHOTOGRAPH, filePaths: [] }]]) {
+      const ctx = makeService({ application: ready(), cache: verified() });
+      (ctx.applicationDocuments.find as jest.Mock).mockResolvedValue([
+        { requirement: OnboardingDocument.BANK_PASSBOOK, filePaths: ['uploads/passbook.jpg'] },
+        ...photo,
+      ]);
+      await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/Upload Photograph before submitting/);
+      expect(ctx.application!.status).toBe(ApplicationStatus.DRAFT);
+    }
+  });
+
+  it('goes through with one', async () => {
+    const ctx = makeService({ application: ready(), cache: verified() });
+    const saved = await ctx.service.submit(RAW_TOKEN);
+    expect(saved.status).toBe(ApplicationStatus.PENDING_VALIDATION);
+  });
+});
+
+/**
+ * THE HR REVIEW READS STAY IN THE CALLER'S ORGANISATION, AND CARRY NO LINK SECRET.
+ *
+ * `getApplication` found a candidate by id alone while the queue beside it was tenant-scoped, so an
+ * id from another organisation opened that organisation's file. And both handed the invite link's
+ * hash and expiry to every desk session that read the queue.
+ */
+describe('HR review reads', () => {
+  const ORG = '11111111-1111-4111-8111-111111111111';
+  const asOps = <T>(fn: () => T): T =>
+    runWithRequestContext({ method: 'GET', route: '/hr/applications', organizationId: ORG, roleNames: ['OPERATIONS'] } as any, fn);
+
+  it('looks a single application up inside the caller’s organisation', async () => {
+    const ctx = makeService();
+    await asOps(() => ctx.service.getApplication('app-1'));
+    expect(ctx.applications.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 'app-1', organizationId: ORG }) }),
+    );
+  });
+
+  it('never returns the invite token hash or its expiry — list or detail', async () => {
+    const ctx = makeService();
+    const list = await asOps(() => ctx.service.listApplications());
+    const detail = await asOps(() => ctx.service.getApplication('app-1'));
+    for (const row of [...list, detail.application]) {
+      expect(row).not.toHaveProperty('tokenHash');
+      expect(row).not.toHaveProperty('tokenExpiresAt');
+    }
+    expect(JSON.stringify(list)).not.toContain(TOKEN_HASH);
   });
 });

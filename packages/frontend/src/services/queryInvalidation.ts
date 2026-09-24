@@ -31,6 +31,8 @@ export async function invalidateLifecycleMutation(
     queryClient.invalidateQueries({ queryKey: ['assayer-assignments', assayerId] }),
     queryClient.invalidateQueries({ queryKey: ['hr', 'deployment'] }),
     queryClient.invalidateQueries({ queryKey: ['hr', 'readiness', assayerId] }),
+    // The map's pin roster carries each person's stage — the colour and the stage filter read it.
+    queryClient.invalidateQueries({ queryKey: queryKeys.assayers.all }),
   ]);
 }
 

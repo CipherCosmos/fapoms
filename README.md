@@ -228,13 +228,24 @@ reads needs a new build to reach field devices.
 | Document | Read it when |
 |---|---|
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Putting the system on a machine. **Current.** |
+| [deploy/aws/README.md](deploy/aws/README.md) | Deploying to AWS. |
+| [docs/go-live-checklist.md](docs/go-live-checklist.md) | Certifying a deployment before real use (`scripts/acceptance/verify-deployment.mjs` runs its §3). |
+| [scripts/acceptance/README.md](scripts/acceptance/README.md) | Checking a running deployment end to end with the acceptance probes. |
 | [docs/business-spec.md](docs/business-spec.md) | Learning the domain: the audit process end to end, entity by entity. |
-| [docs/staging-verification-runbook.md](docs/staging-verification-runbook.md) | Verifying a release against a live stack (the things unit tests cannot reach). |
+| [docs/appraiser-recruitment-spec.md](docs/appraiser-recruitment-spec.md) | The recruitment requirements the hiring pipeline was built from. |
+| [docs/database-roles.md](docs/database-roles.md) | Who the app is when it talks to PostgreSQL; migrations and hardening. |
+| [docs/env-vars.md](docs/env-vars.md) | Every environment variable the code reads. |
+| [docs/SECURITY-CONTROLS.md](docs/SECURITY-CONTROLS.md) | `security-controls.spec.ts` failed, or you are touching a security control. |
+| [docs/outbox-recovery-runbook.md](docs/outbox-recovery-runbook.md) | Completed work stopped turning into payables. |
+| [docs/service-logs.md](docs/service-logs.md) | Reading container logs from the app. |
+| [docs/incident-2026-09-09-audit-truncate.md](docs/incident-2026-09-09-audit-truncate.md) | Why probes never touch the audit tables (the guards cite it). |
 | [docs/load-test-and-scale.md](docs/load-test-and-scale.md) | Proving the capacity ceiling; scaling past one instance. |
-| [docs/adr-006](docs/adr-006-audit-lifecycle-retire.md), [adr-007](docs/adr-007-unify-assessment-into-project-branch.md) | Understanding why a piece of the model looks the way it does. ADR-007 is superseded and marked so. |
-| [docs/architecture-assessment.md](docs/architecture-assessment.md) | Historical audit (Aug 2026). Carries a banner: its headline blockers are fixed. Check any specific claim against source. |
-| [docs/integration-audit-handoff.md](docs/integration-audit-handoff.md) | Open defects, triaged. Three items remain. |
+| [packages/mobile/BUILD-APK.md](packages/mobile/BUILD-APK.md) | Building and publishing the field app. |
+| `deploy/maps/` (see `fetch-map-data.sh`) | The India map: its data, borders and tile server. |
 | [CLAUDE.md](CLAUDE.md) | Conventions for AI coding agents working in this repo. |
+
+Dated reports (certifications, acceptance runs, audits, the discovery report) were removed on
+2026-09-24 once their findings were fixed or superseded; they remain in git history.
 
 ---
 

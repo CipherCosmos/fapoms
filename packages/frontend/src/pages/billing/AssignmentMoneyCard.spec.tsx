@@ -21,6 +21,8 @@ import { AssignmentStatus, BillingState } from '@fapoms/shared';
 // that ts-jest cannot parse. Stubbing `services/api` here cuts that chain everywhere it's reached
 // from — nothing in this suite calls the real API.
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
+// Reached through PayoutsTab's Jobs-tray lookup (useBackgroundJob); the real module reads Vite's import.meta.
+jest.mock('../../services/socket', () => ({ connectSocket: () => null, subscribeToConnection: () => () => undefined }));
 jest.mock('../../services/billing', () => {
   const actual = jest.requireActual('../../services/billing');
   return {

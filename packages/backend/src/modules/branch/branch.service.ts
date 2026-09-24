@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { BranchEntity } from './branch.entity';
@@ -15,6 +17,14 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocomplete.helper';
 import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
+import { AssayerService } from '../assayer/assayer.service';
+import {
+  announceCancelledAssignments,
+  cancelOpenAssignmentsForClosure,
+  ClosureCancelledAssignment,
+  onSiteRefusalMessage,
+} from '../assignment/closure-cancellation';
+import { DayTravelService } from '../assignment/assignment-day-travel';
 
 /** A header reduced to letters and digits, lower-cased — so "STATE", "State" and "state" are one. */
 const normHeader = (s: unknown): string => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -217,6 +227,16 @@ export class BranchService {
     private readonly geoPrecision: GeoPrecisionService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    /**
+     * Only for telling an assayer their job was cancelled because this branch closed (`remove`).
+     * Optional so the many specs that build this service by hand keep building.
+     */
+    @Optional() private readonly notificationDispatch?: NotificationDispatchService,
+    @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
+    /** Turning location sharing off for an assayer whose last job this closure cancelled. */
+    @Optional() private readonly assayerService?: AssayerService,
+    /** Re-deciding the day's travel when a cancelled job was the one carrying it (E2). */
+    @Optional() private readonly dayTravel?: DayTravelService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -621,106 +641,90 @@ export class BranchService {
   async remove(id: string, userId: string): Promise<void> {
     const branch = await this.loadForWrite(id);
 
-    // State-specific assignment integrity checks
-    const assignments: Array<{
-      id: string;
-      assignment_number: string;
-      status: string;
-      project_branch_id: string;
-    }> = await this.dataSource.query(
-      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id
-       FROM assignments a
-       INNER JOIN project_branches pb ON a.project_branch_id = pb.id
-       WHERE pb.branch_id = $1 AND a.is_active = true`,
-      [id],
-    ).catch(() => []);
-
-    const inProgress = assignments.find(
-      (a) => a.status === AssignmentStatus.CHECKED_IN || a.status === AssignmentStatus.IN_PROGRESS,
-    );
-    if (inProgress) {
-      throw new ConflictException(
-        `Cannot deactivate branch "${branch.name}": Assignment ${inProgress.assignment_number} is currently ${inProgress.status}. Field audit is actively in progress on site. Operational intervention required before deactivating this branch.`,
-      );
-    }
-
-    // Safely cancel pending or accepted assignments transactionally with outbox/audit events
-    const cancellable = assignments.filter(
-      (a) => a.status === AssignmentStatus.PENDING || a.status === AssignmentStatus.ACCEPTED,
-    );
-    for (const a of cancellable) {
-      await this.dataSource.query(
-        `UPDATE assignments
-         SET status = 'CANCELLED',
-             cancel_reason = 'Branch deactivated by operations',
-             updated_by = $1,
-             entity_version = COALESCE(entity_version, 1) + 1,
-             updated_at = NOW()
-         WHERE id = $2`,
-        [userId, a.id],
-      );
-      await this.auditService.recordEvent({
-        category: EventCategory.WORKFLOW,
-        eventType: 'ASSIGNMENT_CANCELLED',
-        entityType: 'ASSIGNMENT',
-        entityId: a.id,
-        previousState: a.status,
-        newState: AssignmentStatus.CANCELLED,
-        userId,
-        remarks: `Auto-cancelled due to deactivation of branch ${branch.name}`,
-      });
-      this.eventPublisher.publish('assignment:status-changed', {
-        eventType: 'assignment:status-changed',
-        assignmentId: a.id,
-        assignmentNumber: a.assignment_number,
-        previousState: a.status,
-        newState: AssignmentStatus.CANCELLED,
-        userId,
-      });
-    }
-
-    branch.isActive = false;
-    branch.updatedBy = userId;
-    await this.branchRepository.save(branch);
-
-    // Deactivate associated contacts
-    await this.dataSource.query(
-      `UPDATE branch_contacts SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    // Deactivate associated documents
-    await this.dataSource.query(
-      `UPDATE branch_documents SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    // Deactivate associated project branches
-    await this.dataSource.query(
-      `UPDATE project_branches SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
     /**
-     * And the assessments raised against it.
-     *
-     * An assessment is created alongside every project-branch link, so leaving them live is the
-     * same defect the project-branch line above already fixes: the branch disappears from the
-     * branch list while its work item stays in the validation and data-entry queues, pointing at
-     * a record nobody can open.
+     * One transaction for the whole closure: the open work under the branch is locked, the
+     * on-site refusal is decided on the locked rows, the PENDING/ACCEPTED jobs are cancelled (and
+     * only if they are still PENDING/ACCEPTED) with their calendar entries retired, and the
+     * branch and its dependants are deactivated. A refusal — or any failure — leaves all of it as
+     * it was. See `cancelOpenAssignmentsForClosure` for what used to go wrong.
      */
-    await this.dataSource.query(
-      `UPDATE assessments SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
+    const cancelled: ClosureCancelledAssignment[] = await this.dataSource.transaction(async (manager) => {
+      const rows = await cancelOpenAssignmentsForClosure(manager, {
+        scope: { branchId: id },
+        userId,
+        cancelReason: 'Branch deactivated by operations',
+        auditRemarks: `Auto-cancelled due to deactivation of branch ${branch.name}`,
+        onSiteRefusal: (_a, all) => new ConflictException(
+          onSiteRefusalMessage(`Cannot deactivate branch "${branch.name}"`, all),
+        ),
+        auditService: this.auditService,
+      });
 
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'BRANCH_DELETED',
-      entityType: 'BRANCH',
-      entityId: id,
+      branch.isActive = false;
+      branch.updatedBy = userId;
+      await manager.getRepository(BranchEntity).save(branch);
+
+      // Deactivate associated contacts
+      await manager.query(
+        `UPDATE branch_contacts SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      // Deactivate associated documents
+      await manager.query(
+        `UPDATE branch_documents SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      // Deactivate associated project branches
+      await manager.query(
+        `UPDATE project_branches SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      /**
+       * And the assessments raised against it.
+       *
+       * An assessment is created alongside every project-branch link, so leaving them live is the
+       * same defect the project-branch line above already fixes: the branch disappears from the
+       * branch list while its work item stays in the validation and data-entry queues, pointing at
+       * a record nobody can open.
+       */
+      await manager.query(
+        `UPDATE assessments SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      await this.auditService.recordEvent({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'BRANCH_DELETED',
+        entityType: 'BRANCH',
+        entityId: id,
+        userId,
+        remarks: `Soft deleted branch ${branch.name} and cascaded deactivation to contacts, documents, project branches, and assessments`,
+      }, { manager });
+
+      return rows;
+    });
+
+    // Committed. Now tell people — never about a closure that rolled back. The one announcer every
+    // bulk cancel shares (owner decision 2026-09-24): the assayer is told in words and their phone
+    // refreshes, the desk gets its copy, the status change is published, sharing ends with the
+    // assayer's last committed job, and the day's travel is re-decided.
+    await announceCancelledAssignments(cancelled, {
+      notificationDispatch: this.notificationDispatch,
+      eventPublisher: this.eventPublisher,
+      refreshPush: this.refreshPush,
+      disableLiveTrackingWhenWorkEnds: this.assayerService
+        ? (assayerId, uid) => this.assayerService!.disableLiveTrackingWhenWorkEnds(assayerId, uid)
+        : null,
+      dayTravel: this.dayTravel,
+    }, {
       userId,
-      remarks: `Soft deleted branch ${branch.name} and cascaded deactivation to contacts, documents, project branches, and assessments`,
+      reason: `Branch ${branch.name} was closed by operations`,
+      assayerNotice: 'closure',
+      because: 'the office has closed this branch',
+      travelReason: `branch ${branch.name} was closed`,
     });
   }
 
@@ -873,10 +877,9 @@ export class BranchService {
   // Excel Import (unchanged pattern)
   // -----------------------------------------------------------------------
   /**
-   * `importExcel` was removed. There is one branch-sheet importer now:
-   * `ProjectService.uploadBranchesFromExcel`, reached through
-   * `project/branch-import.controller.ts` for a client's branch master and through
-   * `POST /projects/:id/branches/upload` for a project.
+   * `importExcel` was removed. There is one branch-sheet importer now: the `BRANCH_IMPORT`
+   * background job (`project/branch-import/`), started from `POST /branches/import/:clientId` for a
+   * client's branch master and from `POST /projects/:id/branches/import` for a project.
    *
    * This one ran a geography check, a `findOne` and a geocode per row inside the HTTP request —
    * thousands of sequential round trips on the real 3,759-row client file, against a 300-second
@@ -980,16 +983,21 @@ export class BranchService {
     // rejecting a legitimate branch — a hard-coded map can't know every district.
     if (!cityEntity) {
       const live = await autocompleteIndia(city);
+      // Names are compared in one form on both sides: the lookup writes "Dadra and Nagar Haveli
+      // and Daman and Diu" where a bank writes "Dadra & Nagar Haveli and Daman & Diu", and an
+      // exact comparison refused real union-territory branches for spelling alone.
+      const wantState = samePlaceState(state);
+      const wantDistrict = samePlaceName(district);
       const found = live.some(
         (p) =>
           p.district &&
           p.state &&
-          p.district.toLowerCase() === district.toLowerCase() &&
-          p.state.toLowerCase() === state.toLowerCase(),
+          samePlaceName(p.district) === wantDistrict &&
+          samePlaceState(p.state) === wantState,
       );
       const stateLive = await autocompleteIndia(state);
       const stateExists = stateLive.some(
-        (p) => p.type === 'state' || p.state.toLowerCase() === state.toLowerCase(),
+        (p) => p.type === 'state' || (!!p.state && samePlaceState(p.state) === wantState),
       );
       if (!found && !stateExists) {
         throw new BadRequestException(
@@ -999,13 +1007,13 @@ export class BranchService {
     }
   }
 
-  async registerImportedBranch(dto: Partial<BranchEntity>, userId: string): Promise<BranchEntity> {
-    const branch = this.branchRepository.create({
-      ...dto,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    return this.branchRepository.save(branch);
+  /**
+   * The geography check an edit gets (`update` runs it when the state, district or city changes),
+   * for the branch import, which writes in bulk and asks it once per distinct place rather than
+   * once per row. Throws the same sentence `update` would.
+   */
+  async assertGeographyVerifiable(state: string, district?: string, city?: string): Promise<void> {
+    await this.validateGeography(state, district, city);
   }
 
   async findOrCreateZone(name: string, clientId: string, states: string[]): Promise<ZoneEntity> {
@@ -1021,4 +1029,19 @@ export class BranchService {
     }
     return zone;
   }
+}
+
+/** A place name in one comparable form: case, "&" versus "and", punctuation and spacing ignored. */
+export function samePlaceName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/** A state in one comparable form — its canonical name when it has one, else `samePlaceName`. */
+export function samePlaceState(state: string): string {
+  return samePlaceName(canonicalStateName(state) ?? state);
 }

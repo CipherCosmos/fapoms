@@ -51,8 +51,8 @@ export const MoneyPosition: React.FC<{ data: BillingOverview }> = ({ data }) => 
           icon={<Wallet size={16} />} tone="var(--warning)" label="Owed to assayers"
           value={money(owedToAssayers)}
           sub={splitKnown
-            ? `${money(payouts.approved)} ready to pay · ${money(payouts.inClaimReview!)} with assayers · ${money(payouts.unbilled!)} not billed`
-            : `${money(payouts.approved)} ready to pay · ${money(payouts.paid)} paid out`}
+            ? `${money(payouts.approved - (payouts.awaitingHod ?? 0))} ready to pay · ${payouts.awaitingHod ? `${money(payouts.awaitingHod)} with the HOD · ` : ''}${money(payouts.inClaimReview!)} with assayers · ${money(payouts.unbilled!)} not billed`
+            : `${money(payouts.approved - (payouts.awaitingHod ?? 0))} ready to pay · ${money(payouts.paid)} paid out`}
         />
         <Big
           icon={<TrendingUp size={16} />} tone={margin.margin >= 0 ? 'var(--success)' : 'var(--danger)'} label="Margin"
@@ -162,8 +162,8 @@ export const AttentionList: React.FC<{ items: BillingAttentionItem[] }> = ({ ite
   </div>
 );
 
-const Big: React.FC<{ icon: React.ReactNode; tone: string; label: string; value: string; sub?: string }> = ({ icon, tone, label, value, sub }) => (
-  <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
+const Big: React.FC<{ icon: React.ReactNode; tone: string; label: string; value: string; sub?: string; title?: string }> = ({ icon, tone, label, value, sub, title }) => (
+  <div title={title || `${label}: ${value}${sub ? ` (${sub})` : ''}`} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: tone, fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{icon}{label}</div>
     <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, marginTop: 6, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>{value}</div>
     {sub && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 4 }}>{sub}</div>}

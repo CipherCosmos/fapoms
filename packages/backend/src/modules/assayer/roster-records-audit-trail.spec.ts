@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { DocumentVerification, EmpanelmentStatus, BackgroundCheckVerdict } from '@fapoms/shared';
+import { DocumentVerification, EmpanelmentStatus, BackgroundCheckVerdict, AddressCheckMethod, AddressCheckResult, CibilBand, CourtCheckResult } from '@fapoms/shared';
 import { RosterRecordsService } from './roster-records.service';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -16,6 +16,12 @@ import { AuditService } from '../../core/audit/audit.service';
  * nothing to say who set it or when. Each of these tests fails on the pre-fix code with
  * "recordEventSafe was never called".
  */
+/** A background verification's three parts, all clean — what a clear result needs (2026-09-24). */
+const ALL_PARTS = {
+  addressCheckMethod: AddressCheckMethod.PHYSICAL, addressCheckResult: AddressCheckResult.VERIFIED,
+  cibilBand: CibilBand.GOOD, courtCheckResult: CourtCheckResult.NO_RECORD,
+} as const;
+
 describe('RosterRecordsService — audit trail for previously-silent writes', () => {
   let service: RosterRecordsService;
   let empanelments: any;
@@ -41,6 +47,8 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
       save: jest.fn((v: any) => Promise.resolve({ id: 'emp-1', ...v })),
     };
     checks = {
+      // No earlier check has claimed any report file — each test's report is the one being recorded.
+      find: jest.fn().mockResolvedValue([]),
       create: jest.fn((v: any) => ({ ...v })),
       save: jest.fn((v: any) => Promise.resolve({ id: 'chk-1', ...v })),
     };
@@ -104,14 +112,59 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
     expect(dto.previousState).toBe(EmpanelmentStatus.ACTIVE);
   });
 
+  /**
+   * The report first, then its result — a verdict with no report behind it is somebody's word, and
+   * "clear" is the word that admits a person to a vault. "Not checked" records that none was run.
+   */
+  it('refuses to record a result before the background verification report is uploaded', async () => {
+    onboarding.findOne.mockResolvedValue(null);
+    for (const verdict of [BackgroundCheckVerdict.CLEAR, BackgroundCheckVerdict.CRIMINAL_CASE]) {
+      await expect(service.recordBackgroundCheck('a-1', { verdict }, 'user-1'))
+        .rejects.toThrow(/Upload the background verification report before recording its result/);
+    }
+    // A row holding no scan is not a report either.
+    onboarding.findOne.mockResolvedValue({ requirement: 'BGV_REPORT', filePaths: [] });
+    await expect(service.recordBackgroundCheck('a-1', { verdict: BackgroundCheckVerdict.CLEAR }, 'user-1'))
+      .rejects.toThrow(/report/);
+    expect(audit.recordEventSafe).not.toHaveBeenCalled();
+  });
+
+  /** The agency that ran it — typed, or taken from the report it was uploaded with. */
+  it('takes the agency from the report when none is typed, and keeps a typed one', async () => {
+    onboarding.findOne.mockResolvedValue({ requirement: 'BGV_REPORT', filePaths: ['scans/bgv.pdf'], issuedBy: 'AuthBridge' });
+    const fromReport = await service.recordBackgroundCheck('a-1', { verdict: BackgroundCheckVerdict.CLEAR, ...ALL_PARTS }, 'user-1');
+    expect(fromReport.checkedByName).toBe('AuthBridge');
+
+    const typed = await service.recordBackgroundCheck('a-1', { verdict: BackgroundCheckVerdict.CLEAR, checkedByName: 'First Advantage', ...ALL_PARTS }, 'user-1');
+    expect(typed.checkedByName).toBe('First Advantage');
+  });
+
+  it('refuses a result with no agency anywhere — a report uploaded before the name was asked for', async () => {
+    onboarding.findOne.mockResolvedValue({ requirement: 'BGV_REPORT', filePaths: ['scans/bgv.pdf'], issuedBy: null });
+    await expect(service.recordBackgroundCheck('a-1', { verdict: BackgroundCheckVerdict.CLEAR }, 'user-1'))
+      .rejects.toThrow(/Name the agency/);
+  });
+
+  it('records "not checked" without a report', async () => {
+    onboarding.findOne.mockResolvedValue(null);
+    await expect(service.recordBackgroundCheck('a-1', { verdict: BackgroundCheckVerdict.NOT_CHECKED }, 'user-1'))
+      .resolves.toBeDefined();
+  });
+
   it('records BACKGROUND_CHECK_RECORDED with the verdict in metadata', async () => {
-    await service.recordBackgroundCheck('a-1', { verdict: BackgroundCheckVerdict.CLEAR }, 'user-1');
+    // The report is on file — a result may not be recorded without it.
+    onboarding.findOne.mockResolvedValueOnce({ requirement: 'BGV_REPORT', filePaths: ['scans/bgv.pdf'], issuedBy: 'AuthBridge' });
+    await service.recordBackgroundCheck('a-1', { verdict: BackgroundCheckVerdict.CLEAR, ...ALL_PARTS }, 'user-1');
 
     expect(audit.recordEventSafe).toHaveBeenCalledTimes(1);
     const dto = audit.recordEventSafe.mock.calls[0][0];
     expect(dto.eventType).toBe('BACKGROUND_CHECK_RECORDED');
     expect(dto.entityId).toBe('a-1');
     expect(dto.metadata.newValue.verdict).toBe(BackgroundCheckVerdict.CLEAR);
+    // The three parts are part of what was found, so the trail carries them too.
+    expect(dto.metadata.newValue).toMatchObject({
+      addressCheckMethod: 'PHYSICAL', addressCheckResult: 'VERIFIED', cibilBand: 'GOOD', courtCheckResult: 'NO_RECORD',
+    });
   });
 
   it('records IDENTITY_DOCUMENT_VERIFICATION_CHANGED with the previous and new verdicts', async () => {

@@ -44,6 +44,8 @@ describe('feedback attachment urls', () => {
       fileType: 'image/png',
       storageKey: 'uploads/1-shot.png',
       size: 908,
+      // The upload route's ownership grant must survive whitelisting, or every post is refused.
+      uploadToken: 'grant-from-the-upload-route',
     };
 
     it('keeps every field a real upload returns', async () => {

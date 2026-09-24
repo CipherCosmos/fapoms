@@ -26,6 +26,26 @@ export class AssayerReferenceEntity extends BaseEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   phone: string | null;
 
+  /** Where to write to them, when the candidate or the desk knows it. Optional, never blocking. */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  email: string | null;
+
+  /**
+   * When the referee was told HR may call them, and how. Null until something actually went.
+   *
+   * `noticeProblem` is why it did not reach them all the ways it could — no address, or a text the
+   * gateway cannot yet carry — so the record can say "not texted, and why" instead of either a
+   * silent gap or a claim that everything went. See `RosterRecordsService.notifyReferee`.
+   */
+  @Column({ name: 'notified_at', type: 'timestamptz', nullable: true })
+  notifiedAt: Date | null;
+
+  @Column({ name: 'notified_via', type: 'varchar', length: 40, nullable: true })
+  notifiedVia: string | null;
+
+  @Column({ name: 'notice_problem', type: 'varchar', length: 300, nullable: true })
+  noticeProblem: string | null;
+
   /** What they are to the assayer — former employer, colleague — when the roster says. */
   @Column({ type: 'varchar', length: 100, nullable: true })
   relationship: string | null;
