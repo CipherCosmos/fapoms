@@ -1,21 +1,8 @@
 {
   "compilerOptions": {
     "outDir": "dist",
-    "paths": {
-      "@modules/*": [
-        "src/modules/*"
-      ],
-      "@core/*": [
-        "src/core/*"
-      ],
-      "@infrastructure/*": [
-        "src/infrastructure/*"
-      ],
-      "@shared/*": [
-        "src/shared/*"
-      ]
-    },
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "tsConfigPath": "tsconfig.build.json"
   },
   "include": [
     "src/**/*"

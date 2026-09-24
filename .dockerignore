@@ -25,23 +25,14 @@ build/
 npm-debug.log*
 
 # Test artifacts
-test-results/
-playwright-report/
-blob-report/
 coverage/
-tests/
-k6/
 
 # Documentation & specs (not needed in container)
 docs/
-specs/
-evidence/
-release-artifacts/
 *.md
 !packages/*/README.md
 
 # Docker files
-docker/
 Dockerfile*
 docker-compose*
 
@@ -54,10 +45,6 @@ tmp/
 # Spreadsheets
 *.xlsx
 *.xls
-
-# Gemini agent
-.agents/
-.gemini/
 
 # Secrets must never enter the build context.
 #

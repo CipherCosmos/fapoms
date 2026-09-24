@@ -81,8 +81,11 @@ bugreport-*.zip
 *.xlsx
 *.xls
 
-# Geocoding cache (auto-generated, machine-specific)
+# Geocoding cache (auto-generated, machine-specific). Matches both `geocoding-cache.json` and
+# the `osm-`/`geo-autocomplete-` prefixed variants written by geo-cache-store.ts.
 **/geocoding-cache.json
+**/osm-geocoding-cache.json
+**/geo-autocomplete-cache.json
 
 # Firebase config files (root copies)
 google-services.json
