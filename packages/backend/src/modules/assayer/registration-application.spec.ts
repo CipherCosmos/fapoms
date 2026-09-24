@@ -3285,3 +3285,261 @@ describe('the source referral on an application', () => {
     );
   });
 });
+
+/**
+ * THE "REPLACE" BUTTON REPLACES, AND A WRONG FILE CAN BE TAKEN OFF.
+ *
+ * Both forms offered "Replace" on an attached scan, and the server appended whatever it was sent:
+ * a candidate fixing a blurred PAN card left the blurred one on the application too, and HR read
+ * "(2 files)" with no way to know which was meant. Nor could the candidate remove a wrong file at
+ * all — only HR could have, and HR could not either.
+ */
+describe('a candidate correcting the files on a requirement', () => {
+  const scan = { originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 10 };
+  const rowWith = (filePaths: string[], extra: Row = {}) => ({
+    id: 'doc-1', applicationId: 'app-1', requirement: OnboardingDocument.PAN_CARD, filePaths,
+    reviewStatus: 'PENDING', rejectionReason: null, rejectionNote: null, ...extra,
+  });
+  const lastSaved = (ctx: ReturnType<typeof makeService>) =>
+    ctx.applicationDocuments.save.mock.calls[ctx.applicationDocuments.save.mock.calls.length - 1][0] as Row;
+  const auditTypes = (ctx: ReturnType<typeof makeService>) =>
+    (ctx.auditService.recordEventSafe.mock.calls as unknown as Array<[Row]>).map(([e]) => e.eventType);
+
+  describe('replacing', () => {
+    it('puts the new file in place of every earlier one, and deletes those from storage', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/blurry.png', 'uploads/other.png']));
+
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      expect(row.filePaths).toEqual(['uploads/scan.png']);
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('uploads/blurry.png');
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('uploads/other.png');
+      expect(ctx.storage.deleteFile).not.toHaveBeenCalledWith('uploads/scan.png');
+      expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_REPLACED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: 'app-1',
+        metadata: expect.objectContaining({ requirement: OnboardingDocument.PAN_CARD, filesReplaced: 2 }),
+      }));
+    });
+
+    it('deletes the displaced files only after the row stops pointing at them', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/blurry.png']));
+      const order: string[] = [];
+      ctx.applicationDocuments.save.mockImplementation(async (v: Row) => { order.push(`save:${v.filePaths.join(',')}`); return { ...v, id: 'doc-1' }; });
+      ctx.storage.deleteFile.mockImplementation(async (...args: unknown[]) => { order.push(`delete:${String(args[0])}`); });
+
+      await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      expect(order.indexOf('save:uploads/scan.png')).toBeLessThan(order.indexOf('delete:uploads/blurry.png'));
+    });
+
+    it('still succeeds when storage cannot delete the old file — the orphan sweep has it', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/blurry.png']));
+      ctx.storage.deleteFile.mockRejectedValueOnce(new Error('bucket unreachable') as never);
+
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      expect(row.filePaths).toEqual(['uploads/scan.png']);
+      expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_REPLACED',
+        metadata: expect.objectContaining({ storageDeleteFailures: 1 }),
+      }));
+    });
+
+    it('without the flag still appends — the "add a page" case — and deletes nothing', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['uploads/front.png']));
+
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan);
+
+      expect(row.filePaths).toEqual(['uploads/front.png', 'uploads/scan.png']);
+      expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      expect(auditTypes(ctx)).not.toContain('ASSAYER_APPLICATION_DOCUMENT_REPLACED');
+    });
+
+    it('on a requirement with nothing on it yet is simply the first file, with nothing to audit as replaced', async () => {
+      const ctx = makeService();
+      const row = await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+      expect(row.filePaths).toEqual(['uploads/scan.png']);
+      expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      expect(auditTypes(ctx)).not.toContain('ASSAYER_APPLICATION_DOCUMENT_REPLACED');
+    });
+
+    it('answers a send-back the way a fresh upload does: back to pending, the ask dropped', async () => {
+      const ctx = makeService({
+        application: {
+          ...baseApplication(),
+          status: ApplicationStatus.AWAITING_INFO,
+          infoRequests: [{ kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'Retake.' }],
+        },
+      });
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['uploads/blurry.png'], { reviewStatus: 'NEEDS_RESUBMIT', rejectionReason: 'ILLEGIBLE', rejectionNote: 'Blurred' }),
+      );
+
+      await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      const saved = lastSaved(ctx);
+      expect(saved.filePaths).toEqual(['uploads/scan.png']);
+      expect(saved.reviewStatus).toBe('PENDING');
+      expect(saved.rejectionReason).toBeNull();
+      expect(saved.rejectionNote).toBeNull();
+    });
+
+    it('sends a document HR had approved back to pending — the new file is one HR has not seen', async () => {
+      const ctx = makeService({ application: { ...baseApplication(), status: ApplicationStatus.AWAITING_INFO } });
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['uploads/approved.png'], { reviewStatus: 'APPROVED', reviewedBy: 'hr-1', reviewedAt: new Date() }),
+      );
+
+      await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true });
+
+      const saved = lastSaved(ctx);
+      expect(saved.filePaths).toEqual(['uploads/scan.png']);
+      expect(saved.reviewStatus).toBe('PENDING');
+      expect(saved.reviewedBy).toBeNull();
+    });
+
+    it('is refused once the application is with HR, and without consent — the upload gates', async () => {
+      for (const over of [
+        { status: ApplicationStatus.PENDING_VALIDATION },
+        { consentAcceptedAt: null },
+        { consentWithdrawnAt: new Date() },
+      ]) {
+        const ctx = makeService({ application: { ...baseApplication(), ...over } });
+        (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValue(rowWith(['uploads/blurry.png']));
+        await expect(ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, scan, { replace: true }))
+          .rejects.toBeInstanceOf(BadRequestException);
+        expect(ctx.storage.saveFile).not.toHaveBeenCalled();
+        expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  describe('removing one file', () => {
+    it('takes that file off, keeps the rest in order, deletes it from storage and audits it', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['k0', 'k1', 'k2']));
+
+      const row = await ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 1);
+
+      expect(row.filePaths).toEqual(['k0', 'k2']);
+      expect(row.requirement).toBe(OnboardingDocument.PAN_CARD);
+      expect(ctx.storage.deleteFile).toHaveBeenCalledTimes(1);
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('k1');
+      expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_REMOVED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: 'app-1',
+        metadata: expect.objectContaining({ requirement: OnboardingDocument.PAN_CARD, index: 1, filesRemaining: 2 }),
+      }));
+    });
+
+    it('answers an emptied requirement as a row with no files, keeping HR\'s send-back on it', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['k0'], { reviewStatus: 'NEEDS_RESUBMIT', rejectionReason: 'ILLEGIBLE' }),
+      );
+
+      const row = await ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0);
+
+      expect(row.filePaths).toEqual([]);
+      expect(row.requirement).toBe(OnboardingDocument.PAN_CARD);
+      // Taking the wrong file off is not answering the send-back.
+      expect(row.reviewStatus).toBe('NEEDS_RESUBMIT');
+      expect(ctx.applicationDocuments.remove).not.toHaveBeenCalled();
+    });
+
+    it('withdraws an approval when a file is taken off — it no longer describes what is attached', async () => {
+      const ctx = makeService();
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(
+        rowWith(['k0', 'k1'], { reviewStatus: 'APPROVED', reviewedBy: 'hr-1', reviewedAt: new Date() }),
+      );
+
+      const row = await ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0);
+
+      expect(row.filePaths).toEqual(['k1']);
+      expect(row.reviewStatus).toBe('PENDING');
+      expect(row.reviewedBy).toBeNull();
+    });
+
+    it('404s an index past either end, and a requirement with nothing attached', async () => {
+      for (const index of [-1, 3, 99, 1.5]) {
+        const ctx = makeService();
+        (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['k0', 'k1', 'k2']));
+        await expect(ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, index))
+          .rejects.toBeInstanceOf(NotFoundException);
+        expect(ctx.applicationDocuments.save).not.toHaveBeenCalled();
+        expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+      }
+      const none = makeService();
+      await expect(none.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0))
+        .rejects.toBeInstanceOf(NotFoundException);
+      const unknown = makeService();
+      await expect(unknown.service.removeDocumentFile(RAW_TOKEN, 'NOT_A_DOCUMENT' as OnboardingDocument, 0))
+        .rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('is refused on a submitted application, without consent, after withdrawal, and on a dead link', async () => {
+      for (const over of [
+        { status: ApplicationStatus.PENDING_VALIDATION },
+        { status: ApplicationStatus.APPROVED },
+        { consentAcceptedAt: null },
+        { consentWithdrawnAt: new Date() },
+        { tokenExpiresAt: new Date(Date.now() - 1000) },
+      ]) {
+        const ctx = makeService({ application: { ...baseApplication(), ...over } });
+        (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValue(rowWith(['k0']));
+        await expect(ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0))
+          .rejects.toBeInstanceOf(BadRequestException);
+        expect(ctx.applicationDocuments.save).not.toHaveBeenCalled();
+        expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+        expect(auditTypes(ctx)).not.toContain('ASSAYER_APPLICATION_DOCUMENT_REMOVED');
+      }
+    });
+
+    it('is allowed again when HR sent the application back for more information', async () => {
+      const ctx = makeService({ application: { ...baseApplication(), status: ApplicationStatus.AWAITING_INFO } });
+      (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(rowWith(['k0', 'k1']));
+      await expect(ctx.service.removeDocumentFile(RAW_TOKEN, OnboardingDocument.PAN_CARD, 0))
+        .resolves.toEqual(expect.objectContaining({ filePaths: ['k1'] }));
+    });
+  });
+});
+
+/**
+ * Both forms refuse to submit without the ID photograph; the server did not, so an application
+ * with no face on it reached HR and was refused only at approval — the ID card cannot be issued
+ * without one. The server now says so at submit, in the passbook refusal's words.
+ */
+describe('submitting without a photograph', () => {
+  const ready = () => ({
+    id: 'app-1', mobile: '9822014455', email: 'c@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH,
+    tokenExpiresAt: new Date(Date.now() + 3_600_000),
+    employmentCategory: EmploymentCategory.FREELANCER, consentAcceptedAt: new Date(),
+    extendedProfile: { references: [{ fullName: 'Meera Rao', phone: '9822014455', relationship: 'Former manager' }] },
+  });
+
+  it('is refused, whether there is no photo row or an emptied one', async () => {
+    for (const photo of [[], [{ requirement: OnboardingDocument.PHOTOGRAPH, filePaths: [] }]]) {
+      const ctx = makeService({ application: ready(), cache: verified() });
+      (ctx.applicationDocuments.find as jest.Mock).mockResolvedValue([
+        { requirement: OnboardingDocument.BANK_PASSBOOK, filePaths: ['uploads/passbook.jpg'] },
+        ...photo,
+      ]);
+      await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/Upload Photograph before submitting/);
+      expect(ctx.application!.status).toBe(ApplicationStatus.DRAFT);
+    }
+  });
+
+  it('goes through with one', async () => {
+    const ctx = makeService({ application: ready(), cache: verified() });
+    const saved = await ctx.service.submit(RAW_TOKEN);
+    expect(saved.status).toBe(ApplicationStatus.PENDING_VALIDATION);
+  });
+});

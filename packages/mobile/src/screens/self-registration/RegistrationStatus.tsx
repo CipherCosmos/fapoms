@@ -1,9 +1,9 @@
 import React from 'react';
 import { ScrollView, View } from 'react-native';
-import { ApplicationStatus, EmploymentCategory } from '@fapoms/shared';
+import { ApplicationStatus } from '@fapoms/shared';
 import { useTheme } from '../../theme/ThemeProvider';
-import { AmbientGlow, AppText, Button, Card, Icon } from '../../components/ui/primitives';
-import { useT, type TranslationKey } from '../../i18n';
+import { AmbientGlow, AppText, Button, Icon } from '../../components/ui/primitives';
+import { useT } from '../../i18n';
 import type { RegistrationApplication } from '../../services/self-registration.service';
 import { applicationRef } from './registration-form';
 
@@ -15,28 +15,29 @@ export const FINISHED_STATUSES: ReadonlySet<string> = new Set([
   ApplicationStatus.WITHDRAWN,
 ]);
 
-/** Submitted, approved, not approved or withdrawn — what happened, and what happens next. */
+/**
+ * Submitted, approved, not approved or withdrawn — one short sentence, the reference to quote, and
+ * Close. It used to be a facts grid and a three-stage timeline; a candidate needs to know it went
+ * through and what number to give HR when they call.
+ */
 export const RegistrationStatus: React.FC<{ application: RegistrationApplication; onExit: () => void }> = ({
   application, onExit,
 }) => {
   const t = useTheme();
   const tr = useT();
-  const name = application.fullName || tr('selfRegistration.status.candidate');
   const status = application.status;
 
-  const view: { icon: string; color: string; soft: string; title: string; body: string } =
+  const view: { icon: string; color: string; soft: string; title: string; body: string | null } =
     status === ApplicationStatus.APPROVED
       ? {
         icon: 'ribbon', color: t.colors.success, soft: t.colors.successSoft,
-        title: tr('selfRegistration.status.approvedTitle', { name }), body: tr('selfRegistration.status.approvedBody'),
+        title: tr('selfRegistration.status.approvedTitle'), body: tr('selfRegistration.status.approvedBody'),
       }
       : status === ApplicationStatus.REJECTED
         ? {
           icon: 'close-circle', color: t.colors.danger, soft: t.colors.dangerSoft,
           title: tr('selfRegistration.status.rejectedTitle'),
-          body: application.reviewNotes
-            ? `${tr('selfRegistration.status.rejectedBody')} ${tr('selfRegistration.status.reviewNote', { note: application.reviewNotes })}`
-            : tr('selfRegistration.status.rejectedBody'),
+          body: application.reviewNotes ? tr('selfRegistration.status.reviewNote', { note: application.reviewNotes }) : null,
         }
         : status === ApplicationStatus.WITHDRAWN
           ? {
@@ -45,14 +46,8 @@ export const RegistrationStatus: React.FC<{ application: RegistrationApplication
           }
           : {
             icon: 'checkmark-circle', color: t.colors.success, soft: t.colors.successSoft,
-            title: tr('selfRegistration.status.pendingTitle', { name }), body: tr('selfRegistration.status.pendingBody'),
+            title: tr('selfRegistration.status.pendingTitle'), body: null,
           };
-
-  const category = application.employmentCategory === EmploymentCategory.PROPRIETOR
-    ? tr('selfRegistration.form.proprietor')
-    : application.employmentCategory === EmploymentCategory.FREELANCER
-      ? tr('selfRegistration.form.freelancer')
-      : '—';
 
   return (
     <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
@@ -63,60 +58,20 @@ export const RegistrationStatus: React.FC<{ application: RegistrationApplication
             <Icon name={view.icon} size={44} color={view.color} />
           </View>
           <AppText variant="h1" style={{ textAlign: 'center' }}>{view.title}</AppText>
-          <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>{view.body}</AppText>
+          {view.body ? <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>{view.body}</AppText> : null}
+          {status !== ApplicationStatus.WITHDRAWN && (
+            <View style={{ alignItems: 'center', gap: 2, marginTop: t.space.sm }}>
+              <AppText variant="caption" tone="faint">{tr('selfRegistration.status.refLabel')}</AppText>
+              <AppText variant="h3">#{applicationRef(application.id)}</AppText>
+            </View>
+          )}
         </View>
-
-        {status !== ApplicationStatus.WITHDRAWN && (
-          <Card level={1} style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: t.space.md }}>
-            <Fact label={tr('selfRegistration.status.refLabel')} value={`#${applicationRef(application.id)}`} />
-            <Fact label={tr('selfRegistration.status.mobileLabel')} value={application.mobile ? `+91 ${application.mobile}` : '—'} />
-            <Fact label={tr('selfRegistration.status.categoryLabel')} value={category} />
-            <Fact label={tr('selfRegistration.status.emailLabel')} value={application.email || '—'} />
-          </Card>
-        )}
-
-        {status === ApplicationStatus.PENDING_VALIDATION && (
-          <Card level={1} style={{ gap: t.space.lg }}>
-            <AppText variant="overline" tone="faint">{tr('selfRegistration.status.nextTitle')}</AppText>
-            <Stage state="done" title="selfRegistration.status.stage1Title" body="selfRegistration.status.stage1Body" />
-            <Stage state="current" title="selfRegistration.status.stage2Title" body="selfRegistration.status.stage2Body" />
-            <Stage state="next" title="selfRegistration.status.stage3Title" body="selfRegistration.status.stage3Body" />
-          </Card>
-        )}
 
         <View style={{ gap: t.space.md }}>
           <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>{tr('selfRegistration.status.help')}</AppText>
           <Button label={tr('common.close')} variant="neutral" size="lg" onPress={onExit} full />
         </View>
       </ScrollView>
-    </View>
-  );
-};
-
-const Fact: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <View style={{ width: '50%', gap: 2, paddingRight: 8 }}>
-    <AppText variant="overline" tone="faint">{label}</AppText>
-    <AppText variant="bodyStrong" numberOfLines={1}>{value}</AppText>
-  </View>
-);
-
-const Stage: React.FC<{ state: 'done' | 'current' | 'next'; title: TranslationKey; body: TranslationKey }> = ({
-  state, title, body,
-}) => {
-  const t = useTheme();
-  const tr = useT();
-  const color = state === 'done' ? t.colors.success : state === 'current' ? t.colors.warning : t.colors.textFaint;
-  return (
-    <View style={{ flexDirection: 'row', gap: t.space.md }}>
-      <Icon
-        name={state === 'done' ? 'checkmark-circle' : state === 'current' ? 'time' : 'ellipse-outline'}
-        size={22}
-        color={color}
-      />
-      <View style={{ flex: 1, gap: 2 }}>
-        <AppText variant="bodyStrong" tone={state === 'next' ? 'muted' : 'default'}>{tr(title)}</AppText>
-        <AppText variant="small" tone="muted">{tr(body)}</AppText>
-      </View>
     </View>
   );
 };

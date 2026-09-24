@@ -101,8 +101,6 @@ describe('the assayer record', () => {
 describe('the candidate form', () => {
   const TOKEN = 'tok-ref';
   const start = async (sourceReferral?: Record<string, unknown>) => {
-    localStorage.setItem(`fapoms_reg_step_${TOKEN}`, '2');
-    localStorage.setItem(`fapoms_reg_max_${TOKEN}`, '4');
     const application = {
       id: 'app-1', fullName: 'Ramesh Kulkarni', mobile: '9822014455', email: 'r@example.com',
       dateOfBirth: '1985-03-14', gender: 'Male', address: '14 Shivaji Nagar, Pune', state: 'Maharashtra',
@@ -117,17 +115,35 @@ describe('the candidate form', () => {
     } as never);
     regApi.updateRegistrationDraft.mockImplementation(async () => application as never);
     render(<MemoryRouter><PublicRegistration token={TOKEN} /></MemoryRouter>);
-    await screen.findByText('Who referred you');
+    // Complete up to the documents, so it reopens on step 4; step 2 is one press back.
+    fireEvent.click(await screen.findByRole('button', { name: 'Experience & address' }));
   };
 
   it('shows HR\'s entry and does not ask', async () => {
     await start({ type: 'STAFF', name: 'Asha Menon', mobile: '9876500000', email: null, recordedBy: 'HR' });
-    expect(screen.getByText(/Asha Menon \(our staff\).*recorded by our HR team/)).toBeInTheDocument();
+    expect(await screen.findByText(/Asha Menon \(our staff\).*recorded by our HR team/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Someone referred me/ })).not.toBeInTheDocument();
     expect(document.getElementById('reg-referral-name')).toBeNull();
+  });
+
+  /** Optional, so folded away until they say somebody referred them. */
+  it('keeps the boxes folded away behind one line until asked for', async () => {
+    await start();
+    const toggle = await screen.findByRole('button', { name: /Someone referred me/ });
+    expect(document.getElementById('reg-referral-name')).toBeNull();
+    fireEvent.click(toggle);
+    expect(document.getElementById('reg-referral-name')).not.toBeNull();
+  });
+
+  it('opens already when they gave a referrer before', async () => {
+    await start({ type: 'ASSAYER', name: 'Ravi Kumar', mobile: '9876500000', email: null, recordedBy: 'CANDIDATE' });
+    await screen.findByText('Who referred you');
+    expect(document.getElementById('reg-referral-name')).toHaveValue('Ravi Kumar');
   });
 
   it('saves the candidate\'s own entry once they leave the group, and not before', async () => {
     await start();
+    fireEvent.click(await screen.findByRole('button', { name: /Someone referred me/ }));
     fillReferrer('reg-referral', { type: 'ASSAYER', name: 'Ravi Kumar' });
     // Moving between the boxes is not leaving the group — no "incomplete" complaint yet.
     fireEvent.blur(document.getElementById('reg-referral-name')!, { relatedTarget: document.getElementById('reg-referral-mobile') });

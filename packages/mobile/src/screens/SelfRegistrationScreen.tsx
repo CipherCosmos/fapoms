@@ -1,17 +1,19 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import {
-  ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS, REGISTRATION_STEP_COUNT, REGISTRATION_REQUIRED_DOCUMENTS,
+  ApplicationStatus, EmploymentCategory, REGISTRATION_STEP_COUNT,
   applicationFieldStep, inferRegistrationStep, normaliseIdentifierOnBlur, readApplicationInfoRequests, referenceSubmitProblem, registrationStepProblems,
   resumableRegistrationStep,
-  type ApplicationInfoRequestItem, type OnboardingDocument, type RegistrationFormField, type RegistrationFormValues,
+  type ApplicationInfoRequestItem, type RegistrationFormField, type RegistrationFormValues,
 } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AmbientGlow, AppText, Button, Card, Icon, IconButton, Input, ProgressBar } from '../components/ui/primitives';
 import { OrbitMark } from '../components/ui/BrandMark';
 import { useFeedback } from '../components/ui/Feedback';
 import { useT, serverErrorText } from '../i18n';
-import { DocumentScanner, type ScannedDocument } from '../components/DocumentScanner';
+import {
+  captureWith, chooseFiles, chooseFromGallery, isCameraAvailable, isDocumentScannerAvailable, type CaptureOutcome,
+} from '../components/document-capture';
 import {
   SelfRegistrationApi, isVerificationLost,
   type DraftPatch, type RegistrationApplication, type RegistrationDocument, type RegistrationHydration,
@@ -26,7 +28,10 @@ import { FINISHED_STATUSES, RegistrationStatus } from './self-registration/Regis
 import { StepPersonal } from './self-registration/StepPersonal';
 import { StepAddress } from './self-registration/StepAddress';
 import { StepBank } from './self-registration/StepBank';
-import { StepDocuments } from './self-registration/StepDocuments';
+import { StepDocuments, type CaptureDoor, type RowProblem } from './self-registration/StepDocuments';
+import {
+  capturePlanFor, documentLabel, missingSubmitDocument, uploadReplaceFlags,
+} from './self-registration/document-rows';
 
 /**
  * Appraiser self-registration from a phone that has never signed in — the same four steps, rules
@@ -47,9 +52,6 @@ export interface SelfRegistrationScreenProps {
 
 type Phase = 'tokenEntry' | 'loading' | 'loadError' | 'ready';
 type Pin = { latitude: number; longitude: number };
-
-const documentLabel = (requirement: string): string =>
-  ONBOARDING_DOCUMENT_LABELS[requirement as OnboardingDocument] ?? requirement;
 
 const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -88,9 +90,11 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   const [saving, setSaving] = useState(0);
   const [saved, setSaved] = useState(false);
 
-  const [capturingRequirement, setCapturingRequirement] = useState<string | null>(null);
   const [uploadingRequirement, setUploadingRequirement] = useState<string | null>(null);
-  const [uploadErrors, setUploadErrors] = useState<Record<string, string | undefined>>({});
+  const [uploadErrors, setUploadErrors] = useState<Record<string, RowProblem | undefined>>({});
+  const [removing, setRemoving] = useState<string | null>(null);
+  // Read once: whether this build has ML Kit's scanner and the phone camera (an older APK may not).
+  const [devices] = useState(() => ({ scannerAvailable: isDocumentScannerAvailable(), cameraAvailable: isCameraAvailable() }));
 
   const [consentBusy, setConsentBusy] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
@@ -257,7 +261,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     if (step > activeStep) {
       const errors: StepErrors = {};
       for (const [field, problem] of Object.entries(registrationStepProblems(activeStep, current))) {
-        if (problem) errors[field as RegistrationFormField] = renderMessage(problemMessage(field as RegistrationFormField, problem), tr);
+        if (problem) errors[field as RegistrationFormField] = renderMessage(problemMessage(field as RegistrationFormField, problem, current), tr);
       }
       setStepErrors(errors);
       if (Object.keys(errors).length > 0) {
@@ -277,28 +281,81 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
   // ── Documents, agreement, submit ─────────────────────────────────────────
 
-  const handleDocumentSaved = async (requirement: string, doc: ScannedDocument) => {
-    setCapturingRequirement(null);
-    const uri = doc.pdfUri ?? doc.pages[0]?.uri;
-    if (!uri) {
-      setUploadErrors((prev) => ({ ...prev, [requirement]: tr('selfRegistration.documents.nothingCaptured') }));
+  const setRowProblem = (requirement: string, problem: RowProblem | undefined) =>
+    setUploadErrors((prev) => ({ ...prev, [requirement]: problem }));
+
+  /**
+   * One tap on a row: the camera (or the file picker), then straight up to the server — every file
+   * picked, in order. A retake replaces what the row held with the first file and adds the rest.
+   */
+  const handleCapture = async (requirement: string, door: CaptureDoor, retake: boolean) => {
+    if (uploadingRequirement) return;
+    const plan = capturePlanFor(requirement, devices);
+    const label = documentLabel(requirement);
+    setRowProblem(requirement, undefined);
+    let outcome: CaptureOutcome;
+    if (door === 'primary') outcome = await captureWith(plan.primary, requirement, label);
+    else if (plan.secondary === 'gallery') outcome = await chooseFromGallery(label);
+    else outcome = await chooseFiles(label, { multiple: plan.allowMultipleFiles, imagesOnly: plan.imagesOnly });
+
+    if (outcome.status === 'cancelled') return;
+    if (outcome.status === 'cameraDenied') {
+      setRowProblem(requirement, { message: tr('selfRegistration.documents.cameraDenied'), cameraDenied: true });
       return;
     }
-    setUploadErrors((prev) => ({ ...prev, [requirement]: undefined }));
+    if (outcome.status === 'refused') {
+      setRowProblem(requirement, { message: outcome.message });
+      return;
+    }
+    if (outcome.status === 'failed') {
+      setRowProblem(requirement, { message: serverErrorText(outcome.message, 'selfRegistration.documents.uploadFailedTitle') });
+      return;
+    }
+
     setUploadingRequirement(requirement);
-    const res = await SelfRegistrationApi.uploadDocument(token, requirement, { uri, name: doc.fileName, mimeType: doc.mimeType });
+    const flags = uploadReplaceFlags(outcome.files.length, retake);
+    for (let i = 0; i < outcome.files.length; i++) {
+      const file = outcome.files[i];
+      const res = await SelfRegistrationApi.uploadDocument(token, requirement, file, { replace: flags[i] });
+      if (!res.success) {
+        setUploadingRequirement(null);
+        // A refusal of the file itself (not a picture, too dark to be a document…) is the server's
+        // own short sentence; anything else goes through the usual translation.
+        setRowProblem(requirement, {
+          message: res.code === 'UPLOAD_REJECTED' && res.error
+            ? res.error
+            : serverErrorText(res.error, 'selfRegistration.documents.uploadFailedTitle', res.code),
+        });
+        if (isVerificationLost(res)) verificationLost();
+        return;
+      }
+      setDocuments((prev) => [...prev.filter((d) => d.requirement !== requirement), res.data]);
+    }
     setUploadingRequirement(null);
+    // The fresh file answers its own send-back: drop the ask now, not on the next reload.
+    setInfoRequests((prev) => prev.filter((i) => !(i.kind === 'document' && i.key === requirement)));
+  };
+
+  const handleRemove = async (requirement: string, index: number) => {
+    const ok = await feedback.confirm(
+      tr('selfRegistration.documents.removeTitle'),
+      tr('selfRegistration.documents.removeBody'),
+      tr('selfRegistration.documents.remove'),
+    );
+    if (!ok) return;
+    setRemoving(`${requirement}:${index}`);
+    const res = await SelfRegistrationApi.deleteDocumentFile(token, requirement, index);
+    setRemoving(null);
     if (!res.success) {
-      setUploadErrors((prev) => ({
-        ...prev,
-        [requirement]: serverErrorText(res.error, 'selfRegistration.documents.uploadFailedTitle', res.code),
-      }));
+      feedback.error(
+        tr('selfRegistration.documents.removeFailedTitle'),
+        serverErrorText(res.error, 'selfRegistration.documents.removeFailedTitle', res.code),
+      );
       if (isVerificationLost(res)) verificationLost();
       return;
     }
+    setRowProblem(requirement, undefined);
     setDocuments((prev) => [...prev.filter((d) => d.requirement !== requirement), res.data]);
-    // The fresh scan answers its own send-back: drop the ask now, not on the next reload.
-    setInfoRequests((prev) => prev.filter((i) => !(i.kind === 'document' && i.key === requirement)));
   };
 
   const handleAcceptConsent = async () => {
@@ -328,14 +385,11 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
   const handleSubmit = async () => {
     // Checked here too, so the candidate is taken to the document rather than told by the server.
-    const missingDoc = REGISTRATION_REQUIRED_DOCUMENTS.find(
-      (req) => documentsRequested.includes(req)
-        && !documents.some((d) => d.requirement === req && d.filePaths.length > 0),
-    );
+    const missingDoc = missingSubmitDocument(documentsRequested, documents);
     if (missingDoc) {
       feedback.error(
         tr('selfRegistration.submit.failedTitle'),
-        tr('selfRegistration.documents.passbookRequired'),
+        tr('selfRegistration.documents.missingRequired', { document: documentLabel(missingDoc) }),
       );
       goToStep(REGISTRATION_STEP_COUNT);
       return;
@@ -343,10 +397,8 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     const problem = referenceSubmitProblem(references);
     if (problem) {
       setReferencesError(problem);
-      feedback.error(
-        tr('selfRegistration.submit.failedTitle'),
-        tr('selfRegistration.form.referencesRequired'),
-      );
+      // The shared rule's own sentence — the same one the web form and the server give.
+      feedback.error(tr('selfRegistration.submit.failedTitle'), problem);
       goToStep(2);
       return;
     }
@@ -441,22 +493,22 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
               <AppText variant="h2" numberOfLines={1}>{tr('selfRegistration.tokenEntry.title')}</AppText>
             )}
           </View>
-        </View>
-        {consented && (
-          <View style={{ gap: 6 }}>
-            <ProgressBar value={activeStep / REGISTRATION_STEP_COUNT} />
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, minHeight: 18 }}>
+          {/* Saving, on the title row: a small cloud and one word, not a line of its own. */}
+          {consented && (
+            <View
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 120 }}
+              accessibilityLabel={saving > 0 ? tr('selfRegistration.saving') : saved ? tr('selfRegistration.saved') : tr('selfRegistration.savesAsYouType')}
+            >
               {saving > 0
                 ? <ActivityIndicator size="small" color={t.colors.textMuted} style={{ transform: [{ scale: 0.7 }] }} />
-                : <Icon name={saved ? 'cloud-done-outline' : 'cloud-outline'} size={14} color={saved ? t.colors.success : t.colors.textFaint} />}
-              <AppText variant="caption" tone={saving === 0 && saved ? 'success' : 'faint'}>
-                {saving > 0
-                  ? tr('selfRegistration.saving')
-                  : saved ? tr('selfRegistration.saved') : tr('selfRegistration.savesAsYouType')}
+                : <Icon name={saved ? 'cloud-done-outline' : 'cloud-outline'} size={16} color={saved ? t.colors.success : t.colors.textFaint} />}
+              <AppText variant="caption" tone={saving === 0 && saved ? 'success' : 'faint'} numberOfLines={1}>
+                {saving > 0 ? tr('selfRegistration.saving') : saved ? tr('selfRegistration.saved') : tr('selfRegistration.savesAsYouType')}
               </AppText>
             </View>
-          </View>
-        )}
+          )}
+        </View>
+        {consented && <ProgressBar value={activeStep / REGISTRATION_STEP_COUNT} />}
       </View>
 
       <ScrollView
@@ -570,11 +622,13 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 documents={documents}
                 documentsRequested={documentsRequested}
                 infoRequests={infoRequests}
+                devices={devices}
                 uploadingRequirement={uploadingRequirement}
                 uploadErrors={uploadErrors}
-                onCapture={setCapturingRequirement}
+                onCapture={(requirement, door, retake) => { void handleCapture(requirement, door, retake); }}
+                onRemove={(requirement, index) => { void handleRemove(requirement, index); }}
+                removing={removing}
                 otpVerified={otpVerified}
-                phone={phone}
                 withdrawing={withdrawing}
                 onWithdraw={(reason) => { void handleWithdraw(reason); }}
                 submitting={submitting}
@@ -593,15 +647,6 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
         )}
       </ScrollView>
 
-      {capturingRequirement && (
-        <DocumentScanner
-          visible
-          purpose={documentLabel(capturingRequirement)}
-          requirement={capturingRequirement}
-          onClose={() => setCapturingRequirement(null)}
-          onSaved={(doc) => { void handleDocumentSaved(capturingRequirement, doc); }}
-        />
-      )}
     </KeyboardAvoidingView>
   );
 };

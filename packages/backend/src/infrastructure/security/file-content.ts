@@ -84,7 +84,21 @@ const FAMILY_OF_EXTENSION: Record<string, UploadFamily> = {
   xlsx: 'spreadsheet', xls: 'spreadsheet', csv: 'spreadsheet',
 };
 
-const FAMILY_WORDS: Record<UploadFamily, string> = { pdf: 'a PDF', image: 'an image', spreadsheet: 'a spreadsheet' };
+/**
+ * How a refusal names a kind of file. Plain words, because the person most often reading them is a
+ * candidate on a phone attaching an ID card — "a photo", not "an image/jpeg".
+ */
+const FAMILY_WORDS: Record<UploadFamily, string> = { pdf: 'a PDF', image: 'a photo', spreadsheet: 'a spreadsheet' };
+
+/**
+ * What to upload instead of a type we cannot use. Spreadsheets are named only when the file itself
+ * said it was one (an import): a candidate attaching an ID card must not be told to try Excel.
+ */
+function unusableTypeMessage(claimed?: UploadFamily | null): string {
+  return claimed === 'spreadsheet'
+    ? "This file type can't be used. Upload an Excel or CSV file."
+    : "This file type can't be used. Upload a photo or a PDF.";
+}
 
 /**
  * Plain text a CSV import could be: no NUL bytes, almost no control characters, and not markup or
@@ -127,8 +141,8 @@ function refuse(message: string): never {
  * scripts, HTML/SVG/XML, archives, Word documents, empty files, unreadable bytes — is refused here,
  * whatever it was called.
  */
-export function classifyUpload(buffer: Buffer): UploadClassification {
-  if (!buffer || buffer.length === 0) refuse('This file is empty. Choose the file again and re-upload it.');
+export function classifyUpload(buffer: Buffer, claimed?: UploadFamily | null): UploadClassification {
+  if (!buffer || buffer.length === 0) refuse('This file is empty. Choose the file again.');
 
   const sniffed = sniffMimeType(buffer);
   switch (sniffed) {
@@ -136,12 +150,12 @@ export function classifyUpload(buffer: Buffer): UploadClassification {
       // A PDF's trailer is its last part; one that never arrived means the upload was cut short or
       // the file is damaged, and it will not open for the person who has to read it.
       if (buffer.lastIndexOf('%%EOF') === -1) {
-        refuse('This PDF is incomplete or damaged (it has no end-of-file marker). Save or export it again and re-upload.');
+        refuse('This PDF is damaged or incomplete. Save it again, or upload a photo instead.');
       }
       return { family: 'pdf', mimeType: sniffed };
     }
     case 'image/png':
-      if (!buffer.includes('IEND')) refuse('This image is incomplete or damaged. Take or export it again and re-upload.');
+      if (!buffer.includes('IEND')) refuse('This file is damaged or incomplete. Take the photo again or choose another file.');
       return { family: 'image', mimeType: sniffed };
     case 'image/jpeg':
     case 'image/gif':
@@ -155,12 +169,12 @@ export function classifyUpload(buffer: Buffer): UploadClassification {
       if (isSpreadsheetZip(buffer)) {
         return { family: 'spreadsheet', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
       }
-      return refuse('Archives and Word/PowerPoint files are not accepted. Upload a PDF, an image, or an Excel/CSV file.');
+      return refuse(unusableTypeMessage(claimed));
     case 'application/vnd.ms-office':
       return { family: 'spreadsheet', mimeType: 'application/vnd.ms-excel' };
     default:
       if (looksLikeDelimitedText(buffer)) return { family: 'spreadsheet', mimeType: 'text/csv' };
-      return refuse('This file type is not accepted. Upload a PDF, an image (JPG, PNG, HEIC…), or an Excel/CSV file.');
+      return refuse(unusableTypeMessage(claimed));
   }
 }
 
@@ -184,13 +198,11 @@ export function assertUploadContent(
   buffer: Buffer,
   meta: { fileName?: string | null; declaredType?: string | null } = {},
 ): UploadClassification {
-  const actual = classifyUpload(buffer);
   const claimed = claimedFamily(meta.declaredType, meta.fileName);
+  const actual = classifyUpload(buffer, claimed);
   if (claimed && claimed !== actual.family) {
-    refuse(
-      `This file is named or labelled as ${FAMILY_WORDS[claimed]} but its contents are ${actual.mimeType === 'text/csv' ? 'plain text' : FAMILY_WORDS[actual.family]}. ` +
-        'Check you picked the right file, or save it in the right format, and re-upload.',
-    );
+    const really = actual.mimeType === 'text/csv' ? 'plain text' : FAMILY_WORDS[actual.family];
+    refuse(`This file is ${really}, not ${FAMILY_WORDS[claimed]}. Choose the right file.`);
   }
   return actual;
 }

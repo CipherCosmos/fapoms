@@ -14,6 +14,7 @@ import {
   isQualifyingStanding, lifecycleBucketOf, LIFECYCLE_BUCKET_TINT,
   ASSAYER_LIFECYCLE_BUCKETS, LIFECYCLE_RING_COLORS, MapEmpanelment,
 } from '../utils/clientColors';
+import { SATELLITE_TILE_OPTIONS, SATELLITE_TILE_URL, STREET_TILE_OPTIONS, STREET_TILE_URL } from './geo/basemap';
 
 /** Stable empty roster, so "not loaded yet" is not a new array on every render. */
 const NO_ASSAYERS: any[] = [];
@@ -737,17 +738,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
      * for the street map and Esri's public World Imagery for satellite.
      */
     const isSatellite = effectiveMapStyle === 'satellite';
-    const tileUrl = isSatellite
-      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-
-    tileLayerRef.current = L.tileLayer(tileUrl, {
-      subdomains: ['a', 'b', 'c'], // ignored by the Esri URL (it has no {s})
-      maxZoom: 19,
-      attribution: isSatellite
-        ? '&copy; Esri, Maxar, Earthstar Geographics'
-        : '&copy; OpenStreetMap contributors',
-    }).addTo(map);
+    tileLayerRef.current = isSatellite
+      ? L.tileLayer(SATELLITE_TILE_URL, SATELLITE_TILE_OPTIONS).addTo(map)
+      : L.tileLayer(STREET_TILE_URL, STREET_TILE_OPTIONS).addTo(map);
 
     /**
      * No keyless DARK raster provider survives, so the dark style is OpenStreetMap inverted at the

@@ -257,7 +257,9 @@ export const StepBank: React.FC<StepBankProps> = ({
           maxLength={18}
           error={errors.bankAccountNumberConfirm
             ?? ((form.bankAccountNumberConfirm ?? '').trim()
-              ? bankAccountConfirmProblem(form.bankAccountNumber, form.bankAccountNumberConfirm ?? '') ?? undefined
+              // Both typed and they differ — the shared rule decides, the catalogue says it.
+              && bankAccountConfirmProblem(form.bankAccountNumber, form.bankAccountNumberConfirm ?? '')
+              ? tr('selfRegistration.errors.accountConfirmMismatch')
               : undefined)}
         />
         <View style={{ gap: t.space.sm }}>

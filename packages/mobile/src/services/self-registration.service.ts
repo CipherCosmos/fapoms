@@ -142,9 +142,12 @@ export interface DraftPatch {
  * address when texts are not available. `sentTo` arrives masked ("••••• 4455", "r•••@example.com").
  */
 export interface OtpDelivery {
-  sent: boolean;
   channel: 'SMS' | 'EMAIL';
   sentTo: string;
+  /** Seconds before another code may be asked for — the server's setting, not a number of ours. */
+  cooldownSeconds?: number;
+  /** Seconds this code stays usable. */
+  expiresInSeconds?: number;
 }
 
 export type SelfRegResult<T> =
@@ -294,6 +297,11 @@ export const SelfRegistrationApi = {
     token: string,
     requirement: string,
     file: { uri: string; name: string; mimeType?: string },
+    /**
+     * `true` replaces every file this requirement holds (a retake); otherwise the file is added
+     * after them (another page). The server answers with the document as it now stands.
+     */
+    options: { replace?: boolean } = {},
   ): Promise<SelfRegResult<RegistrationDocument>> {
     const form = new FormData();
     if (Platform.OS === 'web') {
@@ -311,9 +319,17 @@ export const SelfRegistrationApi = {
       } as unknown as Blob);
     }
     return call<RegistrationDocument>(
-      `${base(token)}/documents/${encodeURIComponent(requirement)}`,
+      `${base(token)}/documents/${encodeURIComponent(requirement)}${options.replace ? '?replace=true' : ''}`,
       { method: 'POST', body: form },
       60_000,
+    );
+  },
+
+  /** Takes one file off a requirement; the answer is the document with what is left (maybe none). */
+  deleteDocumentFile(token: string, requirement: string, index: number): Promise<SelfRegResult<RegistrationDocument>> {
+    return call<RegistrationDocument>(
+      `${base(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`,
+      { method: 'DELETE' },
     );
   },
 

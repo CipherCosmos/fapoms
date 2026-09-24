@@ -22,6 +22,9 @@ import { useDuplicateCheck, type DuplicateCheckKey } from './useDuplicateCheck';
 import { ApplicationDocumentsStep } from './ApplicationDocumentsStep';
 import { ClientsStep, type DraftStanding } from './ClientsStep';
 import { relationshipOptions } from '../reference-vocabulary';
+import {
+  EMPTY_REFERRAL, SourceReferralFields, referralDraftFrom, referralPayload, type SourceReferralDraft,
+} from '../../../components/SourceReferralFields';
 import { Page } from '../../../components/ui/Page';
 
 /**
@@ -577,9 +580,14 @@ export const RegistrationWizard: React.FC<{
    */
   const [standings, setStandings] = useState<DraftStanding[]>([]);
   const [references, setReferences] = useState<DraftReference[]>([]);
+  // Who referred them. Carried from the interview onto the application, and from the application
+  // onto their record at approval — but this form never showed it, so a desk registration had no
+  // way to record one and the record page read "Nobody recorded" for everybody made here.
+  const [referral, setReferral] = useState<SourceReferralDraft>(EMPTY_REFERRAL);
   useEffect(() => {
     setStandings((reg.application?.extendedProfile?.empanelments ?? []) as DraftStanding[]);
     setReferences((reg.application?.extendedProfile?.references ?? []) as unknown as DraftReference[]);
+    setReferral(referralDraftFrom(reg.application?.extendedProfile?.sourceReferral));
   }, [reg.application]);
   const [step, setStep] = useStepParam<RegistrationStepKey>(REGISTRATION_STEP_KEYS, 'person');
   // Loaded only on the step that shows `hrOwnerName` — see `useHrOwnerOptions`.
@@ -823,7 +831,10 @@ export const RegistrationWizard: React.FC<{
      */
     return reg.commit({
       ...(step === 'clients' ? { empanelments: standings } : {}),
-      ...(step === 'people' ? { references: references as unknown as Array<Record<string, unknown>> } : {}),
+      ...(step === 'people' ? {
+        references: references as unknown as Array<Record<string, unknown>>,
+        sourceReferral: referralPayload(referral) as Record<string, string> | null,
+      } : {}),
     });
   };
 
@@ -1175,6 +1186,13 @@ export const RegistrationWizard: React.FC<{
             render={renderOne}
           />
           <ReferencesBlock references={references} onChange={setReferences} />
+          <div style={cardish}>
+            <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: '4px' }}>Who referred them</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+              The person who brought them to us — not one of the referees above. Shown on their record once approved.
+            </div>
+            <SourceReferralFields value={referral} onChange={setReferral} idPrefix="desk-referral" />
+          </div>
           <Block
             title="What they have done before"
             note="Their experience, where they are working now, and what they are good at. All of it travels onto their record when they are approved."

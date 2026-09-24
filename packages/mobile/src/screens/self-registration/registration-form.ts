@@ -1,9 +1,11 @@
+import { normaliseBankAccountNumber } from '@fapoms/shared';
 import type {
   IdentifierFormatIssue, RegistrationFormField, RegistrationFormValues, RegistrationProblem,
 } from '@fapoms/shared';
 import type { TranslationKey, TranslationVars } from '../../i18n/i18n';
 import type { DraftPatch, RegistrationApplication } from '../../services/self-registration.service';
 import { RECORD_FIELD_KEYS } from '../self-registration-fields';
+import { dateOfBirthProblemKey } from './date-of-birth';
 
 /**
  * The phone's half of the candidate registration form: turning a saved application into boxes,
@@ -107,14 +109,28 @@ const INVALID: Partial<Record<RegistrationFormField, TranslationKey>> = {
   emergencyContactPhone: 'selfRegistration.errors.phoneInvalid',
 };
 
-export function problemMessage(field: RegistrationFormField, problem: RegistrationProblem): Message {
+/**
+ * A shared rule's verdict as a sentence in the reader's language.
+ *
+ * `form` is what was typed, for the two verdicts the shared rules hand over as ready-made English
+ * sentences (date of birth, the account number typed twice): the reason is read off the answer to
+ * pick the translated sentence. Without it — or if the reason cannot be told — the shared English
+ * sentence is used, so nothing is ever said that the rule did not say.
+ */
+export function problemMessage(
+  field: RegistrationFormField,
+  problem: RegistrationProblem,
+  form?: Pick<RegistrationFormValues, 'dateOfBirth' | 'bankAccountNumberConfirm'>,
+): Message {
   switch (problem.code) {
     case 'tooLong':
       return { key: 'selfRegistration.errors.tooLong', vars: { max: problem.max, length: problem.length } };
     case 'outOfRange':
       return { key: 'selfRegistration.errors.outOfRange', vars: { min: problem.min, max: problem.max } };
-    case 'dateOfBirth':
-      return { text: problem.message };
+    case 'dateOfBirth': {
+      const translated = form ? dateOfBirthProblemKey(form.dateOfBirth) : null;
+      return translated ?? { text: problem.message };
+    }
     case 'required':
       return { key: REQUIRED[field] ?? 'selfRegistration.errors.checkAnswer' };
     case 'tooShort':
@@ -122,7 +138,12 @@ export function problemMessage(field: RegistrationFormField, problem: Registrati
     case 'invalid':
       return { key: INVALID[field] ?? 'selfRegistration.errors.checkAnswer' };
     case 'mismatch':
-      // The shared rule's own sentence, like `dateOfBirth`: one wording for web, phone and server.
+      // `bankAccountConfirmProblem`: either the second typing is missing, or the two differ.
+      if (form && field === 'bankAccountNumberConfirm') {
+        return normaliseBankAccountNumber(form.bankAccountNumberConfirm ?? '')
+          ? { key: 'selfRegistration.errors.accountConfirmMismatch' }
+          : { key: 'selfRegistration.errors.accountConfirmMissing' };
+      }
       return { text: problem.message };
   }
 }

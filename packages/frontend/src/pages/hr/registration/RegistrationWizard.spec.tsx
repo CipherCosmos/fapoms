@@ -106,9 +106,10 @@ const wireApi = (overrides: Record<string, unknown> = {}) => {
         fixture being accurate rather than convenient.
       */
       const sent = JSON.parse(String(opts?.body ?? '{}'));
-      const { record, empanelments, references, commercial, ...rest } = sent;
+      const { record, empanelments, references, commercial, sourceReferral, ...rest } = sent;
       profile = {
         ...profile,
+        ...(sourceReferral !== undefined ? { sourceReferral } : {}),
         ...(empanelments ? { empanelments } : {}),
         ...(references ? { references } : {}),
         ...(commercial ? { commercial } : {}),
@@ -396,6 +397,29 @@ describe('which banks will take them', () => {
  * on file. `reference-vocabulary.spec.ts` covers the shared list and its escape hatch directly;
  * this proves the wizard is actually wired to it, not a second list of its own.
  */
+describe('who referred them', () => {
+  it('shows the referral the interview recorded, and sends an edit with the step\'s save', async () => {
+    wireApi({
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: {
+          ...APPLICATION,
+          extendedProfile: { sourceReferral: { type: 'ASSAYER', name: 'Suresh Nair', mobile: '9876543210', email: '', recordedBy: 'HR' } },
+        },
+      },
+    });
+    await mount();
+    await click(/Contacts and pay/);
+
+    expect(screen.getByLabelText(/Referrer.s name/)).toHaveValue('Suresh Nair');
+    fireEvent.change(screen.getByLabelText(/Referrer.s name/), { target: { value: 'Suresh K Nair' } });
+    await click(/^Continue/);
+    await waitFor(() => {
+      expect(lastPatch().sourceReferral).toEqual(expect.objectContaining({ name: 'Suresh K Nair', mobile: '9876543210' }));
+    });
+  });
+});
+
 describe('references', () => {
   it('offers the same fixed relationship list the vetting tab uses, and posts the picked value', async () => {
     await mount();

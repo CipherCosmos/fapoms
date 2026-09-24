@@ -2,25 +2,34 @@ import React, { useState } from 'react';
 import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, View } from 'react-native';
 import {
   EmploymentCategory,
-  ONBOARDING_DOCUMENT_LABELS,
-  REGISTRATION_CONDITIONAL_DOCUMENTS, REGISTRATION_REQUIRED_DOCUMENTS,
   scanMimeType,
   storedScanFileName,
   type ApplicationInfoRequestItem,
-  type OnboardingDocument,
   type RegistrationFormValues,
 } from '@fapoms/shared';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Icon, Input, ModalSheet, Tappable } from '../../components/ui/primitives';
 import { useT } from '../../i18n';
-import { hintKeyFor } from '../../services/registration-checklist';
 import {
   SelfRegistrationApi,
   type RegistrationApplication,
   type RegistrationDocument,
   type RegistrationHydration,
 } from '../../services/self-registration.service';
-import { GroupHeader, StepFooter, Stretch } from './parts';
+import { StepFooter, Stretch } from './parts';
+import {
+  capturePlanFor, conditionBadgeKey, documentLabel, rejectionText, rowNoteKey, stillNeeded, type CapturePlan,
+} from './document-rows';
+
+/** A refused or failed upload, said under its row with a way to try again. */
+export interface RowProblem {
+  message: string;
+  /** The camera permission is off — offer Settings instead of trying the camera again. */
+  cameraDenied?: boolean;
+}
+
+/** Which door a row's capture goes through: the big button, or the small link under it. */
+export type CaptureDoor = 'primary' | 'secondary';
 
 export interface StepDocumentsProps {
   token: string;
@@ -31,12 +40,17 @@ export interface StepDocumentsProps {
   documentsRequested: string[];
   /** Exactly what HR asked for — sent-back rows render their own instruction. */
   infoRequests?: ApplicationInfoRequestItem[];
+  /** Whether ML Kit's scanner and the phone camera are in this build — decides each row's buttons. */
+  devices: { scannerAvailable: boolean; cameraAvailable: boolean };
   uploadingRequirement: string | null;
-  uploadErrors: Record<string, string | undefined>;
-  /** Opens the camera/file scanner for a requirement; the orchestrator uploads the result. */
-  onCapture: (requirement: string) => void;
+  uploadErrors: Record<string, RowProblem | undefined>;
+  /** Captures and uploads. `retake` replaces what the row holds; otherwise the files are added. */
+  onCapture: (requirement: string, door: CaptureDoor, retake: boolean) => void;
+  /** Takes one file off a row. */
+  onRemove: (requirement: string, index: number) => void;
+  /** `requirement:index` of the file being removed. */
+  removing: string | null;
   otpVerified: boolean;
-  phone: string;
   withdrawing: boolean;
   onWithdraw: (reason: string | undefined) => void;
   submitting: boolean;
@@ -44,9 +58,6 @@ export interface StepDocumentsProps {
   goToStep: (step: number) => void;
   onBack: () => void;
 }
-
-const labelFor = (requirement: string) =>
-  ONBOARDING_DOCUMENT_LABELS[requirement as OnboardingDocument] ?? requirement;
 
 // A replaced scan keeps the same URL, so the stored key's hash busts the image cache.
 function versionedFileUrl(token: string, requirement: string, index: number, filePath: string): string {
@@ -59,6 +70,9 @@ function openFile(url: string) {
   void Linking.openURL(url).catch(() => undefined);
 }
 
+const isImageFile = (label: string, filePath: string, index: number, count: number) =>
+  (scanMimeType(storedScanFileName(label, filePath, count > 1 ? index + 1 : undefined)) ?? '').startsWith('image/');
+
 const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
   const t = useTheme();
   const tr = useT();
@@ -67,13 +81,7 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
 
   if (failed) {
     return (
-      <Button
-        label={tr('selfRegistration.documents.previewOpen')}
-        icon="open-outline"
-        variant="neutral"
-        onPress={() => openFile(url)}
-        full
-      />
+      <Button label={tr('selfRegistration.documents.previewOpen')} icon="open-outline" variant="neutral" onPress={() => openFile(url)} full />
     );
   }
   return (
@@ -94,51 +102,67 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
   );
 };
 
-const ChecklistRow: React.FC<{ done: boolean; label: string; detail?: string; linkLabel?: string; onLink?: () => void }> = ({
-  done, label, detail, linkLabel, onLink,
+/** A small picture of what was sent — a PDF shows as a page icon. Tap to look closer. */
+const Thumb: React.FC<{ url: string; image: boolean; onPress: () => void; label: string }> = ({ url, image, onPress, label }) => {
+  const t = useTheme();
+  const [failed, setFailed] = useState(false);
+  return (
+    <Tappable onPress={onPress} accessibilityRole="button" accessibilityLabel={label}>
+      <View style={{
+        width: 64, height: 80, borderRadius: t.radius.md, overflow: 'hidden',
+        backgroundColor: t.colors.surfaceAlt, borderWidth: 1, borderColor: t.colors.border,
+        alignItems: 'center', justifyContent: 'center',
+      }}>
+        {image && !failed
+          ? <Image source={{ uri: url }} resizeMode="cover" style={{ width: 64, height: 80 }} onError={() => setFailed(true)} />
+          : <Icon name="document-text-outline" size={28} color={t.colors.textMuted} />}
+      </View>
+    </Tappable>
+  );
+};
+
+/** A small underlined text action — the quiet alternative under a big button. */
+const TextLink: React.FC<{ label: string; onPress: () => void; tone?: 'primary' | 'danger' | 'muted'; disabled?: boolean; center?: boolean }> = ({
+  label, onPress, tone = 'primary', disabled, center,
 }) => {
   const t = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-      <Icon
-        name={done ? 'checkmark-circle' : 'alert-circle'}
-        size={22}
-        color={done ? t.colors.success : t.colors.warning}
-      />
-      <View style={{ flex: 1 }}>
-        <AppText variant="body">{label}</AppText>
-        {detail ? <AppText variant="caption" tone="faint">{detail}</AppText> : null}
-      </View>
-      {!done && linkLabel && onLink ? (
-        <Tappable onPress={onLink} accessibilityRole="link" accessibilityLabel={linkLabel} hitSlop={12}>
-          <AppText variant="small" tone="primary" style={{ fontWeight: '700', paddingVertical: t.space.xs }}>
-            {linkLabel}
-          </AppText>
-        </Tappable>
-      ) : null}
-    </View>
+    <Tappable onPress={onPress} disabled={disabled} accessibilityRole="link" accessibilityLabel={label} hitSlop={10}>
+      <AppText
+        variant="small"
+        tone={tone}
+        style={{ fontWeight: '700', textDecorationLine: 'underline', paddingVertical: t.space.xs, textAlign: center ? 'center' : 'left' }}
+      >
+        {label}
+      </AppText>
+    </Tappable>
   );
 };
 
 export const StepDocuments: React.FC<StepDocumentsProps> = ({
-  token, form, application, consentNotice, documents, documentsRequested, infoRequests = [],
-  uploadingRequirement, uploadErrors,
-  onCapture, otpVerified, phone, withdrawing, onWithdraw, submitting, onSubmit, goToStep, onBack,
+  token, form, application, consentNotice, documents, documentsRequested, infoRequests = [], devices,
+  uploadingRequirement, uploadErrors, onCapture, onRemove, removing,
+  otpVerified, withdrawing, onWithdraw, submitting, onSubmit, goToStep, onBack,
 }) => {
   const t = useTheme();
   const tr = useT();
   const [previewRequirement, setPreviewRequirement] = useState<string | null>(null);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [withdrawReason, setWithdrawReason] = useState('');
+  const [consentDetails, setConsentDetails] = useState(false);
 
   const filesFor = (requirement: string) =>
     documents.find((d) => d.requirement === requirement)?.filePaths ?? [];
 
-  const hasName = Boolean(form.fullName.trim());
-  const hasCategory = Boolean(form.employmentCategory);
   const consentAccepted = Boolean(application.consentAcceptedAt);
-  const hasPhoto = filesFor('PHOTOGRAPH').length > 0;
-  const canSubmit = hasName && hasCategory && consentAccepted && otpVerified && hasPhoto;
+  const needed = stillNeeded({
+    otpVerified,
+    hasName: Boolean(form.fullName.trim()),
+    hasCategory: Boolean(form.employmentCategory),
+    documentsRequested,
+    documents,
+  });
+  const canSubmit = consentAccepted && needed.length === 0;
 
   const title = form.employmentCategory === EmploymentCategory.PROPRIETOR
     ? tr('selfRegistration.documents.titleProprietor')
@@ -147,39 +171,20 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
       : tr('selfRegistration.documents.title');
 
   const previewFiles = previewRequirement ? filesFor(previewRequirement) : [];
-  const previewLabel = previewRequirement ? labelFor(previewRequirement) : '';
+  const previewLabel = previewRequirement ? documentLabel(previewRequirement) : '';
 
-  const openWithdraw = () => {
-    setWithdrawReason('');
-    setWithdrawOpen(true);
-  };
-
-  const confirmWithdraw = () => {
-    onWithdraw(withdrawReason.trim() || undefined);
-    setWithdrawOpen(false);
-  };
+  const primaryButton = (plan: CapturePlan) => (plan.primary === 'files'
+    ? { label: tr('selfRegistration.documents.chooseFile'), icon: 'document-attach-outline' }
+    : { label: tr('selfRegistration.documents.takePhoto'), icon: 'camera' });
+  const secondaryLabel = (plan: CapturePlan) => (plan.secondary === 'gallery'
+    ? tr('selfRegistration.documents.orChooseGallery')
+    : tr('selfRegistration.documents.orChooseFile'));
 
   return (
     <View style={{ gap: t.space.lg }}>
       <Card level={1} style={{ gap: t.space.md }}>
         <AppText variant="overline" tone="faint">{title.toUpperCase()}</AppText>
         <AppText variant="small" tone="muted">{tr('selfRegistration.documents.hint')}</AppText>
-
-        <View style={{
-          flexDirection: 'row', alignItems: 'center', gap: t.space.md,
-          padding: t.space.md, borderRadius: t.radius.lg, backgroundColor: t.colors.surfaceAlt,
-        }}>
-          <View style={{
-            width: 44, height: 44, borderRadius: t.radius.md, backgroundColor: t.colors.primarySoft,
-            alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Icon name="camera" size={22} color={t.colors.primary} />
-          </View>
-          <View style={{ flex: 1, gap: 2 }}>
-            <AppText variant="bodyStrong">{tr('selfRegistration.documents.photoTitle')}</AppText>
-            <AppText variant="small" tone="muted">{tr('selfRegistration.documents.photoBody')}</AppText>
-          </View>
-        </View>
 
         {documentsRequested.length === 0 ? (
           <AppText variant="small" tone="muted">{tr('selfRegistration.documents.none')}</AppText>
@@ -190,51 +195,23 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
               const files = filesFor(requirement);
               const uploaded = files.length > 0;
               const busy = uploadingRequirement === requirement;
-              const isPhoto = requirement === 'PHOTOGRAPH';
-              const isConditional = REGISTRATION_CONDITIONAL_DOCUMENTS.includes(requirement);
-              // Sent back by HR: flagged until a fresh scan lands, with HR's own words.
-              const sentBack = doc?.reviewStatus === 'NEEDS_RESUBMIT';
-              const sentBackMessage = infoRequests.find((i) => i.kind === 'document' && i.key === requirement)?.message
-                ?? doc?.rejectionNote
-                ?? null;
-              const highlight = (isPhoto && !uploaded) || sentBack;
-              const hintKey = uploaded ? null : hintKeyFor(requirement);
-              const error = uploadErrors[requirement];
-
-              // Enforced at submit — the other "Required" badges are advice, this one is a refusal.
-              const blocksSubmit = REGISTRATION_REQUIRED_DOCUMENTS.includes(requirement);
-              const badge = isPhoto
-                ? <Badge label={tr('selfRegistration.documents.badgePhoto')} tone="primary" />
-                : blocksSubmit
-                  ? <Badge label={tr('selfRegistration.documents.badgeNeededToSubmit')} tone="primary" />
-                  : isConditional
-                  ? <Badge label={tr('selfRegistration.documents.badgeIfApplicable')} tone="neutral" />
-                  : <Badge label={tr('selfRegistration.documents.badgeRequired')} tone="accent" />;
-
-              const status = uploaded
-                ? (files.length > 1
-                  ? tr('selfRegistration.documents.addedMany', { count: files.length })
-                  : tr('selfRegistration.documents.added'))
-                : isPhoto
-                  ? tr('selfRegistration.documents.photoPending')
-                  : requirement === 'BANK_PASSBOOK'
-                    ? tr('selfRegistration.documents.passbookNote')
-                  : requirement === 'RENT_AGREEMENT'
-                    ? tr('selfRegistration.documents.rentAgreementNote')
-                    : requirement === 'ELECTRICITY_BILL'
-                      ? tr('selfRegistration.documents.electricityBillNote')
-                      : tr('selfRegistration.documents.pending');
+              const plan = capturePlanFor(requirement, devices);
+              const label = documentLabel(requirement);
+              const condition = conditionBadgeKey(requirement);
+              const noteKey = rowNoteKey(requirement);
+              // Sent back by HR: flagged until a fresh file lands, with HR's words or the standard ones.
+              const sentBack = rejectionText(doc, infoRequests);
+              const problem = uploadErrors[requirement];
+              const primary = primaryButton(plan);
 
               return (
                 <View
                   key={requirement}
                   style={[
                     { gap: t.space.sm, paddingVertical: t.space.md },
-                    highlight
+                    sentBack
                       ? {
-                          borderWidth: 1.5,
-                          borderColor: sentBack ? t.colors.warning : t.colors.primary,
-                          borderRadius: t.radius.lg,
+                          borderWidth: 1.5, borderColor: t.colors.warning, borderRadius: t.radius.lg,
                           paddingHorizontal: t.space.md, marginVertical: t.space.xs,
                         }
                       : index > 0
@@ -243,58 +220,96 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                   ]}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: t.space.sm }}>
-                    <AppText variant="bodyStrong" style={{ flexShrink: 1 }}>{labelFor(requirement)}</AppText>
-                    {badge}
+                    <AppText variant="bodyStrong" style={{ flexShrink: 1 }}>{label}</AppText>
+                    {condition ? <Badge label={tr(condition)} tone="neutral" /> : null}
                   </View>
 
-                  {/* One line per row: the photo tip says what "not added yet" would, and more usefully. */}
-                  {hintKey && !isConditional ? (
-                    <AppText variant="small" tone="muted">{tr(hintKey)}</AppText>
-                  ) : (
+                  {uploaded ? (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {uploaded && <Icon name="checkmark-circle" size={16} color={t.colors.success} />}
-                      <AppText variant="small" tone={uploaded ? 'success' : 'muted'} style={{ flex: 1 }}>{status}</AppText>
+                      <Icon name="checkmark-circle" size={16} color={t.colors.success} />
+                      <AppText variant="small" tone="success">{tr('selfRegistration.documents.added')}</AppText>
+                    </View>
+                  ) : noteKey ? (
+                    <AppText variant="small" tone="muted">{tr(noteKey)}</AppText>
+                  ) : null}
+
+                  {sentBack ? (
+                    <AppText variant="small" style={{ color: t.colors.warning, fontWeight: '700' }}>{sentBack}</AppText>
+                  ) : null}
+
+                  {uploaded && (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.md }}>
+                      {files.map((filePath, i) => {
+                        const key = `${requirement}:${i}`;
+                        return (
+                          <View key={`${i}-${filePath}`} style={{ alignItems: 'center', gap: 2 }}>
+                            <Thumb
+                              url={versionedFileUrl(token, requirement, i, filePath)}
+                              image={isImageFile(label, filePath, i, files.length)}
+                              label={label}
+                              onPress={() => setPreviewRequirement(requirement)}
+                            />
+                            {removing === key
+                              ? <ActivityIndicator size="small" color={t.colors.danger} />
+                              : (
+                                <TextLink
+                                  label={tr('selfRegistration.documents.remove')}
+                                  tone="danger"
+                                  disabled={busy || removing !== null}
+                                  onPress={() => onRemove(requirement, i)}
+                                />
+                              )}
+                          </View>
+                        );
+                      })}
                     </View>
                   )}
-                  {error ? <AppText variant="caption" tone="danger">{error}</AppText> : null}
-                  {sentBack && sentBackMessage ? (
-                    <AppText variant="small" style={{ color: t.colors.warning, fontWeight: '700' }}>
-                      {sentBackMessage}
-                    </AppText>
+
+                  {problem ? (
+                    <View style={{ gap: t.space.xs, backgroundColor: t.colors.dangerSoft, borderRadius: t.radius.md, padding: t.space.sm }}>
+                      <AppText variant="small" tone="danger">{problem.message}</AppText>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: t.space.lg }}>
+                        {problem.cameraDenied ? (
+                          <TextLink label={tr('selfRegistration.documents.openSettings')} onPress={() => { void Linking.openSettings(); }} />
+                        ) : (
+                          <TextLink label={tr('selfRegistration.documents.retake')} onPress={() => onCapture(requirement, 'primary', uploaded)} disabled={busy} />
+                        )}
+                        {plan.secondary ? (
+                          <TextLink label={secondaryLabel(plan)} onPress={() => onCapture(requirement, 'secondary', uploaded)} disabled={busy} />
+                        ) : null}
+                      </View>
+                    </View>
                   ) : null}
 
                   {uploaded ? (
-                    <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                      <Stretch>
-                        <Button
-                          label={tr('selfRegistration.documents.check')}
-                          icon="eye-outline"
-                          variant="neutral"
-                          onPress={() => setPreviewRequirement(requirement)}
-                          full
-                        />
-                      </Stretch>
-                      <Stretch>
-                        <Button
-                          label={tr('selfRegistration.documents.replace')}
-                          icon="camera-outline"
-                          variant="neutral"
-                          onPress={() => onCapture(requirement)}
-                          loading={busy}
-                          disabled={busy}
-                          full
-                        />
-                      </Stretch>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.lg, flexWrap: 'wrap' }}>
+                      <Button
+                        label={busy ? tr('selfRegistration.documents.uploading') : tr('selfRegistration.documents.retake')}
+                        icon={plan.primary === 'files' ? 'document-attach-outline' : 'camera-outline'}
+                        variant="neutral"
+                        onPress={() => onCapture(requirement, 'primary', true)}
+                        loading={busy}
+                        disabled={busy || removing !== null}
+                      />
+                      {plan.secondary && !busy ? (
+                        <TextLink label={secondaryLabel(plan)} onPress={() => onCapture(requirement, 'secondary', true)} />
+                      ) : null}
                     </View>
                   ) : (
-                    <Button
-                      label={tr('selfRegistration.documents.add')}
-                      icon="camera-outline"
-                      onPress={() => onCapture(requirement)}
-                      loading={busy}
-                      disabled={busy}
-                      full
-                    />
+                    <View style={{ gap: 2 }}>
+                      <Button
+                        label={busy ? tr('selfRegistration.documents.uploading') : primary.label}
+                        icon={primary.icon}
+                        size="lg"
+                        onPress={() => onCapture(requirement, 'primary', false)}
+                        loading={busy}
+                        disabled={busy}
+                        full
+                      />
+                      {plan.secondary && !busy ? (
+                        <TextLink label={secondaryLabel(plan)} onPress={() => onCapture(requirement, 'secondary', false)} center />
+                      ) : null}
+                    </View>
                   )}
                 </View>
               );
@@ -303,23 +318,50 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
         )}
       </Card>
 
-      <Card level={1} style={{ gap: t.space.md }}>
-        <GroupHeader icon="shield-checkmark-outline" title={tr('selfRegistration.consent.agreementTitle')} />
-        {application.consentAcceptedAt ? (
-          <AppText variant="small" tone="muted">
-            {tr('selfRegistration.consent.agreedOn', {
-              date: new Date(application.consentAcceptedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }),
-              version: application.consentVersion ?? consentNotice.version,
-            })}
-          </AppText>
-        ) : null}
-        <AppText variant="caption" tone="muted">
-          {tr('selfRegistration.consent.grievance', { contact: consentNotice.grievanceContact })}
-        </AppText>
-        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: t.space.md }}>
-          {consentAccepted && <Badge label={tr('selfRegistration.consent.agreed')} tone="success" icon="checkmark" />}
+      {/* Only what is missing, and only while something is. */}
+      {needed.length > 0 && (
+        <Card level={1} style={{ gap: t.space.sm, borderColor: t.colors.warning, borderWidth: 1 }}>
+          <AppText variant="bodyStrong">{tr('selfRegistration.checklist.title')}</AppText>
+          {needed.map((item) => (
+            <Tappable
+              key={`${item.key}:${'step' in item ? item.step : item.requirement}`}
+              onPress={() => ('step' in item ? goToStep(item.step) : onCapture(item.requirement, 'primary', false))}
+              accessibilityRole="link"
+              accessibilityLabel={tr(item.key, item.vars)}
+              hitSlop={6}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, paddingVertical: 2 }}>
+                <Icon name="alert-circle" size={18} color={t.colors.warning} />
+                <AppText variant="body" style={{ flex: 1 }}>{tr(item.key, item.vars)}</AppText>
+                <Icon name="chevron-forward" size={16} color={t.colors.textFaint} />
+              </View>
+            </Tappable>
+          ))}
+        </Card>
+      )}
+
+      <StepFooter
+        onBack={onBack}
+        onContinue={onSubmit}
+        continueLabel={tr('selfRegistration.submit.button')}
+        continueDisabled={!canSubmit}
+        continueLoading={submitting}
+      />
+
+      {/* The agreement — one line, below Submit. The legal contact stays; the version sits behind Details. */}
+      <View style={{ gap: t.space.xs, paddingHorizontal: t.space.xs }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: t.space.sm }}>
+          <Icon name="shield-checkmark-outline" size={14} color={t.colors.textMuted} />
+          {application.consentAcceptedAt ? (
+            <AppText variant="small" tone="muted">
+              {tr('selfRegistration.consent.agreedOn', {
+                date: new Date(application.consentAcceptedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }),
+              })}
+              {' ·'}
+            </AppText>
+          ) : null}
           <Tappable
-            onPress={openWithdraw}
+            onPress={() => { setWithdrawReason(''); setWithdrawOpen(true); }}
             disabled={withdrawing}
             accessibilityRole="button"
             accessibilityLabel={tr('selfRegistration.consent.withdraw')}
@@ -332,49 +374,18 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
               </AppText>
             </View>
           </Tappable>
+          <AppText variant="small" tone="faint">·</AppText>
+          <TextLink label={tr('selfRegistration.consent.details')} tone="muted" onPress={() => setConsentDetails((v) => !v)} />
         </View>
-      </Card>
-
-      <Card level={1} style={{ gap: t.space.md }}>
-        <AppText variant="overline" tone="faint">{tr('selfRegistration.checklist.title').toUpperCase()}</AppText>
-        <ChecklistRow
-          done={otpVerified}
-          label={tr('selfRegistration.checklist.phone')}
-          detail={phone ? `+91 ${phone}` : undefined}
-          linkLabel={tr('selfRegistration.checklist.goStep1')}
-          onLink={() => goToStep(1)}
-        />
-        <ChecklistRow
-          done={hasName}
-          label={tr('selfRegistration.checklist.fullName')}
-          linkLabel={tr('selfRegistration.checklist.goStep1')}
-          onLink={() => goToStep(1)}
-        />
-        <ChecklistRow
-          done={hasCategory}
-          label={tr('selfRegistration.checklist.category')}
-          linkLabel={tr('selfRegistration.checklist.goStep3')}
-          onLink={() => goToStep(3)}
-        />
-        <ChecklistRow
-          done={hasPhoto}
-          label={tr('selfRegistration.checklist.photo')}
-          linkLabel={tr('selfRegistration.checklist.goPhoto')}
-          onLink={() => onCapture('PHOTOGRAPH')}
-        />
-        <ChecklistRow done={consentAccepted} label={tr('selfRegistration.checklist.consent')} />
-        {!canSubmit && (
-          <AppText variant="caption" tone="faint">{tr('selfRegistration.checklist.hint')}</AppText>
-        )}
-      </Card>
-
-      <StepFooter
-        onBack={onBack}
-        onContinue={onSubmit}
-        continueLabel={tr('selfRegistration.submit.button')}
-        continueDisabled={!canSubmit}
-        continueLoading={submitting}
-      />
+        <AppText variant="caption" tone="faint">
+          {tr('selfRegistration.consent.grievance', { contact: consentNotice.grievanceContact })}
+        </AppText>
+        {consentDetails ? (
+          <AppText variant="caption" tone="faint">
+            {tr('selfRegistration.consent.agreedCopy', { version: application.consentVersion ?? consentNotice.version })}
+          </AppText>
+        ) : null}
+      </View>
 
       <ModalSheet
         visible={previewRequirement !== null}
@@ -386,9 +397,7 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
         <ScrollView contentContainerStyle={{ paddingHorizontal: t.space.xl, paddingBottom: t.space['2xl'], gap: t.space.xl }}>
           {previewRequirement && previewFiles.map((filePath, i) => {
             const count = previewFiles.length;
-            const fileName = storedScanFileName(previewLabel, filePath, count > 1 ? i + 1 : undefined);
             const url = versionedFileUrl(token, previewRequirement, i, filePath);
-            const isImage = (scanMimeType(fileName) ?? '').startsWith('image/');
             return (
               <View key={`${i}-${filePath}`} style={{ gap: t.space.sm }}>
                 {count > 1 && (
@@ -396,7 +405,7 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                     {tr('selfRegistration.documents.previewFile', { index: i + 1, count })}
                   </AppText>
                 )}
-                {isImage ? (
+                {isImageFile(previewLabel, filePath, i, count) ? (
                   <PreviewImage key={url} url={url} />
                 ) : (
                   <View style={{ gap: t.space.md, padding: t.space.lg, borderRadius: t.radius.lg, backgroundColor: t.colors.surfaceAlt }}>
@@ -437,7 +446,7 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
               <Button
                 label={tr('selfRegistration.consent.withdrawConfirm')}
                 variant="danger"
-                onPress={confirmWithdraw}
+                onPress={() => { onWithdraw(withdrawReason.trim() || undefined); setWithdrawOpen(false); }}
                 loading={withdrawing}
                 full
               />

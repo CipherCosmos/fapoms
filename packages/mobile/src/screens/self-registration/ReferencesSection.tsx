@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
-import { APPLICATION_REFERENCES_MAX, referenceEmailProblem, referencePhoneForDisplay } from '@fapoms/shared';
+import {
+  APPLICATION_REFERENCES_MAX, mobileNumberLooksWrong, normalisePhone, referenceEmailProblem, referencePhoneForDisplay,
+} from '@fapoms/shared';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Button, Card, Input } from '../../components/ui/primitives';
 import { useT } from '../../i18n';
@@ -26,14 +28,22 @@ export const ReferencesSection: React.FC<{
   const [relationship, setRelationship] = useState('');
   const [email, setEmail] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [addTried, setAddTried] = useState(false);
+  // Red once a whole number is wrong, or once Add was pressed with a wrong one — as on the web.
+  const phoneWrong = phone !== '' && normalisePhone(phone) === null && (addTried || mobileNumberLooksWrong(phone));
 
   const add = () => {
+    setAddTried(true);
     if (!name.trim()) {
       setLocalError(tr('selfRegistration.form.referenceNameNeeded'));
       return;
     }
     if (references.length >= APPLICATION_REFERENCES_MAX) {
       setLocalError(tr('selfRegistration.form.referenceTooMany'));
+      return;
+    }
+    if (phone && !normalisePhone(phone)) {
+      setLocalError(null);
       return;
     }
     if (email.trim() && referenceEmailProblem(email.trim().toLowerCase())) {
@@ -47,6 +57,7 @@ export const ReferencesSection: React.FC<{
       relationship: relationship.trim(),
       email: email.trim().toLowerCase(),
     }]);
+    setAddTried(false);
     setName('');
     setPhone('');
     setRelationship('');
@@ -99,7 +110,10 @@ export const ReferencesSection: React.FC<{
             value={phone}
             onChangeText={(v) => setPhone(v.replace(/\D/g, '').slice(0, 15))}
             placeholder={tr('selfRegistration.form.referencePhonePlaceholder')}
+            prefix="+91"
             keyboardType="number-pad"
+            maxLength={15}
+            error={phoneWrong ? tr('selfRegistration.errors.phoneInvalid') : undefined}
           />
           <Input
             label={tr('selfRegistration.form.referenceRelation')}

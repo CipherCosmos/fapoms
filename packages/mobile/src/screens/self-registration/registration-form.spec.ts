@@ -101,9 +101,18 @@ describe('the account-number confirmation', () => {
     expect(seedRegistrationForm(app({})).bankAccountNumberConfirm).toBe('');
   });
 
-  it('speaks the shared rule’s own sentence when the two disagree', () => {
+  it('speaks the shared rule’s own sentence when it cannot tell which case it is', () => {
     expect(problemMessage('bankAccountNumberConfirm', { code: 'mismatch', message: 'The two account numbers do not match.' }))
       .toEqual({ text: 'The two account numbers do not match.' });
+  });
+
+  /** Hindi readers were handed the shared English sentence; the two cases now have their own keys. */
+  it('says "type it again" or "they differ" from the catalogue, in the reader’s language', () => {
+    const mismatch = { code: 'mismatch' as const, message: 'x' };
+    expect(problemMessage('bankAccountNumberConfirm', mismatch, { dateOfBirth: '', bankAccountNumberConfirm: '' }))
+      .toEqual({ key: 'selfRegistration.errors.accountConfirmMissing' });
+    expect(problemMessage('bankAccountNumberConfirm', mismatch, { dateOfBirth: '', bankAccountNumberConfirm: '1234 5678 9' }))
+      .toEqual({ key: 'selfRegistration.errors.accountConfirmMismatch' });
   });
 
   /** The API refuses unknown properties: the second typing leaving the phone would fail every step change. */
@@ -116,3 +125,18 @@ describe('the account-number confirmation', () => {
   });
 });
 
+
+describe('the date of birth, in the reader’s language', () => {
+  it('turns the shared age rule into a catalogue sentence rather than passing its English through', () => {
+    const blank = seedRegistrationForm({ ...application, dateOfBirth: '2020-01-01' });
+    const problem = registrationStepProblems(1, blank).dateOfBirth!;
+    expect(problem.code).toBe('dateOfBirth');
+    const message = problemMessage('dateOfBirth', problem, blank);
+    expect(message).toMatchObject({ key: 'selfRegistration.errors.dobTooYoung' });
+    expect(typeof lookup((message as { key: string }).key)).toBe('string');
+  });
+
+  it('falls back to the shared sentence when no answer is handed over', () => {
+    expect(problemMessage('dateOfBirth', { code: 'dateOfBirth', message: 'From the rule.' })).toEqual({ text: 'From the rule.' });
+  });
+});

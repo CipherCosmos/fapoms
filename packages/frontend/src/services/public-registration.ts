@@ -150,11 +150,13 @@ export function requestRegistrationOtp(token: string, phone: string): Promise<Re
 }
 
 /**
- * Said before a code is requested. The page cannot know yet which channel the server will use, so it
- * names both rather than promise one that may not be the one that arrives.
+ * Said before a code is requested — one short line (owner, 2026-09-24: "keep things simple").
+ *
+ * Texting is how the code normally travels. When SMS is not available the server emails it
+ * instead, and the line shown AFTER sending (`otpSentWords`) says exactly which one happened and
+ * where, so nobody is left looking in the wrong place.
  */
-export const OTP_BEFORE_SEND_WORDS =
-  'We will send a 6-digit code to your mobile, or to your email if texts are not available.';
+export const OTP_BEFORE_SEND_WORDS = "We'll send you a 6-digit code.";
 
 /** Said once a code is on its way: exactly where the server says it went. */
 export function otpSentWords(delivery: Pick<RegistrationOtpSent, 'channel' | 'sentTo'>): string {
@@ -211,17 +213,50 @@ export function withdrawRegistrationConsent(token: string, reason?: string): Pro
   });
 }
 
+/**
+ * Attach a file to a document row.
+ *
+ * `replace: true` is what "Retake" means: the server swaps out every file already on that row for
+ * this one. Without it the file is added beside what is there — which is how a replacement used to
+ * be sent, so a "replaced" scan quietly left the old one on the application too.
+ *
+ * A file the server will not take (wrong content for its name, unreadable, flagged by the scan)
+ * comes back as a 400 with the code `UPLOAD_REJECTED` and a short sentence — see
+ * `isUploadRejected`.
+ */
 export function uploadRegistrationDocument(
   token: string,
   requirement: OnboardingDocument | string,
   file: File,
+  options: { replace?: boolean } = {},
 ): Promise<RegistrationApplicationDocument> {
   const body = new FormData();
   body.append('file', file);
+  const query = options.replace ? '?replace=true' : '';
   return call<RegistrationApplicationDocument>(
-    `${basePath(token)}/documents/${encodeURIComponent(requirement)}`,
+    `${basePath(token)}/documents/${encodeURIComponent(requirement)}${query}`,
     { method: 'POST', body },
   );
+}
+
+/**
+ * Take one file off a document row. Answers with the row as it now stands — `filePaths` may be
+ * empty, which means nothing is attached for that document any more.
+ */
+export function removeRegistrationDocumentFile(
+  token: string,
+  requirement: OnboardingDocument | string,
+  index: number,
+): Promise<RegistrationApplicationDocument> {
+  return call<RegistrationApplicationDocument>(
+    `${basePath(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`,
+    { method: 'DELETE' },
+  );
+}
+
+/** Was this the server refusing the file itself (as opposed to the network, or the link)? */
+export function isUploadRejected(err: unknown): boolean {
+  return err instanceof AppError && err.domainCode === 'UPLOAD_REJECTED';
 }
 
 export function submitRegistration(token: string): Promise<RegistrationApplication> {

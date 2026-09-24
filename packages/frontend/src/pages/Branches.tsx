@@ -744,8 +744,8 @@ export const Branches: React.FC = () => {
                           badge is what stops six decimal places reading as six decimal places
                           of confidence. */}
                       <GeoPrecisionBadge source={branchDetail.geoSource} matchedName={branchDetail.geoMatchedName} />
-                      <a href={`https://www.openstreetmap.org/?mlat=${branchDetail.latitude}&mlon=${branchDetail.longitude}#map=17/${branchDetail.latitude}/${branchDetail.longitude}`}
-                        target="_blank" rel="noopener noreferrer" title="Open this branch location on OpenStreetMap in a new tab"
+                      <a href={`https://www.google.com/maps/search/?api=1&query=${branchDetail.latitude},${branchDetail.longitude}`}
+                        target="_blank" rel="noopener noreferrer" title="Open this branch location on Google Maps in a new tab"
                         style={{ fontSize: 'var(--text-2xs)', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
                         <Map size={14} /> Check on the map
                       </a>

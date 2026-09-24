@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { REGISTRATION_RECORD_FIELD_KEYS, businessDateKey } from '@fapoms/shared';
+import { REGISTRATION_RECORD_FIELD_KEYS, businessDateKey, type SourceReferral } from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { fieldErrorKeys, userMessage } from '../../../services/errors';
 import { stringifyList } from '../AssayerForms';
@@ -66,6 +66,8 @@ export interface ApplicationRow {
     commercial?: Record<string, unknown>;
     references?: Array<Record<string, unknown>>;
     empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+    /** Who referred them — from the interview, the desk, or the candidate's own link. */
+    sourceReferral?: SourceReferral | null;
   } | null;
 }
 
@@ -150,6 +152,8 @@ export function snapshotApplication(view: ApplicationView): Record<string, strin
 export interface StaffExtras {
   empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
   references?: Array<Record<string, unknown>>;
+  /** `null` clears it; absent leaves it alone. */
+  sourceReferral?: Record<string, string> | null;
 }
 
 export interface RegistrationState {
@@ -305,6 +309,7 @@ export function useRegistration(applicationId: string): Registration {
       const lists = {
         ...(extras?.empanelments ? { empanelments: extras.empanelments } : {}),
         ...(extras?.references ? { references: extras.references } : {}),
+        ...(extras?.sourceReferral !== undefined ? { sourceReferral: extras.sourceReferral } : {}),
       };
       if (!body && !rates && Object.keys(lists).length === 0) return true;
 

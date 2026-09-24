@@ -103,7 +103,7 @@ module.exports = {
       buildNumber: '1',
       infoPlist: {
         NSCameraUsageDescription:
-          'Orbit requires camera access to scan gold audit sheets and capture document evidence.',
+          'Take photos of your documents and your face photo, and scan audit papers.',
         NSLocationWhenInUseUsageDescription:
           'Orbit requires location access to verify assayer presence at bank audit branches and show navigate routes.',
         NSPhotoLibraryUsageDescription:
@@ -172,6 +172,20 @@ module.exports = {
         {
           locationWhenInUsePermission:
             'Allow Orbit to use your location to show the route and travel time to your assigned audit branch.',
+        },
+      ],
+      /**
+       * The plain phone camera, for a registration's face photo (front camera) and for taking a
+       * document photo where Google's ML Kit scanner is not there (iOS, or an Android phone
+       * without it). Native module, so it needs a new APK — an OTA cannot deliver it.
+       * `cameraPermission` is the iOS prompt; it replaces `NSCameraUsageDescription` above, so it
+       * covers the audit-sheet use too. Photos and microphone keep the texts set above.
+       */
+      [
+        'expo-image-picker',
+        {
+          cameraPermission:
+            'Take photos of your documents and your face photo, and scan audit papers.',
         },
       ],
       [

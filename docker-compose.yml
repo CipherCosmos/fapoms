@@ -339,6 +339,18 @@ services:
       dockerproxy:
         condition: service_started
 
+  # The India map — the same service as deploy/docker-compose.prod.yml's (see the comment there):
+  # the maps in a dev checkout draw India the same way production does. Needs
+  # `deploy/maps/fetch-map-data.sh` once (MAP_DETAIL_MAXZOOM=12 keeps a laptop copy small).
+  india-tiles:
+    image: docker.io/maptiler/tileserver-gl:v5.6.0
+    restart: unless-stopped
+    command: ["--config", "/data/config.json"]
+    volumes:
+      - ${MAP_DATA_DIR:-${HOME}/fapoms-maps}:/data
+      - ./deploy/maps/styles:/data/styles:ro
+      - ./deploy/maps/config.json:/data/config.json:ro
+
   # ---------------------------------------------------------------------------
   # Frontend (Vite + React) — Hot Reload via Vite HMR
   # ---------------------------------------------------------------------------

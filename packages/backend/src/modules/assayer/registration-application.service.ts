@@ -1770,17 +1770,26 @@ export class RegistrationApplicationService {
 
   // ── Documents ────────────────────────────────────────────────────────────
 
+  /**
+   * The candidate attaching a scan on their link.
+   *
+   * `replace` is the "Replace" button: the new file takes the place of every file already on the
+   * requirement, instead of sitting beside them. It used to append whatever the button said, so a
+   * candidate fixing a blurred PAN card left the blurred one on the application too and HR read
+   * "(2 files)" with no way to know which was meant. Without `replace` it still appends — that is
+   * the "add a page" case, both sides of a card or a two-page statement.
+   *
+   * The files it displaces are deleted from storage once the row no longer points at them — the
+   * same order `withdrawConsent` keeps: a failed delete leaves an unreferenced object for the
+   * orphan sweep, never a row pointing at nothing.
+   */
   async uploadDocument(
     rawToken: string,
     requirement: OnboardingDocument,
     file: { originalname: string; buffer: Buffer; mimetype: string; size: number },
+    options: { replace?: boolean } = {},
   ): Promise<AssayerApplicationDocumentEntity> {
-    const application = await this.findByRawToken(rawToken);
-    if (!applicationIsEditableByCandidate(application.status)) {
-      throw new BadRequestException('This application is no longer editable.');
-    }
-    // A scan is the most personal thing this form asks for; it waits for the same agreement.
-    this.assertConsented(application);
+    const application = await this.candidateEditableApplication(rawToken);
     if (!Object.values(OnboardingDocument).includes(requirement)) {
       throw new BadRequestException('That is not a recognised document type.');
     }
@@ -1791,9 +1800,103 @@ export class RegistrationApplicationService {
       allowed: SCAN_UPLOAD_TYPES,
       hint: 'Photograph the document in better light rather than at higher resolution.',
     });
-    const row = await this.attachDocumentRow(application, requirement, file);
+    const { row, displacedKeys } = await this.attachDocumentRow(
+      application, requirement, file, options.replace ? 'replace' : 'append',
+    );
     await this.clearResubmittedFlag(application, row);
+    if (displacedKeys.length > 0) {
+      const notDeleted = await this.deleteStoredObjects(displacedKeys);
+      await this.auditService.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_REPLACED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application.id,
+        remarks: `${requirement} replaced by the candidate on the registration link: `
+          + `${displacedKeys.length} earlier file(s) removed`
+          + `${notDeleted > 0 ? `, ${notDeleted} could not be deleted from storage and are left to the orphan sweep` : ''}.`,
+        metadata: { requirement, filesReplaced: displacedKeys.length, storageDeleteFailures: notDeleted },
+      });
+    }
     return row;
+  }
+
+  /**
+   * The candidate taking one file off a requirement — the wrong photo, a page that should not be
+   * there. Until this existed a mistaken upload was permanent from the candidate's side: the only
+   * remedy was to ask HR, who could not remove it either.
+   *
+   * Same gates as the upload (the link, an editable application, consent), because removing is
+   * editing. The row is kept even when it empties: it may carry HR's send-back reason, and the
+   * candidate still needs to see what was asked for. Answers the row as it now stands.
+   */
+  async removeDocumentFile(
+    rawToken: string,
+    requirement: OnboardingDocument,
+    index: number,
+  ): Promise<AssayerApplicationDocumentEntity> {
+    const application = await this.candidateEditableApplication(rawToken);
+    if (!Object.values(OnboardingDocument).includes(requirement)) {
+      throw new NotFoundException('That document has not been attached.');
+    }
+    const row = await this.applicationDocuments.findOne({
+      where: { applicationId: application.id, requirement },
+    });
+    const files = row?.filePaths ?? [];
+    if (!row || !Number.isInteger(index) || index < 0 || index >= files.length) {
+      throw new NotFoundException('That file is not attached, so there is nothing to remove.');
+    }
+    const key = files[index];
+    row.filePaths = files.filter((_, i) => i !== index);
+    // The approval was of the set HR saw; with a file gone it no longer describes what is attached.
+    if (row.reviewStatus === ApplicationDocumentReviewStatus.APPROVED) {
+      row.reviewStatus = ApplicationDocumentReviewStatus.PENDING;
+      row.reviewedBy = null;
+      row.reviewedAt = null;
+    }
+    const saved = await this.applicationDocuments.save(row);
+    const notDeleted = await this.deleteStoredObjects([key]);
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_APPLICATION_DOCUMENT_REMOVED',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: application.id,
+      remarks: `${requirement}: the candidate removed file ${index + 1} of ${files.length} on the registration link`
+        + `${notDeleted > 0 ? '; it could not be deleted from storage and is left to the orphan sweep' : ''}.`,
+      metadata: { requirement, index, filesRemaining: saved.filePaths?.length ?? 0, storageDeleteFailures: notDeleted },
+    });
+    return saved;
+  }
+
+  /**
+   * The gate every candidate write to their documents passes: a live link, an application still in
+   * their hands, and the consent the scans are collected under. One place, so upload, replace and
+   * remove cannot drift apart on who may change the application.
+   */
+  private async candidateEditableApplication(rawToken: string): Promise<AssayerApplicationEntity> {
+    const application = await this.findByRawToken(rawToken);
+    if (!applicationIsEditableByCandidate(application.status)) {
+      throw new BadRequestException('This application is no longer editable.');
+    }
+    // A scan is the most personal thing this form asks for; it waits for the same agreement.
+    this.assertConsented(application);
+    return application;
+  }
+
+  /**
+   * Best-effort deletion of objects no row points at any more. Answers how many could not be
+   * deleted: storage may already have lost them or be unreachable, and the orphan sweep is what
+   * catches a file left behind — the pattern `withdrawConsent` set.
+   */
+  private async deleteStoredObjects(keys: string[]): Promise<number> {
+    let failed = 0;
+    for (const key of keys) {
+      try {
+        await this.storage.deleteFile(key);
+      } catch {
+        failed++;
+      }
+    }
+    return failed;
   }
 
   /**
@@ -1826,7 +1929,7 @@ export class RegistrationApplicationService {
     });
     this.stampDeskAuthorship(application, actorUserId);
     await this.applications.save(application);
-    const row = await this.attachDocumentRow(application, requirement, file);
+    const { row } = await this.attachDocumentRow(application, requirement, file, 'append');
     await this.clearResubmittedFlag(application, row);
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
@@ -1898,19 +2001,26 @@ export class RegistrationApplicationService {
    * The storage-and-row half of a document upload, shared by the candidate door (token) and the
    * staff door (session). One implementation, so the two doors cannot drift on what "attached"
    * means — the exact drift that produced four disagreeing upload paths elsewhere.
+   *
+   * `replace` puts the new file in place of every earlier one and answers the displaced keys, for
+   * the caller to delete once this save has landed — never before, or a failed save would leave
+   * the row pointing at deleted objects.
    */
   private async attachDocumentRow(
     application: AssayerApplicationEntity,
     requirement: OnboardingDocument,
     file: { originalname: string; buffer: Buffer; mimetype: string; size: number },
-  ): Promise<AssayerApplicationDocumentEntity> {
+    mode: 'append' | 'replace',
+  ): Promise<{ row: AssayerApplicationDocumentEntity; displacedKeys: string[] }> {
     const key = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype, file.size);
     const existing = await this.applicationDocuments.findOne({
       where: { applicationId: application.id, requirement },
     });
     const row = existing ?? this.applicationDocuments.create({ applicationId: application.id, requirement, filePaths: [] });
-    row.filePaths = [...(row.filePaths ?? []), key];
-    return this.applicationDocuments.save(row);
+    const earlier = row.filePaths ?? [];
+    row.filePaths = mode === 'replace' ? [key] : [...earlier, key];
+    const saved = await this.applicationDocuments.save(row);
+    return { row: saved, displacedKeys: mode === 'replace' ? earlier.filter((k) => k !== key) : [] };
   }
 
   /**
@@ -1923,7 +2033,13 @@ export class RegistrationApplicationService {
     application: AssayerApplicationEntity,
     row: AssayerApplicationDocumentEntity,
   ): Promise<void> {
-    if (row.reviewStatus === ApplicationDocumentReviewStatus.NEEDS_RESUBMIT) {
+    // An approval covers the files HR looked at. New bytes on an approved requirement — possible
+    // once an application is sent back for more information and the link reopens — are files HR
+    // has not seen, so the requirement goes back to pending rather than keeping a tick it never earned.
+    if (
+      row.reviewStatus === ApplicationDocumentReviewStatus.NEEDS_RESUBMIT
+      || row.reviewStatus === ApplicationDocumentReviewStatus.APPROVED
+    ) {
       row.reviewStatus = ApplicationDocumentReviewStatus.PENDING;
       row.rejectionReason = null;
       row.rejectionNote = null;
@@ -2048,6 +2164,22 @@ export class RegistrationApplicationService {
         `Upload ${missingDocs.map((d) => ONBOARDING_DOCUMENT_LABELS[d as OnboardingDocument] ?? d).join(' and ')} `
         + 'before submitting — the page showing your name, account number and IFSC. A cancelled '
         + 'cheque or the first page of a bank statement is fine if you have no passbook.',
+      );
+    }
+    /*
+      The photograph, which both forms already refuse to submit without. Approval refuses an
+      application with no face on it (the ID card cannot be issued), so letting it be filed without
+      one only moved the refusal onto HR — who then had to chase the candidate for it. Same test as
+      the passbook's: a row with a file on it.
+    */
+    const hasPhotograph = attached.some(
+      (d) => d.requirement === OnboardingDocument.PHOTOGRAPH && (d.filePaths?.length ?? 0) > 0,
+    );
+    if (!hasPhotograph) {
+      throw new BadRequestException(
+        `Upload ${ONBOARDING_DOCUMENT_LABELS[OnboardingDocument.PHOTOGRAPH] ?? 'your photograph'} `
+        + 'before submitting — a clear photo of your face, for your ID card. A selfie against a '
+        + 'plain wall is fine.',
       );
     }
     // The checks that used to arrive as review-queue findings days later.

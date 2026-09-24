@@ -75,13 +75,13 @@ describe('assertUploadContent — a label cannot disguise the bytes', () => {
 
   it('refuses a photo labelled as a PDF, and a PDF labelled as a spreadsheet', () => {
     expect(() => assertUploadContent(JPEG, { fileName: 'return.pdf', declaredType: 'application/pdf' }))
-      .toThrow(/labelled as a PDF but its contents are an image/);
+      .toThrow(/is a photo, not a PDF\. Choose the right file/);
     expect(() => assertUploadContent(PDF, { fileName: 'branches.xlsx' })).toThrow(/spreadsheet/);
   });
 
   it('names plain text as plain text, not a spreadsheet, when it poses as an image', () => {
     expect(() => assertUploadContent(Buffer.from('fake image'), { fileName: 'photo.jpg', declaredType: 'image/jpeg' }))
-      .toThrow(/labelled as an image but its contents are plain text/);
+      .toThrow(/is plain text, not a photo/);
   });
 
   it('tolerates a mislabel within the same family (a HEIC a phone called JPEG)', () => {
@@ -91,5 +91,54 @@ describe('assertUploadContent — a label cannot disguise the bytes', () => {
   it('uses the extension when the declared type says nothing', () => {
     expect(() => assertUploadContent(PDF, { fileName: 'photo.png', declaredType: 'application/octet-stream' })).toThrow();
     expect(assertUploadContent(PDF, { fileName: 'scan', declaredType: 'application/octet-stream' }).family).toBe('pdf');
+  });
+});
+
+/**
+ * The person most often reading these is a candidate on a phone attaching an ID card. The
+ * refusals used to say "no end-of-file marker" and suggest Excel/CSV to somebody uploading a PAN
+ * card; each now says, in a few plain words, what to do next.
+ */
+describe('refusals a candidate on a phone can act on', () => {
+  const messageOf = (fn: () => unknown): string => {
+    try { fn(); } catch (e) { return (e as Error).message; }
+    throw new Error('expected a refusal');
+  };
+
+  it.each([
+    ['an empty file', () => classifyUpload(Buffer.alloc(0))],
+    ['a truncated PDF', () => classifyUpload(TRUNCATED_PDF)],
+    ['a truncated PNG', () => classifyUpload(TRUNCATED_PNG)],
+    ['a Word document', () => classifyUpload(DOCX)],
+    ['a program', () => classifyUpload(EXE)],
+    ['a mislabelled photo', () => assertUploadContent(JPEG, { fileName: 'pan.pdf' })],
+  ])('refuses %s in short plain words, with no jargon', (_label, fn) => {
+    const message = messageOf(fn);
+    expect(message.split(/\s+/).length).toBeLessThanOrEqual(16);
+    expect(message).not.toMatch(/end-of-file|marker|MIME|archive|re-upload/i);
+  });
+
+  it('tells a damaged file to be taken again', () => {
+    expect(messageOf(() => classifyUpload(TRUNCATED_PNG))).toMatch(/damaged or incomplete.*Take the photo again/);
+    expect(messageOf(() => classifyUpload(TRUNCATED_PDF))).toMatch(/damaged or incomplete/);
+  });
+
+  it('never suggests a spreadsheet to somebody uploading a photo or an ID', () => {
+    for (const [bytes, fileName] of [[DOCX, 'aadhaar.docx'], [EXE, 'photo.jpg'], [ZIP, 'pan.pdf'], [HTML, undefined]] as const) {
+      const message = messageOf(() => assertUploadContent(bytes, { fileName }));
+      expect(message).not.toMatch(/excel|csv|spreadsheet/i);
+    }
+    expect(messageOf(() => classifyUpload(DOCX))).toMatch(/Upload a photo or a PDF/);
+  });
+
+  it('names Excel or CSV only to a file that called itself a spreadsheet — an import', () => {
+    expect(messageOf(() => assertUploadContent(ZIP, { fileName: 'branches.xlsx' }))).toMatch(/Excel or CSV/);
+  });
+
+  it('keeps the upload-rejected code on every refusal', () => {
+    expect.assertions(1);
+    try { classifyUpload(DOCX); } catch (e) {
+      expect(JSON.stringify((e as { getResponse(): unknown }).getResponse())).toContain('UPLOAD_REJECTED');
+    }
   });
 });

@@ -5,6 +5,7 @@ import { Modal } from '../ui/Modal';
 import { GeoPrecisionBadge } from '../GeoPrecisionBadge';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { SATELLITE_TILE_OPTIONS, SATELLITE_TILE_URL, STREET_TILE_OPTIONS, STREET_TILE_URL } from './basemap';
 
 /** Fix Leaflet marker icon in Vite */
 const MARKER_ICON = L.icon({
@@ -90,10 +91,7 @@ export const CoordinatePinModal: React.FC<CoordinatePinModalProps> = ({
         scrollWheelZoom: true,
       });
 
-      const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
-      });
+      const streetLayer = L.tileLayer(STREET_TILE_URL, STREET_TILE_OPTIONS);
       streetLayer.addTo(map);
       tileLayerRef.current = streetLayer;
 
@@ -193,18 +191,9 @@ export const CoordinatePinModal: React.FC<CoordinatePinModalProps> = ({
     }
 
     if (nextType === 'satellite') {
-      tileLayerRef.current = L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        {
-          maxZoom: 19,
-          attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
-        }
-      ).addTo(mapRef.current);
+      tileLayerRef.current = L.tileLayer(SATELLITE_TILE_URL, SATELLITE_TILE_OPTIONS).addTo(mapRef.current);
     } else {
-      tileLayerRef.current = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
-      }).addTo(mapRef.current);
+      tileLayerRef.current = L.tileLayer(STREET_TILE_URL, STREET_TILE_OPTIONS).addTo(mapRef.current);
     }
   };
 

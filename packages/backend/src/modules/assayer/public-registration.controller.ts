@@ -1,6 +1,6 @@
 import {
-  Body, Controller, Get, Param, Patch, Post, UploadedFile, UseInterceptors, BadRequestException,
-  Res, ParseIntPipe,
+  Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors,
+  BadRequestException, Res, ParseIntPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -219,11 +219,15 @@ export class PublicRegistrationController {
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file', publicUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload a document scan for this application' })
+  @ApiOperation({
+    summary: 'Upload a document scan for this application',
+    description: 'Appends by default (another page). `?replace=true` puts the file in place of every file already on the requirement.',
+  })
   async uploadDocument(
     @Param('token') token: string,
     @Param('requirement') requirement: string,
     @UploadedFile() file: any,
+    @Query('replace') replace?: string,
   ) {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
@@ -233,8 +237,25 @@ export class PublicRegistrationController {
       buffer: file.buffer,
       mimetype: file.mimetype,
       size: file.size,
-    });
+    }, { replace: replace === 'true' || replace === '1' });
     return { success: true, data };
+  }
+
+  /**
+   * Taking one file off a requirement. Throttled like the upload it undoes; gated like it too (see
+   * `removeDocumentFile`). Answers the row as it now stands — `filePaths` may be empty.
+   */
+  @Delete(':token/documents/:requirement/file/:index')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Remove one attached file from a document requirement' })
+  async removeDocumentFile(
+    @Param('token') token: string,
+    @Param('requirement') requirement: string,
+    @Param('index', ParseIntPipe) index: number,
+  ) {
+    return await this.registrationApplications.removeDocumentFile(
+      token, requirement as OnboardingDocument, index,
+    );
   }
 
   @Post(':token/submit')

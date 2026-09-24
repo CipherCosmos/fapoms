@@ -28,15 +28,19 @@ describe('the bank account on the candidate form', () => {
   });
   const notice = { ...CURRENT_CONSENT_NOTICE, grievanceContact: 'Asha Menon' };
 
-  const start = async (step: number, opts: { fields?: Record<string, unknown>; documents?: unknown[] } = {}) => {
-    localStorage.setItem(`fapoms_reg_step_${TOKEN}`, String(step));
-    localStorage.setItem(`fapoms_reg_max_${TOKEN}`, '4');
+  /**
+   * This application is complete up to the documents, so the form reopens on step 4 — the shared
+   * resume rule the phone app uses. Step 3 is one press back, on the step list.
+   */
+  const start = async (step: 3 | 4, opts: { fields?: Record<string, unknown>; documents?: unknown[] } = {}) => {
     api.hydrateRegistration.mockResolvedValue({
       application: application(opts.fields), documents: opts.documents ?? [],
       documentsRequested: ['PHOTOGRAPH', 'BANK_PASSBOOK'], otpVerified: true, consentNotice: notice, infoRequests: [],
     } as never);
     api.updateRegistrationDraft.mockImplementation(async () => application(opts.fields) as never);
     render(<MemoryRouter><PublicRegistration token={TOKEN} /></MemoryRouter>);
+    await screen.findByText('Lay flat, good light, all 4 corners.');
+    if (step === 3) fireEvent.click(await screen.findByRole('button', { name: 'ID & bank' }));
   };
 
   beforeAll(() => {
@@ -49,9 +53,6 @@ describe('the bank account on the candidate form', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
-    // The form records its step in the URL hash too, and reads the hash FIRST — jsdom keeps it
-    // between tests, so without this the previous test's step wins over the one set above.
-    window.history.replaceState(null, '', window.location.pathname);
   });
 
   const accountCalls = () => api.updateRegistrationDraft.mock.calls
@@ -98,8 +99,10 @@ describe('the bank account on the candidate form', () => {
   it('will not submit without the passbook, and takes them to it', async () => {
     await start(4, { documents: [{ id: 'd1', applicationId: 'app-1', requirement: 'PHOTOGRAPH', filePaths: ['f.jpg'] }] });
 
-    expect(await screen.findByText('Needed to submit')).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Submit application for HR review' }));
+    // Listed as still needed — the one thing between them and Submit.
+    expect(await screen.findByText('Still needed:')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /passbook/i })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Submit' }));
 
     expect(await screen.findByText(/Upload your bank passbook before submitting/i)).toBeInTheDocument();
     expect(api.submitRegistration).not.toHaveBeenCalled();
@@ -111,7 +114,7 @@ describe('the bank account on the candidate form', () => {
    */
   it('never sends the second typing when Continue saves the whole form', async () => {
     await start(3, { fields: { bankAccountNumber: '123456789012' } });
-    fireEvent.click(await screen.findByRole('button', { name: /Continue to Documents/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
 
     await waitFor(() => expect(api.updateRegistrationDraft).toHaveBeenCalled());
     for (const [, patch] of api.updateRegistrationDraft.mock.calls) {
@@ -124,10 +127,11 @@ describe('the bank account on the candidate form', () => {
   it('will not move on while the account number is unconfirmed', async () => {
     await start(3);
     fireEvent.change(await screen.findByLabelText('Bank account number'), { target: { value: '123456789012' } });
-    fireEvent.click(screen.getByRole('button', { name: /Continue to Documents/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
     expect(await screen.findByText(/second time to confirm it/)).toBeInTheDocument();
-    expect(screen.queryByText('Needed to submit')).not.toBeInTheDocument();
+    // Still on step 3: the documents step, and its Submit, never appeared.
+    expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
   });
 });
 
