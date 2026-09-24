@@ -98,7 +98,7 @@ repair_if_unhealthy() {
   local repaired=false svc pkgdir gone
   for entry in "backend:/app/packages/backend" "frontend:/app/packages/frontend" "mobile:/app/packages/mobile"; do
     svc="${entry%%:*}"; pkgdir="${entry#*:}"
-    "${COMPOSE[@]}" ps --services 2>/dev/null | grep -qx "$svc" || continue
+    grep -qx "$svc" <<< "$("${COMPOSE[@]}" ps --services 2>/dev/null)" || continue
     gone="$(missing_deps "$svc" "$pkgdir")"
     [ -n "$gone" ] || continue
     log "REPAIR: stack is unhealthy and $svc cannot see ($gone) — rebuilding it with a fresh node_modules"
@@ -255,9 +255,9 @@ if $SOURCE_MOUNTED; then
   # the image is built, so a new dependency never appears merely because package.json changed on
   # disk — that is the one edit here that genuinely needs a rebuild, along with the Dockerfile.
   # Everything else under packages/*/src is already inside the container the moment git writes it.
-  echo "$DEPLOYABLE" | grep -qE '^packages/backend/(package\.json|Dockerfile)'  && NEED_BACKEND=true
-  echo "$DEPLOYABLE" | grep -qE '^packages/frontend/(package\.json|Dockerfile)' && NEED_FRONTEND=true
-  echo "$DEPLOYABLE" | grep -qE '^packages/mobile/(package\.json|Dockerfile)'   && NEED_MOBILE=true
+  grep -qE '^packages/backend/(package\.json|Dockerfile)' <<< "$DEPLOYABLE"  && NEED_BACKEND=true
+  grep -qE '^packages/frontend/(package\.json|Dockerfile)' <<< "$DEPLOYABLE" && NEED_FRONTEND=true
+  grep -qE '^packages/mobile/(package\.json|Dockerfile)' <<< "$DEPLOYABLE"   && NEED_MOBILE=true
   # Shared is the exception that looks like the rule and is not.
   #
   # `packages/shared/src` IS mounted, so a change to it lands inside the container like any other
@@ -286,16 +286,16 @@ if $SOURCE_MOUNTED; then
   [ -n "$(echo "$DEPLOYABLE" | tr -d '[:space:]')" ] && NEED_SHARED_BUILD=true
   # The manifest is a different matter: dependencies are installed into an anonymous volume at
   # image build time, so a change there does need the image rebuilt.
-  echo "$DEPLOYABLE" | grep -qE '^packages/shared/package\.json' && { NEED_BACKEND=true; NEED_FRONTEND=true; NEED_MOBILE=true; }
-  echo "$DEPLOYABLE" | grep -qE '^(package\.json|package-lock\.json)$' && { NEED_BACKEND=true; NEED_FRONTEND=true; NEED_MOBILE=true; }
+  grep -qE '^packages/shared/package\.json' <<< "$DEPLOYABLE" && { NEED_BACKEND=true; NEED_FRONTEND=true; NEED_MOBILE=true; }
+  grep -qE '^(package\.json|package-lock\.json)$' <<< "$DEPLOYABLE" && { NEED_BACKEND=true; NEED_FRONTEND=true; NEED_MOBILE=true; }
 else
   # Shared is compiled into both images, so a change there is the one case that rebuilds everything.
-  echo "$DEPLOYABLE" | grep -qE '^packages/shared/' && { NEED_BACKEND=true; NEED_FRONTEND=true; }
-  echo "$DEPLOYABLE" | grep -qE '^packages/backend/'  && NEED_BACKEND=true
-  echo "$DEPLOYABLE" | grep -qE '^packages/frontend/' && NEED_FRONTEND=true
+  grep -qE '^packages/shared/' <<< "$DEPLOYABLE" && { NEED_BACKEND=true; NEED_FRONTEND=true; }
+  grep -qE '^packages/backend/' <<< "$DEPLOYABLE"  && NEED_BACKEND=true
+  grep -qE '^packages/frontend/' <<< "$DEPLOYABLE" && NEED_FRONTEND=true
 
   # Dependency changes at the root alter what `npm ci` installs inside both images.
-  echo "$DEPLOYABLE" | grep -qE '^(package\.json|package-lock\.json)$' && { NEED_BACKEND=true; NEED_FRONTEND=true; }
+  grep -qE '^(package\.json|package-lock\.json)$' <<< "$DEPLOYABLE" && { NEED_BACKEND=true; NEED_FRONTEND=true; }
 fi
 
 # The Caddyfile is bind-mounted, not baked into an image, so a config change needs the process
@@ -303,13 +303,13 @@ fi
 # it talks to the admin API on :2019 and this Caddyfile sets `admin off`; the reload is refused
 # and would fall back every time. Restarting the container is about a second on an image this
 # size, and is not worth reopening an admin endpoint that was closed deliberately.
-echo "$DEPLOYABLE" | grep -qE '^deploy/Caddyfile$' && NEED_CADDY_RELOAD=true
+grep -qE '^deploy/Caddyfile$' <<< "$DEPLOYABLE" && NEED_CADDY_RELOAD=true
 
 # Compose changes alter how containers are run, not what is inside them: recreate, do not build.
 # Matched anywhere under deploy/ — the AWS overlay lives at deploy/aws/docker-compose.aws-full.yml
 # and an anchored `^deploy/docker-compose` missed it, so a change to the OSM/ClamAV stack would
 # have been classified as affecting nothing at all.
-echo "$DEPLOYABLE" | grep -qE '^deploy/.*docker-compose' && NEED_RECREATE=true
+grep -qE '^deploy/.*docker-compose' <<< "$DEPLOYABLE" && NEED_RECREATE=true
 
 # Local commits made on this box would be destroyed by a reset. Refuse rather than discard —
 # an unpushed commit was found here once already, and it was real work.
@@ -466,7 +466,7 @@ fi
 if $SOURCE_MOUNTED; then
   for entry in "backend:/app/packages/backend" "frontend:/app/packages/frontend" "mobile:/app/packages/mobile"; do
     svc="${entry%%:*}"; pkgdir="${entry#*:}"
-    "${COMPOSE[@]}" ps --services 2>/dev/null | grep -qx "$svc" || continue
+    grep -qx "$svc" <<< "$("${COMPOSE[@]}" ps --services 2>/dev/null)" || continue
     gone="$(missing_deps "$svc" "$pkgdir")"
     [ -n "$gone" ] || continue
     log "$svc is missing declared dependencies ($gone) — its node_modules volume predates them; rebuilding"
@@ -507,9 +507,16 @@ REBUILD_UP=(up -d --renew-anon-volumes)
 # code whose events it was draining. All three containers reported Up or Exited(0) throughout.
 #
 # Built together they cost one image — the second and third are cache hits on the first.
+#
+# The list is matched with a here-string, never `config --services | grep -qx`. Under `pipefail`
+# that pipe is a coin toss: grep -q exits on its first match, podman-compose is still writing, it
+# dies of SIGPIPE, and the pipeline reports "not found". Measured on the homeserver 2026-09-25: 3
+# runs in 8 dropped a service, and db-migrate went missing from the 760dd3e0 and 349634d5 deploys
+# — the API ran against a database two releases behind while every container reported healthy.
+# Every `| grep -q` in this script was rewritten the same way for the same reason.
 BACKEND_SERVICES=()
 for svc in db-migrate backend backend-worker; do
-  "${COMPOSE[@]}" config --services 2>/dev/null | grep -qx "$svc" && BACKEND_SERVICES+=("$svc")
+  grep -qx "$svc" <<< "$("${COMPOSE[@]}" config --services 2>/dev/null)" && BACKEND_SERVICES+=("$svc")
 done
 [ ${#BACKEND_SERVICES[@]} -gt 0 ] || BACKEND_SERVICES=(backend)
 
@@ -531,7 +538,7 @@ fi
 if $NEED_SHARED_BUILD && ! $NEED_BACKEND && ! $NEED_FRONTEND; then
   # Skipped when an image rebuild is already happening — that recompiles shared anyway.
   for svc in backend frontend mobile; do
-    "${COMPOSE[@]}" ps --services 2>/dev/null | grep -qx "$svc" || continue
+    grep -qx "$svc" <<< "$("${COMPOSE[@]}" ps --services 2>/dev/null)" || continue
 
     # Fingerprint dist before and after, so the restart is paid for only when the compile actually
     # produced something different. Without this, building on every deploy would also restart both
@@ -562,7 +569,7 @@ fi
 # containers with host nginx and defines no caddy service, so a Caddyfile edit there changes
 # nothing running — and refusing the deploy over a container that was never supposed to exist
 # would strand every later commit behind it.
-if $NEED_CADDY_RELOAD && ! "${COMPOSE[@]}" config --services 2>/dev/null | grep -qx caddy; then
+if $NEED_CADDY_RELOAD && ! grep -qx caddy <<< "$("${COMPOSE[@]}" config --services 2>/dev/null)"; then
   log "note: deploy/Caddyfile changed but this stack defines no caddy service — ignoring"
   NEED_CADDY_RELOAD=false
 fi
